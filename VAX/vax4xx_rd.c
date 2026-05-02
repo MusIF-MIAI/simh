@@ -28,6 +28,7 @@
 
 #include "vax_defs.h"
 #include "sim_disk.h"
+#include "rd_format.h"
 
 #if defined(VAX_420)
 #include "vax_ka420_rdrz_bin.h"
@@ -231,6 +232,21 @@
 #define UNIT_M_DTYPE    ((1u << UNIT_W_DTYPE) - 1)
 #define UNIT_DTYPE      (UNIT_M_DTYPE << UNIT_V_DTYPE)
 #define UNIT_NOAUTO     DKUF_NOAUTOSIZE
+#define UNIT_V_DECRAW   (UNIT_V_DTYPE + UNIT_W_DTYPE)   /* attach raw whole-disk image */
+#define UNIT_DECRAW     (1u << UNIT_V_DECRAW)
+
+/* Per-unit context for DECRAW mode.  Populated at attach time by
+   reading and parsing the on-disk format block (XBN sector 0, with
+   fallback to spare copies); the LBN -> RBN forwarding map is then
+   built by walking the first RCT copy.  See rd_format.h for the
+   on-disk layout. */
+
+struct rd_decraw_ctx {
+    int        active;                                  /* nonzero if attached in DECRAW mode */
+    struct rd_geom geom;
+    uint32     *fwd_map;                                /* size = user_lbn; 0 = no fwd, R+1 = fwd to RBN R */
+    uint8      xbn_block[RD_SECT_SIZE];                 /* cached format block sector */
+    };
 
 struct drvtyp {
     int32       sect;                                   /* sectors */
@@ -296,6 +312,13 @@ t_stat rd_attach (UNIT *uptr, CONST char *cptr);
 t_stat rd_detach (UNIT *uptr);
 t_stat rd_help (FILE *st, DEVICE *dptr, UNIT *uptr, int32 flag, const char *cptr);
 const char *rd_description (DEVICE *dptr);
+
+t_stat rd_decraw_setup (UNIT *uptr);
+void rd_decraw_teardown (UNIT *uptr);
+t_lba rd_decraw_xlate (UNIT *uptr, t_lba lba, int *forwarded);
+t_stat rd_show_decraw (FILE *st, UNIT *uptr, int32 val, CONST void *desc);
+
+static struct rd_decraw_ctx rd_decraw[RD_NUMDR];
 
 /* RD data structures
 
@@ -371,6 +394,10 @@ MTAB rd_mod[] = {
       NULL, &rd_show_type, NULL, "Display device type" },
     { UNIT_NOAUTO, UNIT_NOAUTO, "noautosize", "NOAUTOSIZE", NULL, NULL, NULL, "Disable disk autosize on attach" },
     { UNIT_NOAUTO,           0, "autosize",   "AUTOSIZE",   NULL, NULL, NULL, "Enable disk autosize on attach" },
+    { UNIT_DECRAW, UNIT_DECRAW, NULL,         "DECRAW",     NULL, NULL, NULL, "Attach raw whole-disk dump (XBN..RBN)" },
+    { UNIT_DECRAW,           0, NULL,         "NORMAL",     NULL, NULL, NULL, "Attach user-area-only image (default)" },
+    { MTAB_XTD|MTAB_VUN, 0, "DECRAW", NULL,
+      NULL, &rd_show_decraw, NULL, "Display DECRAW status and forwarding map summary" },
     { MTAB_XTD|MTAB_VUN | MTAB_VALR, 0, "FORMAT", "FORMAT={SIMH|VHD|RAW}",
       &sim_disk_set_fmt, &sim_disk_show_fmt, NULL, "Display disk format" },
     { 0 }
@@ -691,6 +718,25 @@ t_stat rd_rddata (UNIT *uptr, t_lba lba, t_seccnt sects)
 t_seccnt sectsread;
 t_stat r;
 
+if (uptr->flags & UNIT_DECRAW) {
+    /* Per-sector translation: any LBN in [0, user_lbn) may be
+       forwarded to a spare RBN; sectors outside that range (XBN,
+       DBN, RCT, RBN) are read straight from the file. */
+    t_seccnt n;
+    for (n = 0; n < sects; n++) {
+        t_lba phys = rd_decraw_xlate (uptr, lba + n, NULL);
+        t_seccnt one = 0;
+        r = sim_disk_rdsect (uptr, phys, (uint8 *)rd_xb + n * RD_NUMBY, &one, 1);
+        if (r != SCPE_OK)
+            return r;
+        if (one != 1)
+            break;
+        }
+    sim_disk_data_trace (uptr, (uint8 *)rd_xb, lba, n * RD_NUMBY,
+        "sim_disk_rdsect[DECRAW]", DBG_DAT & rd_dev.dctrl, DBG_REQ);
+    return SCPE_OK;
+    }
+
 r = sim_disk_rdsect (uptr, lba, (uint8 *)rd_xb, &sectsread, sects);
 sim_disk_data_trace (uptr, (uint8 *)rd_xb, lba, sectsread*RD_NUMBY, "sim_disk_rdsect", DBG_DAT & rd_dev.dctrl, DBG_REQ);
 return r;
@@ -699,6 +745,25 @@ return r;
 t_stat rd_wrdata (UNIT *uptr, t_lba lba, t_seccnt sects)
 {
 t_seccnt sectswritten;
+
+if (uptr->flags & UNIT_DECRAW) {
+    /* DECRAW units are forced read-only at attach; this branch is
+       reached only if a guest attempts a write anyway, in which
+       case we honour the translated address and let sim_disk
+       refuse the write because the unit is write-locked. */
+    t_seccnt n;
+    t_stat r;
+    sim_disk_data_trace (uptr, (uint8 *)rd_xb, lba, sects * RD_NUMBY,
+        "sim_disk_wrsect[DECRAW]", DBG_DAT & rd_dev.dctrl, DBG_REQ);
+    for (n = 0; n < sects; n++) {
+        t_lba phys = rd_decraw_xlate (uptr, lba + n, NULL);
+        t_seccnt one = 0;
+        r = sim_disk_wrsect (uptr, phys, (uint8 *)rd_xb + n * RD_NUMBY, &one, 1);
+        if (r != SCPE_OK)
+            return r;
+        }
+    return SCPE_OK;
+    }
 
 sim_disk_data_trace (uptr, (uint8 *)rd_xb, lba, sects*RD_NUMBY, "sim_disk_wrsect", DBG_DAT & rd_dev.dctrl, DBG_REQ);
 return sim_disk_wrsect (uptr, lba, (uint8 *)rd_xb, &sectswritten, sects);
@@ -717,7 +782,15 @@ switch (uptr->CMD) {
         uptr->CYL = rd_dcyl;
         uptr->HEAD = rd_dhead;
         if (dtype >= RD31_DTYPE) {
-            if (rd_dcyl == 0) {
+            if (uptr->flags & UNIT_DECRAW) {
+                /* In DECRAW mode the file is the full physical disk:
+                   the XBN format block sits at PBN 0 and is read from
+                   the file directly, so no synthesis is needed. */
+                lba = GET_DA (uptr, rd_dcyl, rd_dhead, rd_dsect);
+                sim_debug (DBG_RD, &rd_dev, "cyl=%04d, hd=%d, sect=%02d, lba=%08X (DECRAW)\n", rd_dcyl, rd_dhead, rd_dsect, lba);
+                rd_rddata (uptr, lba, rd_scnt);
+                }
+            else if (rd_dcyl == 0) {
                 lba = 0;
                 sim_debug (DBG_RD, &rd_dev, "cyl=%04d, hd=%d, sect=%02d, lba=%08X\n", rd_dcyl, rd_dhead, rd_dsect, lba);
                 rd_rdcyl0 (rd_dhead, dtype);
@@ -753,7 +826,14 @@ switch (uptr->CMD) {
         ddb_ReadW (rd_dma, (rd_scnt * RD_NUMBY), rd_xb);
         rd_dma = (rd_dma + (rd_scnt * RD_NUMBY)) & 0xFFFFFF;
         if (dtype >= RD31_DTYPE) {
-            if (rd_dcyl == 0) {
+            if (uptr->flags & UNIT_DECRAW) {
+                /* DECRAW units are forced read-only at attach, but
+                   honour the same direct PBN mapping for symmetry. */
+                lba = GET_DA (uptr, rd_dcyl, rd_dhead, rd_dsect);
+                sim_debug (DBG_WR, &rd_dev, "cyl=%04d, hd=%d, sect=%02d, lba=%08X (DECRAW)\n", rd_dcyl, rd_dhead, rd_dsect, lba);
+                rd_wrdata (uptr, lba, rd_scnt);
+                }
+            else if (rd_dcyl == 0) {
                 lba = 0;
                 sim_debug (DBG_WR, &rd_dev, "cyl=%04d, hd=%d, sect=%02d, lba=%08X (ignored)\n", rd_dcyl, rd_dhead, rd_dsect, lba);
                 }
@@ -868,10 +948,36 @@ return SCPE_OK;
 t_stat rd_attach (UNIT *uptr, CONST char *cptr)
 {
 const char *drives[] = {"RX33", "RD31", "RD32", "RD53", "RD54", };
+int32 dtype = GET_DTYPE (uptr->flags);
+t_stat r;
+
+if (uptr->flags & UNIT_DECRAW) {
+    /* In DECRAW mode the file holds XBN+DBN+LBN+RCT+RBN, larger than
+       the legacy LBN-only image.  Bump capac so sim_disk does not
+       treat the trailing RCT/RBN as out-of-range, and disable
+       autosize so it does not try to reinterpret the size as a
+       different drive. */
+    uptr->capac = ((t_addr)(drv_tab[dtype].xbn + drv_tab[dtype].dbn +
+                            drv_tab[dtype].lbn + drv_tab[dtype].rbn)) * RD_NUMBY;
+    r = sim_disk_attach_ex (uptr, cptr, RD_NUMBY,
+                            sizeof (uint8), TRUE, DBG_DSK,
+                            drv_tab[dtype].name, 0, 0, NULL);
+    if (r != SCPE_OK) {
+        uptr->capac = ((t_addr) drv_tab[dtype].lbn) * RD_NUMBY;
+        return r;
+        }
+    r = rd_decraw_setup (uptr);
+    if (r != SCPE_OK) {
+        sim_disk_detach (uptr);
+        uptr->capac = ((t_addr) drv_tab[dtype].lbn) * RD_NUMBY;
+        return r;
+        }
+    return SCPE_OK;
+    }
 
 return sim_disk_attach_ex (uptr, cptr, RD_NUMBY,
                            sizeof (uint8), TRUE, DBG_DSK,
-                           drv_tab[GET_DTYPE (uptr->flags)].name, 0, 0,
+                           drv_tab[dtype].name, 0, 0,
                            (uptr->flags & UNIT_NOAUTO) ? NULL: drives);
 }
 
@@ -880,7 +986,162 @@ return sim_disk_attach_ex (uptr, cptr, RD_NUMBY,
 t_stat rd_detach (UNIT *uptr)
 {
 sim_cancel (uptr);
+if (uptr->flags & UNIT_DECRAW)
+    rd_decraw_teardown (uptr);
 return sim_disk_detach (uptr);
+}
+
+/* DECRAW support
+ *
+ * Parse the on-disk format block (XBN sector 0, with fallback to the
+ * spare UIB copies at sectors 1 and 2), compute region offsets, and
+ * walk the first RCT copy to build an LBN -> RBN forwarding map.
+ *
+ * The unit is forced read-only because writing to a forwarded LBN
+ * would require keeping all RCTC copies of the RCT in sync, plus the
+ * "replacement-in-progress" recovery protocol described in the
+ * OpenVMS DV class driver - both well outside the scope of this
+ * recovery / inspection mode.
+ */
+
+t_stat rd_decraw_setup (UNIT *uptr)
+{
+int idx = (int)(uptr - rd_unit);
+struct rd_decraw_ctx *c = &rd_decraw[idx];
+struct rd_geom *g = &c->geom;
+uint8 buf[RD_SECT_SIZE];
+uint8 *rct_buf;
+uint32 rbn_idx;
+size_t one_copy;
+t_seccnt got;
+t_stat r;
+int found = 0;
+t_lba try_lba;
+
+memset (c, 0, sizeof (*c));
+
+for (try_lba = 0; try_lba <= 2; try_lba++) {
+    r = sim_disk_rdsect (uptr, try_lba, buf, &got, 1);
+    if (r != SCPE_OK || got != 1)
+        continue;
+    if (!rd_checksum_ok (buf))
+        continue;
+    if (rd_parse_format_block (buf, g) != 0)
+        continue;
+    if (rd_compute_offsets (g, (uint64_t) uptr->capac) != 0) {
+        sim_messagef (SCPE_OK,
+            "%s: warning: file size %llu does not match physical layout %llu (%u + %u + %u + %u)*%u\n",
+            sim_uname (uptr),
+            (unsigned long long) uptr->capac,
+            (unsigned long long)(g->total_sects * RD_SECT_SIZE),
+            g->xbn, g->dbn, g->lbn_field, g->rbn, RD_SECT_SIZE);
+        }
+    found = 1;
+    if (try_lba > 0)
+        sim_messagef (SCPE_OK,
+            "%s: notice: recovered geometry from spare XBN copy at PBN %u\n",
+            sim_uname (uptr), (uint32) try_lba);
+    break;
+    }
+if (!found)
+    return sim_messagef (SCPE_IOERR,
+        "%s: no XBN format block copy is readable; cannot mount as DECRAW\n",
+        sim_uname (uptr));
+memcpy (c->xbn_block, buf, RD_SECT_SIZE);
+
+c->fwd_map = (uint32 *) calloc (g->user_lbn, sizeof (uint32));
+if (c->fwd_map == NULL)
+    return sim_messagef (SCPE_MEM, "%s: out of memory for DECRAW forwarding map\n",
+        sim_uname (uptr));
+
+one_copy = (size_t) g->rcts * RD_SECT_SIZE;
+rct_buf = (uint8 *) malloc (one_copy);
+if (rct_buf == NULL) {
+    free (c->fwd_map); c->fwd_map = NULL;
+    return sim_messagef (SCPE_MEM, "%s: out of memory for DECRAW RCT buffer\n",
+        sim_uname (uptr));
+    }
+for (rbn_idx = 0; rbn_idx < g->rcts; rbn_idx++) {
+    r = sim_disk_rdsect (uptr, (t_lba)(g->rct_off / RD_SECT_SIZE) + rbn_idx,
+                         rct_buf + rbn_idx * RD_SECT_SIZE, &got, 1);
+    if (r != SCPE_OK || got != 1) {
+        free (rct_buf);
+        free (c->fwd_map); c->fwd_map = NULL;
+        return sim_messagef (SCPE_IOERR, "%s: failed to read RCT copy 0\n",
+            sim_uname (uptr));
+        }
+    }
+
+for (rbn_idx = 0; rbn_idx < g->rbn; rbn_idx++) {
+    uint32 entry;
+    uint32 code;
+    uint32 lbn;
+    size_t off = (size_t) RCT_OVHD_SECTS * RD_SECT_SIZE + (size_t) rbn_idx * 4;
+    memcpy (&entry, rct_buf + off, 4);
+    code = RBN_GET_CODE (entry);
+    lbn = RBN_GET_LBN (entry);
+    if (RBN_IS_FORWARDED (code) && lbn < g->user_lbn)
+        c->fwd_map[lbn] = rbn_idx + 1;
+    }
+free (rct_buf);
+
+c->active = 1;
+uptr->flags |= UNIT_RO;
+sim_messagef (SCPE_OK,
+    "%s: DECRAW mode active: XBN=%u DBN=%u user_LBN=%u RCT=%ux%u RBN=%u\n",
+    sim_uname (uptr),
+    g->xbn, g->dbn, g->user_lbn, g->rcts, g->rctc, g->rbn);
+return SCPE_OK;
+}
+
+void rd_decraw_teardown (UNIT *uptr)
+{
+int idx = (int)(uptr - rd_unit);
+struct rd_decraw_ctx *c = &rd_decraw[idx];
+
+if (c->fwd_map != NULL)
+    free (c->fwd_map);
+memset (c, 0, sizeof (*c));
+}
+
+t_lba rd_decraw_xlate (UNIT *uptr, t_lba lba, int *forwarded)
+{
+int idx = (int)(uptr - rd_unit);
+struct rd_decraw_ctx *c = &rd_decraw[idx];
+
+if (forwarded)
+    *forwarded = 0;
+if (!c->active)
+    return lba;
+if ((uint64_t) lba >= (c->geom.lbn_off / RD_SECT_SIZE) &&
+    (uint64_t) lba <  (c->geom.rct_off / RD_SECT_SIZE)) {
+    uint32 user_lbn = (uint32)((uint64_t) lba - (c->geom.lbn_off / RD_SECT_SIZE));
+    if (c->fwd_map[user_lbn]) {
+        if (forwarded)
+            *forwarded = 1;
+        return (t_lba)(c->geom.rbn_off / RD_SECT_SIZE) + (c->fwd_map[user_lbn] - 1);
+        }
+    }
+return lba;
+}
+
+t_stat rd_show_decraw (FILE *st, UNIT *uptr, int32 val, CONST void *desc)
+{
+int idx = (int)(uptr - rd_unit);
+struct rd_decraw_ctx *c = &rd_decraw[idx];
+uint32 lbn, n = 0;
+
+if (!c->active) {
+    fprintf (st, "DECRAW=off");
+    return SCPE_OK;
+    }
+fprintf (st, "DECRAW=on, XBN=%u DBN=%u user_LBN=%u RCT=%ux%u RBN=%u, forwarded=",
+    c->geom.xbn, c->geom.dbn, c->geom.user_lbn,
+    c->geom.rcts, c->geom.rctc, c->geom.rbn);
+for (lbn = 0; lbn < c->geom.user_lbn; lbn++)
+    if (c->fwd_map[lbn]) n++;
+fprintf (st, "%u", n);
+return SCPE_OK;
 }
 
 /* Set unit type */
