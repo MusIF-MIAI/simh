@@ -21,10 +21,9 @@
    Reads a raw MFM dump of a DEC RD-series disk (RD31, RD32, RD53, RD54),
    parses the controller's Replacement Control Table (RCT), and produces
    a "clean" image whose user-data area has the spare-sector contents
-   folded back in.  The output is the byte-for-byte filesystem view that
-   the on-board HDC9224 controller would have presented through
-   transparent LBN -> RBN forwarding, and is sized to be attached
-   directly to SimH's microvax2000 RD device.
+   folded back in.  The output keeps the user-visible LBN area plus the
+   following RCT sectors, with transparent LBN -> RBN forwarding already
+   applied, and is sized to be attached directly to SimH RD devices.
 
    Usage:
      rd_unraw [options] <raw_dump.img> [<out.img>]
@@ -35,6 +34,8 @@
      --verify-strict      fail with exit 3 on RCT replica disagreement
      --force-type=NAME    override geometry detection (RD31|RD32|RD53|RD54)
      --allow-unusable     zero-fill INVALP/INVALS LBNs (default: leave as-is)
+     --allow-layout-mismatch
+                          continue if geometry and file size disagree
 */
 
 #include <stdio.h>
@@ -64,23 +65,23 @@ struct rd_known {
     };
 
 static const struct rd_known rd_known_tab[] = {
-    { "RD31",  17,  4,  615,  54,  10,  41560,   100,  3,  8 },
+    { "RD31",  17,  4,  615,  54,  14,  41584,   100,  3,  8 },
     { "RD32",  17,  6,  821,  54,  48,  83236,   200,  4,  8 },
     { "RD53",  17,  8, 1024,  54,  82, 138712,   280,  5,  8 },
     { "RD54",  17, 15, 1225,  54, 201, 311256,   609,  7,  8 },
     { NULL }
     };
 
-/* Candidate XBN format-block byte offsets, in sectors.  The first
-   XBN copy lives at sector 0; spares are at sect+1 and 2*(sect+1).
-   We don't know `sect` until we parse a block, so try common values:
-   sect+1 in {15..19} covers all known RD/RX drives.  Order: most
-   common first. */
+/* Candidate XBN format-block locations, in sectors.  VMS RD_GEOM reads
+   the three UIB copies as consecutive PBNs 0, 1, and 2.  The legacy
+   18/36 candidates are retained as a fallback for dumps produced by
+   tools that expanded the old "XBN region replicated three times"
+   description differently. */
 
 static const off_t rd_xbn_candidates[] = {
     0,                                                  /* canonical */
-    18, 36,                                             /* sect=17 (RD31..RD54) */
-    19, 38, 17, 34, 16, 32, 15, 30,                     /* less common */
+    1, 2,                                               /* VMS spare UIB copies */
+    18, 36,                                             /* legacy expanded layout */
     -1
     };
 
@@ -140,7 +141,7 @@ return 0;
 static off_t find_format_block (int fd, uint64_t filesize,
                                 uint8_t *out_buf, struct rd_geom *out_g)
 {
-int i, used_spare = 0;
+int i;
 off_t off;
 
 for (i = 0; rd_xbn_candidates[i] >= 0; i++) {
@@ -163,12 +164,10 @@ for (i = 0; rd_xbn_candidates[i] >= 0; i++) {
         continue;
         }
     if (i > 0) {
-        used_spare = 1;
         fprintf (stderr,
             "rd_unraw: notice: recovered geometry from spare XBN copy "
             "at sector %lld\n", (long long)rd_xbn_candidates[i]);
         }
-    (void) used_spare;
     return rd_xbn_candidates[i];
     }
 return (off_t) -1;
@@ -375,14 +374,16 @@ return 0;
 
 /* --- output construction --- */
 
-/* Bulk-copy the LBN region from raw to out, sector by sector, in
-   reasonable chunks. */
+/* Bulk-copy the SimH-visible LBN region from raw to out, sector by
+   sector, in reasonable chunks.  This includes the user filesystem
+   area and the following RCT sectors; the RBN spare area remains a raw
+   dump artifact and is folded into forwarded LBNs below. */
 
 static int copy_lbn_region (int raw_fd, int out_fd, const struct rd_geom *g)
 {
 const size_t chunk = 64 * 1024;
 uint8_t *buf;
-uint64_t total = (uint64_t) g->user_lbn * RD_SECT_SIZE;
+uint64_t total = (uint64_t) g->lbn_field * RD_SECT_SIZE;
 uint64_t done = 0;
 
 buf = (uint8_t *) malloc (chunk);
@@ -418,6 +419,8 @@ fprintf (fp,
     "  --verify-strict    fail with exit 3 on RCT replica disagreement\n"
     "  --force-type=NAME  override geometry detection (RD31|RD32|RD53|RD54)\n"
     "  --allow-unusable   zero-fill INVALP/INVALS LBNs in the output\n"
+    "  --allow-layout-mismatch\n"
+    "                     continue if geometry and file size disagree\n"
     "  -h, --help         this message\n"
     "\n"
     "If <out.img> is omitted, only the geometry summary (and report,\n"
@@ -430,6 +433,7 @@ const char *in_path = NULL;
 const char *out_path = NULL;
 const char *force_type = NULL;
 int report = 0, verify = 0, verify_strict = 0, allow_unusable = 0;
+int allow_layout_mismatch = 0;
 int i;
 int raw_fd = -1, out_fd = -1;
 struct stat st;
@@ -452,6 +456,8 @@ for (i = 1; i < argc; i++) {
     else if (strcmp (a, "--verify") == 0)         verify = 1;
     else if (strcmp (a, "--verify-strict") == 0)  verify = verify_strict = 1;
     else if (strcmp (a, "--allow-unusable") == 0) allow_unusable = 1;
+    else if (strcmp (a, "--allow-layout-mismatch") == 0)
+        allow_layout_mismatch = 1;
     else if (strncmp (a, "--force-type=", 13) == 0) force_type = a + 13;
     else if (a[0] == '-') {
         fprintf (stderr, "rd_unraw: unknown option '%s'\n", a);
@@ -515,10 +521,16 @@ else {
 if (rd_compute_offsets (&g, filesize) != 0) {
     fprintf (stderr,
         "rd_unraw: warning: file size %llu does not match expected layout "
-        "%llu (XBN %u + DBN %u + LBN %u + RBN %u)*%u; continuing anyway\n",
+        "%llu (XBN %u + DBN %u + LBN %u + RBN %u)*%u\n",
         (unsigned long long) filesize,
         (unsigned long long)(g.total_sects * RD_SECT_SIZE),
         g.xbn, g.dbn, g.lbn_field, g.rbn, RD_SECT_SIZE);
+    if (!allow_layout_mismatch) {
+        fprintf (stderr,
+            "rd_unraw: refusing to decode with mismatched layout; use "
+            "--allow-layout-mismatch to override\n");
+        rc = 2; goto out;
+        }
     }
 
 fprintf (stderr,
@@ -583,7 +595,7 @@ fprintf (stderr, "\n");
 if (out_path)
     fprintf (stderr,
         "rd_unraw: wrote %llu byte image to '%s'\n",
-        (unsigned long long)((uint64_t) g.user_lbn * RD_SECT_SIZE),
+        (unsigned long long)((uint64_t) g.lbn_field * RD_SECT_SIZE),
         out_path);
 
 out:

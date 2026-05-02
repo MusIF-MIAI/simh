@@ -127,12 +127,20 @@ memcpy (&v, buf + w * 2, 4);
 return v;
 }
 
-/* Verify the format block checksum.  Returns 1 on match, 0 on mismatch. */
+/* Verify the format block signature and checksum.  VMS first checks
+   that bytes 0..8 are zero and byte 9 is 0x36, then validates the
+   word checksum.  Returns 1 on match, 0 on mismatch. */
 
 static int rd_checksum_ok (const uint8_t *buf)
 {
 unsigned int i;
 uint32_t sum = 0;
+
+for (i = 0; i < 9; i++)
+    if (buf[i] != 0)
+        return 0;
+if (buf[9] != 0x36)
+    return 0;
 
 for (i = 0; i < 255; i++)
     sum += rd_word (buf, i);
