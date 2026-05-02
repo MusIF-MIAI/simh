@@ -2262,7 +2262,7 @@ endif
 RD_UNRAW = ${BIN}rd_unraw${EXE}
 rd_unraw : ${RD_UNRAW}
 
-${RD_UNRAW} : VAX/tools/rd_unraw.c VAX/tools/rd_format.h
+${RD_UNRAW} : VAX/tools/rd_unraw.c VAX/rd_format.h
 	${MKDIRBIN}
 	${CC} VAX/tools/rd_unraw.c ${CC_OUTSPEC}
 

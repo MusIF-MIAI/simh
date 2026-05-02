@@ -50,7 +50,7 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 
-#include "rd_format.h"
+#include "../rd_format.h"
 
 #if !defined(__BYTE_ORDER__) || __BYTE_ORDER__ != __ORDER_LITTLE_ENDIAN__
 #error "rd_unraw assumes a little-endian host (matches VAX byte order)"
