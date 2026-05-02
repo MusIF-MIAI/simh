@@ -2255,6 +2255,18 @@ endif
 	@$@
 
 #
+# rd_unraw: standalone host tool that recovers a clean filesystem image
+# from a raw RD-series MFM disk dump by applying the on-disk RCT/RBN
+# bad-block forwarding.  No SimH framework dependency.
+#
+RD_UNRAW = ${BIN}rd_unraw${EXE}
+rd_unraw : ${RD_UNRAW}
+
+${RD_UNRAW} : VAX/tools/rd_unraw.c VAX/tools/rd_format.h
+	${MKDIRBIN}
+	${CC} VAX/tools/rd_unraw.c ${CC_OUTSPEC}
+
+#
 # Individual builds
 #
 pdp1 : ${BIN}pdp1${EXE}
