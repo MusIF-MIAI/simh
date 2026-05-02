@@ -32,6 +32,7 @@
      --report             print every forwarded LBN -> RBN mapping
      --verify             cross-compare all RCTC copies of the RCT
      --verify-strict      fail with exit 3 on RCT replica disagreement
+     --bad-files          map RCT bad sectors to current ODS-2 files
      --force-type=NAME    override geometry detection (RD31|RD32|RD53|RD54)
      --allow-unusable     zero-fill INVALP/INVALS LBNs (default: leave as-is)
      --allow-layout-mismatch
@@ -42,6 +43,7 @@
 #include <stdlib.h>
 #include <stdint.h>
 #include <string.h>
+#include <ctype.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <errno.h>
@@ -93,6 +95,12 @@ struct rd_stats {
     uint32_t empty;                                     /* EMPTY+NULL */
     uint32_t unknown_code;                              /* anything else */
     uint32_t replica_mismatches;                        /* per-byte */
+    };
+
+struct rd_badent {
+    uint32_t rbn;
+    uint32_t lbn;
+    uint32_t code;
     };
 
 /* --- I/O helpers --- */
@@ -372,6 +380,673 @@ for (rbn_idx = 0; rbn_idx < g->rbn; rbn_idx++) {
 return 0;
 }
 
+/* --- ODS-2 bad-block file reporting --- */
+
+struct ods2_extent {
+    uint32_t lbn;
+    uint32_t count;
+    };
+
+struct ods2_header {
+    int valid;
+    uint16_t seq;
+    uint16_t rvn;
+    uint16_t seg;
+    uint16_t ext_num;
+    uint16_t ext_seq;
+    uint16_t ext_rvn;
+    uint32_t header_lbn;
+    char *name;
+    char *path;
+    struct ods2_extent *map;
+    uint32_t maps;
+    uint32_t map_alloc;
+    };
+
+struct ods2_ctx {
+    int fd;
+    const struct rd_geom *g;
+    const uint32_t *lbn_map;
+    uint16_t cluster;
+    uint16_t ibmapvbn;
+    uint32_t ibmaplbn;
+    uint16_t ibmapsize;
+    uint32_t maxfiles;
+    uint32_t *index_lbn;
+    uint32_t index_blocks;
+    uint32_t header_stream0;
+    struct ods2_header *hdr;
+    uint32_t hdr_count;
+    uint32_t *prev_ext;
+    uint8_t *bitmap;
+    size_t bitmap_len;
+    };
+
+static uint16_t le16_at (const uint8_t *b, size_t off)
+{
+uint16_t v;
+memcpy (&v, b + off, sizeof v);
+return v;
+}
+
+static uint32_t le32_at (const uint8_t *b, size_t off)
+{
+uint32_t v;
+memcpy (&v, b + off, sizeof v);
+return v;
+}
+
+static uint16_t ods2_sum (const uint8_t *b, uint32_t words)
+{
+uint32_t i;
+uint32_t sum = 0;
+
+for (i = 0; i < words; i++)
+    sum += le16_at (b, i * 2);
+return (uint16_t) sum;
+}
+
+static int ods2_checksum_ok (const uint8_t *b)
+{
+return ods2_sum (b, 255) == le16_at (b, 510);
+}
+
+static char *xstrdup (const char *s)
+{
+size_t len = strlen (s) + 1;
+char *p = (char *) malloc (len);
+
+if (p != NULL)
+    memcpy (p, s, len);
+return p;
+}
+
+static int ods2_read_lbn (const struct ods2_ctx *ctx, uint32_t lbn,
+                          uint8_t *buf, uint32_t sectors)
+{
+uint32_t i;
+
+for (i = 0; i < sectors; i++) {
+    uint32_t cur = lbn + i;
+    uint32_t rbn = 0;
+    off_t off;
+
+    if (cur < ctx->g->user_lbn && ctx->lbn_map != NULL)
+        rbn = ctx->lbn_map[cur];
+    if (rbn != 0)
+        off = (off_t) ctx->g->rbn_off + (off_t)(rbn - 1) * RD_SECT_SIZE;
+    else
+        off = (off_t) ctx->g->lbn_off + (off_t) cur * RD_SECT_SIZE;
+    if (read_at (ctx->fd, buf + (size_t)i * RD_SECT_SIZE,
+                 RD_SECT_SIZE, off) != 0)
+        return 1;
+    }
+return 0;
+}
+
+static int ods2_add_extent (struct ods2_header *h, uint32_t lbn,
+                            uint32_t count)
+{
+struct ods2_extent *new_map;
+uint32_t new_alloc;
+
+if (count == 0)
+    return 0;
+if (h->maps == h->map_alloc) {
+    new_alloc = h->map_alloc ? h->map_alloc * 2 : 8;
+    new_map = (struct ods2_extent *) realloc (h->map,
+                    (size_t)new_alloc * sizeof (*new_map));
+    if (new_map == NULL)
+        return 1;
+    h->map = new_map;
+    h->map_alloc = new_alloc;
+    }
+h->map[h->maps].lbn = lbn;
+h->map[h->maps].count = count;
+h->maps++;
+return 0;
+}
+
+static int ods2_parse_map (struct ods2_header *h, const uint8_t *b)
+{
+uint32_t off = (uint32_t)b[1] * 2;
+uint32_t end = (b[3] == 0 || b[3] == 255) ? 510 : (uint32_t)b[3] * 2;
+
+if (off == 0 || off >= 510)
+    return 0;
+while (off + 2 <= end) {
+    uint16_t w = le16_at (b, off);
+    uint32_t fmt = w >> 14;
+    uint32_t lbn, count;
+
+    if (w == 0)
+        break;
+    if (fmt == 0) {
+        off += 2;                                      /* placement descriptor */
+        continue;
+        }
+    if (fmt == 1) {
+        if (off + 4 > end)
+            break;
+        count = (w & 0xFF) + 1;
+        lbn = (((w >> 8) & 0x3F) << 16) | le16_at (b, off + 2);
+        off += 4;
+        }
+    else if (fmt == 2) {
+        if (off + 6 > end)
+            break;
+        count = (w & 0x3FFF) + 1;
+        lbn = ((uint32_t)le16_at (b, off + 4) << 16) | le16_at (b, off + 2);
+        off += 6;
+        }
+    else {
+        if (off + 8 > end)
+            break;
+        count = (((uint32_t)(w & 0x3FFF) << 16) | le16_at (b, off + 2)) + 1;
+        lbn = le32_at (b, off + 4);
+        off += 8;
+        }
+    if (ods2_add_extent (h, lbn, count) != 0)
+        return 1;
+    }
+return 0;
+}
+
+static int ods2_name_char (int c)
+{
+return isalnum ((unsigned char)c) || c == '_' || c == '$' ||
+       c == '-' || c == '.' || c == ';';
+}
+
+static char *ods2_header_name (const uint8_t *b)
+{
+uint32_t idoff = (uint32_t)b[0] * 2;
+uint32_t mpoff = (uint32_t)b[1] * 2;
+uint32_t off, start = 0, len = 0, best_start = 0, best_len = 0;
+int best_has_version = 0;
+
+if (idoff >= mpoff || mpoff > 510)
+    return NULL;
+for (off = idoff; off < mpoff; off++) {
+    if (ods2_name_char (b[off])) {
+        if (len == 0)
+            start = off;
+        len++;
+        }
+    else if (len != 0) {
+        int has_version = 0;
+        uint32_t i;
+
+        for (i = start; i < start + len; i++)
+            if (b[i] == ';')
+                has_version = 1;
+        if ((has_version && !best_has_version) ||
+            (has_version == best_has_version && len > best_len)) {
+            best_start = start;
+            best_len = len;
+            best_has_version = has_version;
+            }
+        len = 0;
+        }
+    }
+if (len != 0) {
+    int has_version = 0;
+    uint32_t i;
+
+    for (i = start; i < start + len; i++)
+        if (b[i] == ';')
+            has_version = 1;
+    if ((has_version && !best_has_version) ||
+        (has_version == best_has_version && len > best_len)) {
+        best_start = start;
+        best_len = len;
+        }
+    }
+if (best_len != 0) {
+    char *name = (char *) malloc (best_len + 1);
+    if (name == NULL)
+        return NULL;
+    memcpy (name, b + best_start, best_len);
+    name[best_len] = '\0';
+    return name;
+    }
+return NULL;
+}
+
+static uint32_t ods2_next_ext (const struct ods2_ctx *ctx, uint32_t fid)
+{
+uint32_t next;
+
+if (fid == 0 || fid > ctx->hdr_count || !ctx->hdr[fid].valid)
+    return 0;
+next = ctx->hdr[fid].ext_num;
+if (next == 0 || next > ctx->hdr_count || !ctx->hdr[next].valid)
+    return 0;
+if (ctx->hdr[next].seq != ctx->hdr[fid].ext_seq ||
+    ctx->hdr[next].rvn != ctx->hdr[fid].ext_rvn)
+    return 0;
+return next;
+}
+
+static int ods2_read_file (const struct ods2_ctx *ctx, uint32_t fid,
+                           uint8_t **out_buf, size_t *out_len)
+{
+uint32_t cur = fid, guard = 0;
+size_t total = 0, done = 0;
+uint8_t *buf;
+
+*out_buf = NULL;
+*out_len = 0;
+while (cur != 0 && cur <= ctx->hdr_count && ctx->hdr[cur].valid &&
+       guard++ < ctx->hdr_count) {
+    uint32_t i;
+    for (i = 0; i < ctx->hdr[cur].maps; i++)
+        total += (size_t)ctx->hdr[cur].map[i].count * RD_SECT_SIZE;
+    cur = ods2_next_ext (ctx, cur);
+    }
+if (total == 0)
+    return 0;
+buf = (uint8_t *) malloc (total);
+if (buf == NULL)
+    return 1;
+cur = fid;
+guard = 0;
+while (cur != 0 && cur <= ctx->hdr_count && ctx->hdr[cur].valid &&
+       guard++ < ctx->hdr_count) {
+    uint32_t i;
+    for (i = 0; i < ctx->hdr[cur].maps; i++) {
+        uint32_t lbn = ctx->hdr[cur].map[i].lbn;
+        uint32_t count = ctx->hdr[cur].map[i].count;
+        if (ods2_read_lbn (ctx, lbn, buf + done, count) != 0) {
+            free (buf);
+            return 1;
+            }
+        done += (size_t)count * RD_SECT_SIZE;
+        }
+    cur = ods2_next_ext (ctx, cur);
+    }
+*out_buf = buf;
+*out_len = total;
+return 0;
+}
+
+static void ods2_set_path (struct ods2_ctx *ctx, uint32_t fid,
+                           const char *path)
+{
+if (fid == 0 || fid > ctx->hdr_count || !ctx->hdr[fid].valid ||
+    ctx->hdr[fid].path != NULL)
+    return;
+ctx->hdr[fid].path = xstrdup (path);
+}
+
+static int ods2_seq_match (const struct ods2_ctx *ctx, uint32_t fn,
+                           uint32_t seq, uint32_t rvn)
+{
+if (fn == 0 || fn > ctx->hdr_count || !ctx->hdr[fn].valid)
+    return 0;
+return ctx->hdr[fn].seq == seq && ctx->hdr[fn].rvn == rvn;
+}
+
+static int ods2_ends_dir (const char *name)
+{
+size_t len = strlen (name);
+
+return len > 4 &&
+       toupper ((unsigned char)name[len - 4]) == '.' &&
+       toupper ((unsigned char)name[len - 3]) == 'D' &&
+       toupper ((unsigned char)name[len - 2]) == 'I' &&
+       toupper ((unsigned char)name[len - 1]) == 'R';
+}
+
+static int ods2_walk_dir (struct ods2_ctx *ctx, uint32_t fid,
+                          const char *dir_path, uint8_t *visited)
+{
+uint8_t *data = NULL;
+size_t len = 0, pos = 0;
+
+if (fid == 0 || fid > ctx->hdr_count || visited[fid])
+    return 0;
+visited[fid] = 1;
+if (ods2_read_file (ctx, fid, &data, &len) != 0)
+    return 1;
+while (pos + 6 <= len) {
+    size_t block_end = ((pos / RD_SECT_SIZE) + 1) * RD_SECT_SIZE;
+    uint16_t rec_len = le16_at (data, pos);
+    size_t total, name_start, name_end, ver_off;
+    uint8_t name_len;
+    char name[256];
+
+    if (rec_len == 0 || rec_len == 0xFFFF) {
+        pos = block_end;
+        continue;
+        }
+    total = (size_t)rec_len + 2;
+    if (total < 8 || pos + total > len) {
+        pos = block_end;
+        continue;
+        }
+    name_len = data[pos + 5];
+    name_start = pos + 6;
+    name_end = name_start + name_len;
+    if (name_len == 0 || name_end > pos + total) {
+        pos += total;
+        continue;
+        }
+    memcpy (name, data + name_start, name_len);
+    name[name_len] = '\0';
+    ver_off = name_end + (name_len & 1);
+    while (ver_off + 8 <= pos + total) {
+        uint16_t ver = le16_at (data, ver_off);
+        uint16_t fn = le16_at (data, ver_off + 2);
+        uint16_t fs = le16_at (data, ver_off + 4);
+        uint16_t rvn = le16_at (data, ver_off + 6);
+
+        if (ods2_seq_match (ctx, fn, fs, rvn)) {
+            char path[1024];
+
+            snprintf (path, sizeof path, "%s%s;%u", dir_path, name, ver);
+            ods2_set_path (ctx, fn, path);
+            if (ods2_ends_dir (name)) {
+                char child[1024];
+                size_t dlen = strlen (dir_path);
+                size_t nlen = strlen (name) - 4;
+
+                if (dlen > 0 && dir_path[dlen - 1] == ']' &&
+                    strcmp (name, "000000.DIR") != 0) {
+                    snprintf (child, sizeof child, "%.*s.%.*s]",
+                              (int)(dlen - 1), dir_path, (int)nlen, name);
+                    if (ods2_walk_dir (ctx, fn, child, visited) != 0) {
+                        free (data);
+                        return 1;
+                        }
+                    }
+                }
+            }
+        ver_off += 8;
+        }
+    pos += total;
+    }
+free (data);
+return 0;
+}
+
+static int ods2_init (struct ods2_ctx *ctx, int fd, const struct rd_geom *g,
+                      const uint32_t *lbn_map)
+{
+uint8_t home[RD_SECT_SIZE];
+uint8_t hdrbuf[RD_SECT_SIZE];
+struct ods2_header index_hdr;
+uint32_t i, j, total = 0;
+uint16_t struclev;
+
+memset (ctx, 0, sizeof (*ctx));
+ctx->fd = fd;
+ctx->g = g;
+ctx->lbn_map = lbn_map;
+if (ods2_read_lbn (ctx, 1, home, 1) != 0)
+    return 1;
+struclev = home[13];
+if ((struclev != 2 && struclev != 5) ||
+    le16_at (home, 58) != ods2_sum (home, 29) ||
+    le16_at (home, 510) != ods2_sum (home, 255))
+    return 1;
+ctx->cluster = le16_at (home, 14);
+ctx->ibmapvbn = le16_at (home, 22);
+ctx->ibmaplbn = le32_at (home, 24);
+ctx->maxfiles = le32_at (home, 28);
+ctx->ibmapsize = le16_at (home, 32);
+if (ctx->cluster == 0 || ctx->ibmapvbn == 0 ||
+    ctx->ibmaplbn == 0 || ctx->ibmapsize == 0 || ctx->maxfiles == 0)
+    return 1;
+memset (&index_hdr, 0, sizeof index_hdr);
+if (ods2_read_lbn (ctx, ctx->ibmaplbn + ctx->ibmapsize, hdrbuf, 1) != 0 ||
+    !ods2_checksum_ok (hdrbuf) || ods2_parse_map (&index_hdr, hdrbuf) != 0)
+    return 1;
+for (i = 0; i < index_hdr.maps; i++)
+    total += index_hdr.map[i].count;
+ctx->index_lbn = (uint32_t *) malloc ((size_t)total * sizeof (*ctx->index_lbn));
+if (ctx->index_lbn == NULL) {
+    free (index_hdr.map);
+    return 1;
+    }
+for (i = 0; i < index_hdr.maps; i++)
+    for (j = 0; j < index_hdr.map[i].count; j++)
+        ctx->index_lbn[ctx->index_blocks++] = index_hdr.map[i].lbn + j;
+free (index_hdr.map);
+ctx->header_stream0 = (uint32_t)ctx->ibmapvbn - 1 + ctx->ibmapsize;
+ctx->hdr_count = ctx->maxfiles;
+if (ctx->header_stream0 >= ctx->index_blocks)
+    return 1;
+if (ctx->hdr_count > ctx->index_blocks - ctx->header_stream0)
+    ctx->hdr_count = ctx->index_blocks - ctx->header_stream0;
+ctx->hdr = (struct ods2_header *) calloc ((size_t)ctx->hdr_count + 1,
+                                          sizeof (*ctx->hdr));
+ctx->prev_ext = (uint32_t *) calloc ((size_t)ctx->hdr_count + 1,
+                                     sizeof (*ctx->prev_ext));
+if (ctx->hdr == NULL || ctx->prev_ext == NULL)
+    return 1;
+for (i = 1; i <= ctx->hdr_count; i++) {
+    uint32_t lbn = ctx->index_lbn[ctx->header_stream0 + i - 1];
+    uint16_t fid_num, structlev;
+
+    if (ods2_read_lbn (ctx, lbn, hdrbuf, 1) != 0 || !ods2_checksum_ok (hdrbuf))
+        continue;
+    fid_num = le16_at (hdrbuf, 8);
+    structlev = le16_at (hdrbuf, 6);
+    if (fid_num != i || (structlev != 0x0201 && structlev != 0x0202 &&
+                         structlev != 0x0502))
+        continue;
+    ctx->hdr[i].valid = 1;
+    ctx->hdr[i].header_lbn = lbn;
+    ctx->hdr[i].seq = le16_at (hdrbuf, 10);
+    ctx->hdr[i].rvn = le16_at (hdrbuf, 12);
+    ctx->hdr[i].seg = le16_at (hdrbuf, 4);
+    ctx->hdr[i].ext_num = le16_at (hdrbuf, 14);
+    ctx->hdr[i].ext_seq = le16_at (hdrbuf, 16);
+    ctx->hdr[i].ext_rvn = le16_at (hdrbuf, 18);
+    ctx->hdr[i].name = ods2_header_name (hdrbuf);
+    if (ods2_parse_map (&ctx->hdr[i], hdrbuf) != 0)
+        return 1;
+    }
+for (i = 1; i <= ctx->hdr_count; i++) {
+    uint32_t next = ctx->hdr[i].ext_num;
+    if (!ctx->hdr[i].valid || next == 0 || next > ctx->hdr_count ||
+        !ctx->hdr[next].valid)
+        continue;
+    if (ctx->hdr[next].seq == ctx->hdr[i].ext_seq &&
+        ctx->hdr[next].rvn == ctx->hdr[i].ext_rvn)
+        ctx->prev_ext[next] = i;
+    }
+if (ctx->hdr_count >= 4) {
+    uint8_t *visited = (uint8_t *) calloc ((size_t)ctx->hdr_count + 1, 1);
+    if (visited == NULL)
+        return 1;
+    (void)ods2_walk_dir (ctx, 4, "[000000]", visited);
+    free (visited);
+    }
+if (ctx->hdr_count >= 2 && ctx->hdr[2].valid) {
+    uint8_t *bitmap_file = NULL;
+    size_t bitmap_file_len = 0;
+    if (ods2_read_file (ctx, 2, &bitmap_file, &bitmap_file_len) == 0 &&
+        bitmap_file_len > RD_SECT_SIZE) {
+        ctx->bitmap_len = bitmap_file_len - RD_SECT_SIZE;
+        ctx->bitmap = (uint8_t *) malloc (ctx->bitmap_len);
+        if (ctx->bitmap != NULL)
+            memcpy (ctx->bitmap, bitmap_file + RD_SECT_SIZE, ctx->bitmap_len);
+        }
+    free (bitmap_file);
+    }
+return 0;
+}
+
+static void ods2_free (struct ods2_ctx *ctx)
+{
+uint32_t i;
+
+if (ctx->hdr != NULL) {
+    for (i = 1; i <= ctx->hdr_count; i++) {
+        free (ctx->hdr[i].name);
+        free (ctx->hdr[i].path);
+        free (ctx->hdr[i].map);
+        }
+    }
+free (ctx->hdr);
+free (ctx->prev_ext);
+free (ctx->index_lbn);
+free (ctx->bitmap);
+}
+
+static const char *ods2_alloc_state (const struct ods2_ctx *ctx,
+                                     uint32_t lbn)
+{
+uint32_t idx;
+
+if (ctx->bitmap == NULL || ctx->cluster == 0)
+    return "unknown";
+idx = lbn / ctx->cluster;
+if ((size_t)(idx / 8) >= ctx->bitmap_len)
+    return "unknown";
+return (ctx->bitmap[idx / 8] & (1u << (idx & 7))) ? "free" : "allocated";
+}
+
+static uint32_t ods2_primary_fid (const struct ods2_ctx *ctx, uint32_t fid)
+{
+uint32_t guard = 0;
+
+while (fid != 0 && fid <= ctx->hdr_count && ctx->hdr[fid].valid &&
+       ctx->hdr[fid].seg != 0 && ctx->prev_ext[fid] != 0 &&
+       guard++ < ctx->hdr_count)
+    fid = ctx->prev_ext[fid];
+return fid;
+}
+
+static const char *ods2_file_name (const struct ods2_ctx *ctx, uint32_t fid)
+{
+uint32_t primary = ods2_primary_fid (ctx, fid);
+
+if (primary != 0 && primary <= ctx->hdr_count) {
+    if (ctx->hdr[primary].path != NULL)
+        return ctx->hdr[primary].path;
+    if (ctx->hdr[primary].name != NULL)
+        return ctx->hdr[primary].name;
+    }
+if (fid != 0 && fid <= ctx->hdr_count && ctx->hdr[fid].name != NULL)
+    return ctx->hdr[fid].name;
+return "-";
+}
+
+static uint32_t ods2_find_owner (const struct ods2_ctx *ctx, uint32_t lbn)
+{
+uint32_t fid;
+
+for (fid = 1; fid <= ctx->hdr_count; fid++) {
+    uint32_t i;
+    if (!ctx->hdr[fid].valid)
+        continue;
+    for (i = 0; i < ctx->hdr[fid].maps; i++) {
+        uint32_t start = ctx->hdr[fid].map[i].lbn;
+        uint32_t end = start + ctx->hdr[fid].map[i].count;
+        if (lbn >= start && lbn < end)
+            return fid;
+        }
+    }
+return 0;
+}
+
+static int build_bad_map (const uint8_t *rct_buf, const struct rd_geom *g,
+                          uint32_t **out_lbn_map,
+                          struct rd_badent **out_bad,
+                          uint32_t *out_bad_count)
+{
+uint32_t *lbn_map;
+struct rd_badent *bad;
+uint32_t rbn_idx, count = 0;
+
+*out_lbn_map = NULL;
+*out_bad = NULL;
+*out_bad_count = 0;
+lbn_map = (uint32_t *) calloc (g->user_lbn, sizeof (*lbn_map));
+bad = (struct rd_badent *) calloc (g->rbn, sizeof (*bad));
+if (lbn_map == NULL || bad == NULL) {
+    free (lbn_map);
+    free (bad);
+    return 1;
+    }
+for (rbn_idx = 0; rbn_idx < g->rbn; rbn_idx++) {
+    uint32_t entry = rct_entry (rct_buf, rbn_idx);
+    uint32_t code = RBN_GET_CODE (entry);
+    uint32_t lbn = RBN_GET_LBN (entry);
+
+    if (!RBN_IS_FORWARDED (code) && !RBN_IS_BAD (code))
+        continue;
+    bad[count].rbn = rbn_idx;
+    bad[count].lbn = lbn;
+    bad[count].code = code;
+    count++;
+    if (RBN_IS_FORWARDED (code) && lbn < g->user_lbn)
+        lbn_map[lbn] = rbn_idx + 1;
+    }
+*out_lbn_map = lbn_map;
+*out_bad = bad;
+*out_bad_count = count;
+return 0;
+}
+
+static int report_bad_files (int raw_fd, const uint8_t *rct_buf,
+                             const struct rd_geom *g)
+{
+uint32_t *lbn_map = NULL;
+struct rd_badent *bad = NULL;
+uint32_t bad_count = 0, i;
+struct ods2_ctx ods;
+int have_ods = 0;
+
+memset (&ods, 0, sizeof ods);
+if (build_bad_map (rct_buf, g, &lbn_map, &bad, &bad_count) != 0) {
+    fprintf (stderr, "rd_unraw: out of memory for bad-file report\n");
+    return 1;
+    }
+if (bad_count == 0) {
+    printf ("rd_unraw: no allocated or unusable RCT entries\n");
+    free (lbn_map);
+    free (bad);
+    return 0;
+    }
+if (ods2_init (&ods, raw_fd, g, lbn_map) == 0)
+    have_ods = 1;
+else {
+    fprintf (stderr,
+        "rd_unraw: warning: ODS-2 filesystem not recognized; "
+        "file names unavailable\n");
+    ods2_free (&ods);
+    }
+
+printf ("\nBad-sector file report:\n");
+printf ("%-9s %-6s %-8s %-11s %s\n",
+        "LBN", "RBN", "RCT", "FS", "Current file");
+for (i = 0; i < bad_count; i++) {
+    const char *fs = "unknown";
+    const char *file = "-";
+
+    if (bad[i].lbn >= g->user_lbn)
+        fs = "out-range";
+    else if (have_ods) {
+        uint32_t owner = ods2_find_owner (&ods, bad[i].lbn);
+        fs = ods2_alloc_state (&ods, bad[i].lbn);
+        if (owner != 0)
+            file = ods2_file_name (&ods, owner);
+        }
+    printf ("%-9u %-6u %-8s %-11s %s\n",
+            bad[i].lbn, bad[i].rbn, code_name (bad[i].code), fs, file);
+    }
+fflush (stdout);
+if (have_ods)
+    ods2_free (&ods);
+free (lbn_map);
+free (bad);
+return 0;
+}
+
 /* --- output construction --- */
 
 /* Bulk-copy the SimH-visible LBN region from raw to out, sector by
@@ -417,6 +1092,7 @@ fprintf (fp,
     "  --report           print every forwarded LBN -> RBN mapping\n"
     "  --verify           cross-compare all RCTC copies of the RCT\n"
     "  --verify-strict    fail with exit 3 on RCT replica disagreement\n"
+    "  --bad-files        map RCT bad sectors to current ODS-2 files\n"
     "  --force-type=NAME  override geometry detection (RD31|RD32|RD53|RD54)\n"
     "  --allow-unusable   zero-fill INVALP/INVALS LBNs in the output\n"
     "  --allow-layout-mismatch\n"
@@ -432,7 +1108,8 @@ int main (int argc, char **argv)
 const char *in_path = NULL;
 const char *out_path = NULL;
 const char *force_type = NULL;
-int report = 0, verify = 0, verify_strict = 0, allow_unusable = 0;
+int report = 0, verify = 0, verify_strict = 0, bad_files = 0;
+int allow_unusable = 0;
 int allow_layout_mismatch = 0;
 int i;
 int raw_fd = -1, out_fd = -1;
@@ -455,6 +1132,7 @@ for (i = 1; i < argc; i++) {
     else if (strcmp (a, "--report") == 0)         report = 1;
     else if (strcmp (a, "--verify") == 0)         verify = 1;
     else if (strcmp (a, "--verify-strict") == 0)  verify = verify_strict = 1;
+    else if (strcmp (a, "--bad-files") == 0)      bad_files = 1;
     else if (strcmp (a, "--allow-unusable") == 0) allow_unusable = 1;
     else if (strcmp (a, "--allow-layout-mismatch") == 0)
         allow_layout_mismatch = 1;
@@ -583,6 +1261,11 @@ if (out_path) {
 
 if (walk_rct (raw_fd, out_fd, rct_buf, &g, report, allow_unusable, &stats) != 0) {
     rc = 1; goto out;
+    }
+if (bad_files) {
+    if (report_bad_files (raw_fd, rct_buf, &g) != 0) {
+        rc = 1; goto out;
+        }
     }
 
 fprintf (stderr,
