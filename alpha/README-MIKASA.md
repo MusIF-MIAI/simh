@@ -28,10 +28,11 @@ Implemented:
   - `BOOT CPU` starts the loaded SRM image, matching the VAX SIMH convention
     where CPU boot enters the platform firmware.
   - The real `mksrmrom.exe` now runs through ROM copy/decompression, probes
-    PCI/EISA, passes the Mikasa ICU presence check, and prints the DEC/MIKASA
-    SRM banner:
+    PCI/EISA, passes the Mikasa ICU presence check, detects the on-board
+    `pka` NCR 53C810 SCSI function, and prints the DEC/MIKASA SRM banner:
 
     ```text
+    EPICbus 0, slot  6 -- pka -- NCR 53C810
     V5.4-101, built on Mar 24 1999 at 13:58:27
     ```
 
@@ -61,7 +62,7 @@ Implemented:
 Not implemented yet:
 
 - Complete real Mikasa 21071/CIA PCI host bridge behavior.
-- NCR/Symbios 53C810 PCI SCSI DMA engine.
+- NCR/Symbios 53C810 SCRIPTS/DMA engine and SCSI bus transactions.
 - Network, VGA, NVRAM, and multiprocessor support.
 - A complete SRM-compatible firmware execution environment. The real SRM image
   now reaches the SRM banner, but it does not reach an SRM prompt yet.
@@ -77,6 +78,7 @@ Current verified SRM progress:
 Loaded Mikasa SRM ROM payload from ../firmware/as1000/mksrmrom.payload.bin: 475648 bytes at 00900000, PC=00900000 PALBASE=00900000
 ff.fe.fd.fc.fb.fa.f9.f8.f7.f6.f5.f3.f2.f1.f0.ef.df.ee.f4.
 probing hose 0, PCI
+EPICbus 0, slot  6 -- pka -- NCR 53C810
 probing hose 1, EISA
 ed.ec.eb.....ea.e9.e8.e7.e6.e5.e4.e3.e2.e1.e0.
 V5.4-101, built on Mar 24 1999 at 13:58:27
@@ -312,10 +314,10 @@ debug tracing, the PC cycles inside the ROM decompressor around `0x900301` and
    and SWRPB/boot context are still minimal.
 
 5. Add more Mikasa platform I/O.
-   The current model implements APECS sparse ISA I/O enough for COM1 and the
-   AlphaServer 1000 ICU register at `0x536`. Remaining likely SRM probes include
-   RTC/NVRAM ports `0x70`/`0x71`, EISA configuration ports `0x22`/`0x23`, OCP
-   ports around `0x530`, and eventual PCI configuration space.
+   The current model implements APECS sparse ISA I/O, EPIC register storage,
+   PCI configuration cycles, the raw-IDSEL `7` Intel 82375EB PCI/EISA bridge,
+   and the raw-IDSEL `6` NCR 53C810 PCI configuration/register window. The SRM
+   now recognizes `pka`, then waits for real 53C810 SCRIPTS/DMA behavior.
 
 6. Add a new NCR/Symbios 53C810 frontend.
    SIMH has a common SCSI backend, but no 53C810 PCI DMA frontend in this tree.
