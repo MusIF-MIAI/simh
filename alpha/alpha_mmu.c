@@ -52,9 +52,11 @@
 
 extern t_uint64 trans_i (t_uint64 va);
 extern t_uint64 trans_d (t_uint64 va, uint32 acc);
+extern void mikasa_mem_write (t_uint64 pa, t_uint64 dat, uint32 lnt);
 
 extern t_uint64 *M;
 extern t_uint64 p1;
+extern uint32 cpu_model;
 extern uint32 pal_mode, dmapen;
 extern uint32 cm_eacc, cm_racc, cm_wacc;
 extern jmp_buf save_env;
@@ -294,6 +296,8 @@ if (ADDR_IS_MEM (pa)) {
     if (pa & 4) M[pa >> 3] = (M[pa >> 3] & M32) |
         (dat << 32);
     else M[pa >> 3] = (M[pa >> 3] & ~((t_uint64) M32)) | dat;
+    if (cpu_model == ALPHA_MODEL_MIKASA_4_266)
+        mikasa_mem_write (pa, dat, L_LONG);
     }
 else WriteIO (pa, dat, L_LONG);
 return;

@@ -24,7 +24,7 @@
 #include "alpha_ev5_defs.h"
 #include "sim_fio.h"
 
-#define MIKASA_HWRPB_PA             0x00002000
+#define MIKASA_HWRPB_PA             0x00380000
 #define MIKASA_HWRPB_VA             0x10000000
 #define MIKASA_HWRPB_SIZE           0x8000
 #define MIKASA_MDDT_OFF             0x800
@@ -50,6 +50,15 @@
 #define MIKASA_DKA_BLOCK_SIZE       512
 #define MIKASA_IO_BUFSIZE           4096
 #define MIKASA_SCSI_SLOT            6
+#define MIKASA_APB_IO_CMD_OFF       0x120
+#define MIKASA_APB_IO_LBN_OFF       0x128
+#define MIKASA_APB_IO_ADDR_OFF      0x130
+#define MIKASA_APB_IO_CMD_READ      2
+#define MIKASA_APB_IO_CMD_WRITE     4
+#define MIKASA_APB_IO_ERR           0x10
+#define MIKASA_VMS_SYSVA_BASE       0x80000000
+#define MIKASA_VMS_SYSVA_LIMIT      0xC0000000
+#define MIKASA_VMS_SYSVA_MASK       0x1FFFFFFF
 #define MIKASA_PFN_BITMAP_PA        (MIKASA_HWRPB_PA + 0x2000)
 #define MIKASA_PMR_SIZE             0x38
 #define MIKASA_BOOT_IMAGE_PA        0x00200000
@@ -138,9 +147,12 @@
 
 extern UNIT cpu_unit;
 extern jmp_buf save_env;
+extern t_uint64 *M;
 extern t_uint64 R[32];
 extern t_uint64 PC;
 extern t_uint64 p1;
+extern uint32 ir;
+extern uint32 lock_flag;
 extern uint32 pal_mode;
 extern uint32 pal_type;
 extern uint32 dmapen;
@@ -160,6 +172,20 @@ t_uint64 mikasa_callback_count = 0;
 t_uint64 mikasa_getenv_count = 0;
 t_uint64 mikasa_ioread_count = 0;
 t_uint64 mikasa_iowrite_count = 0;
+t_uint64 mikasa_apb_ioread_count = 0;
+t_uint64 mikasa_apb_iowrite_count = 0;
+t_uint64 mikasa_apb_last_cmd = 0;
+t_uint64 mikasa_apb_last_lbn = 0;
+t_uint64 mikasa_apb_last_addr = 0;
+t_uint64 mikasa_apb_last_pa = 0;
+static t_bool mikasa_apb_dma_valid = FALSE;
+static t_uint64 mikasa_apb_dma_cpu_addr = 0;
+static t_uint64 mikasa_apb_dma_cpu_len = 0;
+static t_uint64 mikasa_apb_dma_bus_addr = 0;
+static t_uint64 mikasa_apb_dma_bus_len = 0;
+t_uint64 mikasa_align_count = 0;
+t_uint64 mikasa_align_last_va = 0;
+t_uint64 mikasa_align_last_pc = 0;
 t_uint64 mikasa_pal_pcbb = 0;
 t_uint64 mikasa_pal_prbr = 0;
 t_uint64 mikasa_pal_ptbr = 0;
@@ -180,6 +206,7 @@ uint32 mikasa_pal_last_pcc = 0;
 t_stat mikasa_reset (DEVICE *dptr);
 t_stat mikasa_boot_prepare (CONST char *bootdev, uint32 osflags,
     t_uint64 image_bytes);
+void mikasa_mem_write (t_uint64 pa, t_uint64 dat, uint32 lnt);
 t_stat mikasa_pal_proc_excp (uint32 abval);
 t_stat mikasa_pal_proc_inst (uint32 fnc);
 
@@ -221,6 +248,9 @@ static t_int64 mikasa_pal_remqhiq (void);
 static t_int64 mikasa_pal_remqtiq (void);
 static t_int64 mikasa_pal_remquel (uint32 defer);
 static t_int64 mikasa_pal_remqueq (uint32 defer);
+static t_bool mikasa_pal_proc_align (void);
+static t_uint64 mikasa_pal_read_una (t_uint64 va, uint32 size);
+static void mikasa_pal_write_una (t_uint64 va, t_uint64 val, uint32 size);
 static t_uint64 mikasa_pal_read_una_l (t_uint64 va);
 static void mikasa_pal_write_una_l (t_uint64 va, t_uint64 val);
 static void mikasa_write_console_crb (t_uint64 hwrpb_pa);
@@ -231,6 +261,18 @@ static void mikasa_copy_env_value (const char *value);
 static uint32 mikasa_boot_target (CONST char *bootdev);
 static void mikasa_clear_io_channels (void);
 static int32 mikasa_parse_io_unit (const char *devstr);
+static t_bool mikasa_apb_dma_window_pa (t_uint64 addr, t_uint64 cpu_addr,
+    t_uint64 cpu_len, t_uint64 bus_addr, t_uint64 bus_len, t_uint64 *pa);
+static t_bool mikasa_apb_io_descriptor_pa (t_uint64 addr, t_uint64 *pa);
+static t_bool mikasa_apb_io_target_pa (t_uint64 addr, t_uint64 *pa);
+static void mikasa_write_phys_long (t_uint64 pa, t_uint64 dat);
+static void mikasa_write_phys_byte (t_uint64 pa, uint8 dat);
+static uint8 mikasa_read_phys_byte (t_uint64 pa);
+static t_bool mikasa_apb_iobox_read (uint32 unit, t_uint64 lbn,
+    t_uint64 addr);
+static t_bool mikasa_apb_iobox_write (uint32 unit, t_uint64 lbn,
+    t_uint64 addr);
+static void mikasa_apb_iobox_command (t_uint64 pa, t_uint64 cmd);
 static void mikasa_read_callback_string (t_uint64 va, t_uint64 len,
     char *buf, uint32 bufsize);
 static void mikasa_open_io (void);
@@ -259,6 +301,15 @@ REG mikasa_reg[] = {
     { HRDATA (GETENVS, mikasa_getenv_count, 64), REG_RO },
     { HRDATA (IOREADS, mikasa_ioread_count, 64), REG_RO },
     { HRDATA (IOWRITES, mikasa_iowrite_count, 64), REG_RO },
+    { HRDATA (APBIOREADS, mikasa_apb_ioread_count, 64), REG_RO },
+    { HRDATA (APBIOWRITES, mikasa_apb_iowrite_count, 64), REG_RO },
+    { HRDATA (APBIOCMD, mikasa_apb_last_cmd, 64), REG_RO },
+    { HRDATA (APBIOLBN, mikasa_apb_last_lbn, 64), REG_RO },
+    { HRDATA (APBIOADDR, mikasa_apb_last_addr, 64), REG_RO },
+    { HRDATA (APBIOPA, mikasa_apb_last_pa, 64), REG_RO },
+    { HRDATA (ALIGNS, mikasa_align_count, 64), REG_RO },
+    { HRDATA (ALIGNVA, mikasa_align_last_va, 64), REG_RO },
+    { HRDATA (ALIGNPC, mikasa_align_last_pc, 64), REG_RO },
     { HRDATA (IRQSMM, mikasa_irq_summary, 16) },
     { HRDATA (IRQMASK, mikasa_irq_mask, 16) },
     { HRDATA (PALIPL, mikasa_pal_ipl, 5) },
@@ -732,6 +783,200 @@ if ((count >= 5) && (values[4] < MIKASA_DKA_UNITS))
 return -1;
 }
 
+static t_bool mikasa_apb_io_target_pa (t_uint64 addr, t_uint64 *pa)
+{
+t_uint64 low_addr = addr & M32;
+
+if (mikasa_apb_io_descriptor_pa (addr, pa))
+    return TRUE;
+if (mikasa_boot_va_to_pa (addr, pa))
+    return TRUE;
+if ((addr & L_SIGN) && mikasa_boot_va_to_pa (SEXT_L_Q (addr), pa))
+    return TRUE;
+if ((low_addr >= MIKASA_VMS_SYSVA_BASE) &&
+    (low_addr < MIKASA_VMS_SYSVA_LIMIT)) {
+    *pa = low_addr & MIKASA_VMS_SYSVA_MASK;
+    return ADDR_IS_MEM (*pa);
+    }
+if (ADDR_IS_MEM (addr)) {
+    *pa = addr;
+    return TRUE;
+    }
+if ((addr >= MIKASA_BOOT_IMAGE_VA) &&
+    (addr < (MIKASA_BOOT_IMAGE_VA + MIKASA_BOOT_RESERVED_SIZE))) {
+    *pa = MIKASA_BOOT_IMAGE_PA + (addr - MIKASA_BOOT_IMAGE_VA);
+    return ADDR_IS_MEM (*pa);
+    }
+return FALSE;
+}
+
+static t_bool mikasa_apb_io_descriptor_pa (t_uint64 addr, t_uint64 *pa)
+{
+t_uint64 desc_pa;
+t_uint64 cpu_addr;
+t_uint64 cpu_len;
+t_uint64 bus_addr;
+t_uint64 bus_len;
+
+/* Multi-block APB reads pass the DMA descriptor only on the first block. */
+if ((R[17] < MIKASA_BOOT_IMAGE_VA) ||
+    (R[17] >= (MIKASA_BOOT_IMAGE_VA + MIKASA_BOOT_RESERVED_SIZE)))
+    return mikasa_apb_dma_valid && mikasa_apb_dma_window_pa (addr,
+        mikasa_apb_dma_cpu_addr, mikasa_apb_dma_cpu_len,
+        mikasa_apb_dma_bus_addr, mikasa_apb_dma_bus_len, pa);
+if (!mikasa_boot_va_to_pa (R[17], &desc_pa))
+    return FALSE;
+if (!ADDR_IS_MEM (desc_pa + 15))
+    return FALSE;
+cpu_addr = ReadPL (desc_pa);
+cpu_len = ReadPL (desc_pa + 4);
+bus_addr = ReadPL (desc_pa + 8);
+bus_len = ReadPL (desc_pa + 12);
+if (mikasa_apb_dma_window_pa (addr, cpu_addr, cpu_len, bus_addr,
+    bus_len, pa)) {
+    mikasa_apb_dma_valid = TRUE;
+    mikasa_apb_dma_cpu_addr = cpu_addr;
+    mikasa_apb_dma_cpu_len = cpu_len;
+    mikasa_apb_dma_bus_addr = bus_addr;
+    mikasa_apb_dma_bus_len = bus_len;
+    return TRUE;
+    }
+return FALSE;
+}
+
+static t_bool mikasa_apb_dma_window_pa (t_uint64 addr, t_uint64 cpu_addr,
+    t_uint64 cpu_len, t_uint64 bus_addr, t_uint64 bus_len, t_uint64 *pa)
+{
+t_uint64 offset;
+
+if ((cpu_len == 0) || (bus_len == 0) || ((addr & M32) < bus_addr))
+    return FALSE;
+offset = (addr & M32) - bus_addr;
+if ((offset >= cpu_len) || (offset >= bus_len))
+    return FALSE;
+return mikasa_boot_va_to_pa ((cpu_addr + offset) & M64, pa);
+}
+
+static void mikasa_write_phys_long (t_uint64 pa, t_uint64 dat)
+{
+dat = dat & M32;
+if (pa & 4) M[pa >> 3] = (M[pa >> 3] & M32) | (dat << 32);
+else M[pa >> 3] = (M[pa >> 3] & ~((t_uint64) M32)) | dat;
+return;
+}
+
+static void mikasa_write_phys_byte (t_uint64 pa, uint8 dat)
+{
+uint32 bo = ((uint32) pa) & 7;
+
+M[pa >> 3] = (M[pa >> 3] & ~(((t_uint64) M8) << (bo << 3))) |
+    (((t_uint64) dat) << (bo << 3));
+return;
+}
+
+static uint8 mikasa_read_phys_byte (t_uint64 pa)
+{
+uint32 bo = ((uint32) pa) & 7;
+
+return (uint8) ((M[pa >> 3] >> (bo << 3)) & M8);
+}
+
+static t_bool mikasa_apb_iobox_read (uint32 unit, t_uint64 lbn,
+    t_uint64 addr)
+{
+uint8 buf[MIKASA_DKA_BLOCK_SIZE];
+t_uint64 pa;
+uint32 i;
+UNIT *uptr;
+
+if ((unit >= MIKASA_DKA_UNITS) || !mikasa_apb_io_target_pa (addr, &pa))
+    return FALSE;
+if (!ADDR_IS_MEM (pa + MIKASA_DKA_BLOCK_SIZE - 1))
+    return FALSE;
+mikasa_apb_last_pa = pa;
+uptr = &dka_unit[unit];
+if ((uptr->flags & UNIT_ATT) == 0)
+    return FALSE;
+if ((uptr->capac != 0) && (lbn >= uptr->capac))
+    return FALSE;
+if (sim_fseeko (uptr->fileref,
+    ((t_offset) lbn) * MIKASA_DKA_BLOCK_SIZE, SEEK_SET))
+    return FALSE;
+if (sim_fread (buf, 1, sizeof (buf), uptr->fileref) != sizeof (buf))
+    return FALSE;
+for (i = 0; i < sizeof (buf); i++)
+    mikasa_write_phys_byte (pa + i, buf[i]);
+mikasa_apb_ioread_count++;
+return TRUE;
+}
+
+static t_bool mikasa_apb_iobox_write (uint32 unit, t_uint64 lbn,
+    t_uint64 addr)
+{
+uint8 buf[MIKASA_DKA_BLOCK_SIZE];
+t_uint64 pa;
+uint32 i;
+UNIT *uptr;
+
+if ((unit >= MIKASA_DKA_UNITS) || !mikasa_apb_io_target_pa (addr, &pa))
+    return FALSE;
+if (!ADDR_IS_MEM (pa + MIKASA_DKA_BLOCK_SIZE - 1))
+    return FALSE;
+mikasa_apb_last_pa = pa;
+uptr = &dka_unit[unit];
+if (((uptr->flags & UNIT_ATT) == 0) || (uptr->flags & UNIT_RO))
+    return FALSE;
+if ((uptr->capac != 0) && (lbn >= uptr->capac))
+    return FALSE;
+for (i = 0; i < sizeof (buf); i++)
+    buf[i] = mikasa_read_phys_byte (pa + i);
+if (sim_fseeko (uptr->fileref,
+    ((t_offset) lbn) * MIKASA_DKA_BLOCK_SIZE, SEEK_SET))
+    return FALSE;
+if (sim_fwrite (buf, 1, sizeof (buf), uptr->fileref) != sizeof (buf))
+    return FALSE;
+mikasa_apb_iowrite_count++;
+return TRUE;
+}
+
+static void mikasa_apb_iobox_command (t_uint64 pa, t_uint64 cmd)
+{
+t_uint64 base_pa;
+t_uint64 lbn;
+t_uint64 addr;
+t_bool ok = FALSE;
+
+if (pa < MIKASA_APB_IO_CMD_OFF)
+    return;
+if ((cmd != MIKASA_APB_IO_CMD_READ) && (cmd != MIKASA_APB_IO_CMD_WRITE))
+    return;
+base_pa = pa - MIKASA_APB_IO_CMD_OFF;
+if (!ADDR_IS_MEM (base_pa + MIKASA_APB_IO_ADDR_OFF + 3))
+    return;
+lbn = ReadPL (base_pa + MIKASA_APB_IO_LBN_OFF);
+addr = ReadPL (base_pa + MIKASA_APB_IO_ADDR_OFF);
+mikasa_apb_last_cmd = cmd;
+mikasa_apb_last_lbn = lbn;
+mikasa_apb_last_addr = addr;
+if (cmd == MIKASA_APB_IO_CMD_READ)
+    ok = mikasa_apb_iobox_read (0, lbn, addr);
+else
+    ok = mikasa_apb_iobox_write (0, lbn, addr);
+if (!ok)
+    mikasa_write_phys_long (pa, cmd | MIKASA_APB_IO_ERR);
+return;
+}
+
+void mikasa_mem_write (t_uint64 pa, t_uint64 dat, uint32 lnt)
+{
+if ((pa < MIKASA_BOOT_IMAGE_PA) ||
+    (pa >= (MIKASA_BOOT_IMAGE_PA + MIKASA_BOOT_RESERVED_SIZE)))
+    return;
+if ((lnt == L_LONG) && ((pa & 0x1FF) == MIKASA_APB_IO_CMD_OFF))
+    mikasa_apb_iobox_command (pa, dat & M32);
+return;
+}
+
 static void mikasa_read_callback_string (t_uint64 va, t_uint64 len,
     char *buf, uint32 bufsize)
 {
@@ -1023,6 +1268,11 @@ t_uint64 pa;
 
 switch (abval) {
 
+    case EXC_ALIGN:
+        if (mikasa_pal_proc_align ())
+            return SCPE_OK;
+        break;
+
     case EXC_TBM + EXC_E:
         if (!mikasa_boot_va_to_pa (va, &pa))
             return SCPE_NOFNC;
@@ -1041,6 +1291,79 @@ switch (abval) {
         }
 
 return SCPE_NOFNC;
+}
+
+static t_bool mikasa_pal_proc_align (void)
+{
+uint32 op = I_GETOP (ir);
+uint32 ra = I_GETRA (ir);
+t_uint64 val;
+
+mikasa_align_count++;
+mikasa_align_last_va = p1;
+mikasa_align_last_pc = (PC - 4) & M64;
+switch (op) {
+
+    case OP_LDWU:
+        if (ra != 31)
+            R[ra] = mikasa_pal_read_una (p1, 2);
+        return TRUE;
+
+    case OP_LDL:
+        if (ra != 31) {
+            val = mikasa_pal_read_una (p1, 4);
+            R[ra] = SEXT_L_Q (val);
+            }
+        return TRUE;
+
+    case OP_LDQ:
+        if (ra != 31)
+            R[ra] = mikasa_pal_read_una (p1, 8);
+        return TRUE;
+
+    case OP_LDL_L:
+        if (ra != 31) {
+            val = mikasa_pal_read_una (p1, 4);
+            R[ra] = SEXT_L_Q (val);
+            lock_flag = 1;
+            }
+        return TRUE;
+
+    case OP_LDQ_L:
+        if (ra != 31) {
+            R[ra] = mikasa_pal_read_una (p1, 8);
+            lock_flag = 1;
+            }
+        return TRUE;
+
+    case OP_STW:
+        mikasa_pal_write_una (p1, R[ra], 2);
+        return TRUE;
+
+    case OP_STL:
+        mikasa_pal_write_una (p1, R[ra], 4);
+        return TRUE;
+
+    case OP_STQ:
+        mikasa_pal_write_una (p1, R[ra], 8);
+        return TRUE;
+
+    case OP_STL_C:
+        if (lock_flag)
+            mikasa_pal_write_una (p1, R[ra], 4);
+        else R[ra] = 0;
+        lock_flag = 0;
+        return TRUE;
+
+    case OP_STQ_C:
+        if (lock_flag)
+            mikasa_pal_write_una (p1, R[ra], 8);
+        else R[ra] = 0;
+        lock_flag = 0;
+        return TRUE;
+        }
+
+return FALSE;
 }
 
 static uint32 mikasa_pal_probe (uint32 acc)
@@ -1409,6 +1732,25 @@ ReadAccQ (s + 8, cm_wacc);
 WriteQ (p, s);
 WriteQ (s + 8, p);
 return ((s == p) ? 0 : +1);
+}
+
+static t_uint64 mikasa_pal_read_una (t_uint64 va, uint32 size)
+{
+t_uint64 val = 0;
+uint32 i;
+
+for (i = 0; i < size; i++)
+    val = val | ((t_uint64) ReadB ((va + i) & M64) << (i << 3));
+return val;
+}
+
+static void mikasa_pal_write_una (t_uint64 va, t_uint64 val, uint32 size)
+{
+uint32 i;
+
+for (i = 0; i < size; i++)
+    WriteB ((va + i) & M64, val >> (i << 3));
+return;
 }
 
 static t_uint64 mikasa_pal_read_una_l (t_uint64 va)
@@ -1871,6 +2213,7 @@ console_pages = (MIKASA_BOOT_PT_RESERVED_END +
 if (mem_pages <= console_pages)
     return SCPE_NXM;
 mikasa_zero_phys (bitmap_pa, (uint32) (bitmap_pages * MIKASA_PAGE_SIZE));
+mikasa_apb_dma_valid = FALSE;
 mikasa_set_boot_env (bootdev, osflags);
 mikasa_clear_io_channels ();
 mikasa_build_boot_pt ();

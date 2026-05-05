@@ -199,7 +199,8 @@ return ev5_palent (PC, PALO_TRAP);
 t_stat pal_proc_excp (uint32 abval)
 {
 if ((cpu_model == ALPHA_MODEL_MIKASA_4_266) &&
-    ((abval == (EXC_TBM + EXC_E)) ||
+    ((abval == EXC_ALIGN) ||
+     (abval == (EXC_TBM + EXC_E)) ||
      (abval == (EXC_TBM + EXC_R)) ||
      (abval == (EXC_TBM + EXC_W)))) {
     t_stat r = mikasa_pal_proc_excp (abval);

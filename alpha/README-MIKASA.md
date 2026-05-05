@@ -21,11 +21,16 @@ Implemented:
   - Reads LBN/count from the primary boot block offsets used by the dump.
   - Loads the primary bootstrap at physical `0x00200000`.
   - Enters it at virtual `0x20000000`, matching `EXE$K_PRIMBOOT`.
-  - Builds a minimal HWRPB at physical `0x00002000`, visible at virtual
+  - Builds a minimal HWRPB at physical `0x00380000`, visible at virtual
     `0x10000000`, matching `EXE$K_HWRPB`.
   - Builds bootstrap page tables and preloads EV5 ITB/DTB entries for HWRPB,
     APB, and the bootstrap page-table window.
   - Handles APB bootstrap TLB misses against the minimal boot page tables.
+  - Handles the APB unaligned load/store traps reached while parsing ODS-2
+    structures.
+  - Emulates the APB memory mailbox disk path used before firmware callbacks
+    are reached, including the DMA descriptor window used for multi-block
+    reads.
   - Handles the VMS queue/probe PAL calls reached by the APB bootstrap path.
   - Exposes CTB/CRB console callback descriptors and generic callback handlers
     for environment variables and DKA-backed open/read/write services.
@@ -49,23 +54,23 @@ Current verified stop:
 
 ```text
 Loaded OpenVMS Alpha APB from DKA0: LBN 4455271, 1049 blocks, 537088 bytes at 00200000
-%APB-F-MOUNT, failed to mount volume
-HALT instruction, PC: 200037C0
+%APB-I-FILENOTLOC, Unable to locate SYSBOOT.EXE
+%APB-I-LOADFAIL, Failed to load secondary bootstrap, status = 0910
+HALT instruction, PC: 200039E0
 ```
 
-The APB reaches this after passing its first HWRPB platform checks, using the
-bootstrap virtual mapping, taking dynamic TLB misses, and executing VMS
-queue/probe PAL calls. The current failure is still before the implemented CRB
-callback counters move: `CALLBACKS`, `GETENVS`, `IOREADS`, and `IOWRITES`
-remain zero.
+The APB now reads enough ODS-2 metadata to mount the system volume, find
+`SYS0.DIR`, and enter the system-root search. The current stop is still before
+the implemented CRB callback counters move: `CALLBACKS`, `GETENVS`, `IOREADS`,
+and `IOWRITES` remain zero. The APB mailbox path performs 11 DKA0 reads before
+the stop.
 
 Earlier stops were `R0=0x124` (`SS$_INSFMEM`) while mapping bootstrap memory
-around the `0x40000000` boot page-table window, and then unsupported PAL calls
-such as `PROBER` and `INSQUEQ`. The active blocker is now the APB mount path.
-Disk 1 is an ODS-2 OpenVMS system disk (`AXPVMSSYS`, `DECFILE11B`, and
-`[SYS0...]` strings are present), so the next work is to determine whether APB
-needs a more exact SRM callback context or has switched to native NCR/Symbios
-53C810 disk I/O.
+around the `0x40000000` boot page-table window, unsupported PAL calls such as
+`PROBER` and `INSQUEQ`, `%APB-F-MOUNT`, and `%APB-F-BADSYSROOT`. The active
+blocker is now the `SYSBOOT.EXE` lookup. `SYSBOOT.EXE;2` is present in the
+dump, so the next work is to compare the APB's directory traversal against the
+ODS-2 layout under `[SYS0.SYSEXE]` and `[SYS0.SYSCOMMON.SYSEXE]`.
 
 ## Fisica dump quick start
 
@@ -158,6 +163,13 @@ timeout 120 bash -lc "printf 'set cpu history=20000\ndo alpha/mikasa-fermi.ini\n
 perl -ane 'if ($F[0] eq "0000000020049E5C") { $c = chr(hex($F[1]) & 255); next if defined($last) && $last eq $c; print $c; $last = $c } END { print "\n" }' /tmp/mikasa_boot_history.txt
 ```
 
+The de-duplicated current message is:
+
+```text
+%APB-I-FILENOTLOC, Unable to locate SYSBOOT.EXE
+%APB-I-LOADFAIL, Failed to load secondary bootstrap, status = 0910
+```
+
 ## SRM Firmware Images
 
 The downloaded AlphaServer 1000 firmware set is outside this repository:
@@ -187,11 +199,11 @@ debug tracing, the PC cycles inside the ROM decompressor around `0x900301` and
 
 ## Next implementation steps
 
-1. Understand the APB mount failure.
-   Confirm whether the APB is attempting SRM callback I/O or native SCSI I/O.
-   If callbacks are expected, fix the CRB/IOVEC/boot environment context until
-   `CALLBACKS`, `GETENVS`, or `IOREADS` increment. If native SCSI is expected,
-   move directly to Mikasa PCI/CIA/53C810 work.
+1. Understand the APB `SYSBOOT.EXE` lookup failure.
+   The APB now reaches the system root and reads `SYSEXE`-related ODS-2
+   metadata. The next check is whether its search path should be
+   `[SYS0.SYSEXE]`, `[SYS0.SYSCOMMON.SYSEXE]`, or both, and why it misses the
+   on-disk `SYSBOOT.EXE;2` header.
 
 2. Keep tightening the remaining SRM boot memory/page-table context.
    HWRPB VPTB/processor-slot `PTBR`/`PT_VA`, the MDDT cluster layout, and APB
