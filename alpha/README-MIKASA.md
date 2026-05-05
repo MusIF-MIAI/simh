@@ -55,12 +55,13 @@ The APB reaches this after passing its first HWRPB platform checks and after
 using the bootstrap virtual mapping. The current failure is still before CRB
 callbacks: `CALLBACKS`, `GETENVS`, `IOREADS`, and `IOWRITES` remain zero.
 
-Earlier traces stopped with `R0=0x124` (`SS$_INSFMEM`) while manipulating the
-`0x40000000` boot page-table window. The current trace has advanced to
-`R0=0x14` (`SS$_BADPARAM`): APB reads a descriptor/PTE status at
-`0x200649D0`, sees low bit clear, and returns through the same bugcheck
-wrapper. The next missing piece is therefore still the precise SRM boot
-memory/page-table context, not SCSI I/O yet.
+The current trace stops with `R0=0x124` (`SS$_INSFMEM`) while allocating or
+mapping bootstrap memory around the `0x40000000` boot page-table window. An
+all-zero HWRPB PMR bitmap makes APB return the earlier `R0=0x14`
+(`SS$_BADPARAM`) because no usable memory pool is initialized, so the PMR
+bitmap is now initialized with one bits for tested pages. The next missing
+piece is therefore still the precise SRM boot memory/page-table context, not
+SCSI I/O yet.
 
 ## Fisica dump quick start
 

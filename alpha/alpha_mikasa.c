@@ -259,11 +259,18 @@ return sum;
 static t_uint64 mikasa_fill_bitmap (t_uint64 bitmap_pa, t_uint64 bits)
 {
 t_uint64 qwords = (bits + 63) >> 6;
+t_uint64 sum = 0;
 t_uint64 i;
 
-for (i = 0; i < qwords; i++)
-    WritePQ (bitmap_pa + (i << 3), 0);
-return 0;
+for (i = 0; i < qwords; i++) {
+    t_uint64 q = M64;
+
+    if ((i == (qwords - 1)) && (bits & 63))
+        q = (((t_uint64) 1) << (bits & 63)) - 1;
+    WritePQ (bitmap_pa + (i << 3), q);
+    sum = sum + q;
+    }
+return sum;
 }
 
 static t_uint64 mikasa_hwrpb_va_for_pa (t_uint64 pa)
