@@ -116,6 +116,18 @@
 #define MIKASA_APECS_PCI_SPARSE_SIZE 0x100000000ULL
 #define MIKASA_APECS_PCI_DENSE      0x300000000ULL
 #define MIKASA_APECS_PCI_DENSE_SIZE 0x100000000ULL
+#define MIKASA_EPIC_TBASE_1         0x0C0
+#define MIKASA_EPIC_TBASE_2         0x0E0
+#define MIKASA_EPIC_TBASE_MASK      0xFFFFFE00u
+#define MIKASA_EPIC_TBASE_SHIFT     1
+#define MIKASA_EPIC_PCI_BASE_1      0x100
+#define MIKASA_EPIC_PCI_BASE_2      0x120
+#define MIKASA_EPIC_PCI_BASE_SGEN   0x00040000u
+#define MIKASA_EPIC_PCI_BASE_WENB   0x00080000u
+#define MIKASA_EPIC_PCI_BASE_MASK   0xFFF00000u
+#define MIKASA_EPIC_PCI_MASK_1      0x140
+#define MIKASA_EPIC_PCI_MASK_2      0x160
+#define MIKASA_EPIC_PCI_MASK_MASK   0xFFF00000u
 /* On-board devices use raw APECS IDSEL slots; SRM prints virtual slots. */
 #define MIKASA_PCI_SLOT_SCSI        6
 /* SRM reports the EISA bridge as virtual slot 2; config cycles use IDSEL 7. */
@@ -126,7 +138,12 @@
 #define MIKASA_NCR_BAR_MASK         0xFFFFFF00u
 #define MIKASA_NCR_REG_SCNTL0       0x00
 #define MIKASA_NCR_REG_DSTAT        0x0C
+#define MIKASA_NCR_REG_DSA          0x10
 #define MIKASA_NCR_REG_ISTAT        0x14
+#define MIKASA_NCR_REG_DBC          0x24
+#define MIKASA_NCR_REG_DNAD         0x28
+#define MIKASA_NCR_REG_DSP          0x2C
+#define MIKASA_NCR_REG_DSPS         0x30
 #define MIKASA_NCR_REG_SIST0        0x42
 #define MIKASA_NCR_REG_SIST1        0x43
 #define MIKASA_NCR_REG_CTEST1       0x19
@@ -137,10 +154,25 @@
 #define MIKASA_NCR_REG_STEST0       0x4C
 #define MIKASA_NCR_SCNTL0_ARB       0xC0
 #define MIKASA_NCR_DSTAT_DFE        0x80
+#define MIKASA_NCR_DSTAT_SIR        0x04
 #define MIKASA_NCR_ISTAT_SRST       0x40
+#define MIKASA_NCR_ISTAT_SIP        0x02
+#define MIKASA_NCR_ISTAT_DIP        0x01
+#define MIKASA_NCR_SIST1_STO        0x04
 #define MIKASA_NCR_CTEST1_FMT       0xF0
 #define MIKASA_NCR_CTEST2_DACK      0x01
 #define MIKASA_NCR_MACNTL_810       0x40
+#define MIKASA_NCR_IRQ              12
+#define MIKASA_NCR_INTBIT           (1u << MIKASA_NCR_IRQ)
+#define MIKASA_RTC_IRQ              8
+#define MIKASA_RTC_INTBIT           (1u << MIKASA_RTC_IRQ)
+#define MIKASA_IRQ_HWRE_LEVEL       2
+#define MIKASA_RTC_TICK             10000
+#define MIKASA_NCR_DSPS_OK          0
+#define MIKASA_NCR_DSPS_DAT_OUT     8
+#define MIKASA_NCR_DSPS_DAT_IN      9
+#define MIKASA_NCR_TRACE_INSNS      64
+#define MIKASA_NCR_TRACE_LIMIT      8
 #define MIKASA_ISA_DMA1             0x000
 #define MIKASA_ISA_PIC1             0x020
 #define MIKASA_ISA_CFG_INDEX        0x022
@@ -156,6 +188,7 @@
 #define MIKASA_ISA_COM1             0x3F8
 #define MIKASA_ISA_NMI_CTRL         0x461
 #define MIKASA_ISA_OCP              0x530
+#define MIKASA_ISA_ICU_IRR          0x534
 #define MIKASA_ISA_ICU_IMR          0x536
 #define MIKASA_ISA_ICU_PRESENT      0x8000
 #define MIKASA_EISA_CRAM            0x0800
@@ -180,8 +213,15 @@
 #define MIKASA_RTC_INTR            0x0C
 #define MIKASA_RTC_STATUSD          0x0D
 #define MIKASA_RTC_CENTURY          0x32
+#define MIKASA_RTC_UIE              0x10
+#define MIKASA_RTC_AIE              0x20
+#define MIKASA_RTC_PIE              0x40
 #define MIKASA_RTC_BINARY           0x04
 #define MIKASA_RTC_24HR             0x02
+#define MIKASA_RTC_UF               0x10
+#define MIKASA_RTC_AF               0x20
+#define MIKASA_RTC_PF               0x40
+#define MIKASA_RTC_IRQF             0x80
 #define MIKASA_RTC_POWER_OK         0x80
 
 #define MIKASA_DBG_IO               0x0001
@@ -266,6 +306,8 @@ extern uint32 cm_macc;
 extern uint32 cm_wacc;
 extern uint32 pcc_l;
 extern uint32 pc_align;
+extern uint32 int_req[IPL_HLVL];
+extern uint32 ev5_ipl;
 extern t_uint64 ev5_palbase;
 extern UNIT dka_unit[];
 
@@ -318,6 +360,7 @@ t_stat mikasa_set_rom_payload (UNIT *uptr, int32 val, CONST char *cptr,
     void *desc);
 t_stat mikasa_save_rom (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat mikasa_boot_rom (int32 unitno);
+t_stat mikasa_svc (UNIT *uptr);
 void mikasa_mem_write (t_uint64 pa, t_uint64 dat, uint32 lnt);
 t_stat mikasa_pal_proc_excp (uint32 abval);
 t_stat mikasa_pal_proc_inst (uint32 fnc);
@@ -396,9 +439,15 @@ static t_bool mikasa_apb_dma_window_pa (t_uint64 addr, t_uint64 cpu_addr,
     t_uint64 cpu_len, t_uint64 bus_addr, t_uint64 bus_len, t_uint64 *pa);
 static t_bool mikasa_apb_io_descriptor_pa (t_uint64 addr, t_uint64 *pa);
 static t_bool mikasa_apb_io_target_pa (t_uint64 addr, t_uint64 *pa);
+static t_bool mikasa_pci_dma_addr_to_pa (uint32 addr, t_uint64 *pa);
+static t_bool mikasa_pci_dma_read_byte (uint32 addr, uint8 *val);
+static t_bool mikasa_pci_dma_write_byte (uint32 addr, uint8 val);
+static t_bool mikasa_pci_dma_read_long (uint32 addr, uint32 *val);
 static void mikasa_write_phys_long (t_uint64 pa, t_uint64 dat);
 static void mikasa_write_phys_byte (t_uint64 pa, uint8 dat);
 static uint8 mikasa_read_phys_byte (t_uint64 pa);
+static uint32 mikasa_read_phys_long (t_uint64 pa);
+static void mikasa_irq_update (void);
 static t_bool mikasa_apb_iobox_read (uint32 unit, t_uint64 lbn,
     t_uint64 addr);
 static t_bool mikasa_apb_iobox_write (uint32 unit, t_uint64 lbn,
@@ -463,11 +512,16 @@ static uint8 mikasa_eisa_cram[MIKASA_EISA_CRAM_PAGES][MIKASA_EISA_CRAM_SIZE];
 static uint32 mikasa_epic_reg[MIKASA_EPIC_SIZE >> 5] = { 0 };
 static uint32 mikasa_ncr_cfg[MIKASA_PCI_CFG_DWORDS] = { 0 };
 static uint8 mikasa_ncr_reg[MIKASA_NCR_REG_SIZE] = { 0 };
+static uint32 mikasa_ncr_script_trace_count = 0;
+static uint32 mikasa_int_req_bits = 0;
+static t_bool mikasa_ncr_status_phase = FALSE;
+static uint8 mikasa_ncr_status_byte = 0;
+static t_bool mikasa_direct_apb = FALSE;
 static uint32 mikasa_pceb_cfg[MIKASA_PCI_CFG_DWORDS] = { 0 };
 static uint8 mikasa_ocp_reg[4] = { 0 };
-static uint32 mikasa_scc_scale = 1;
+uint32 mikasa_scc_scale = 1;
 
-UNIT mikasa_unit = { UDATA (NULL, 0, 0) };
+UNIT mikasa_unit = { UDATA (&mikasa_svc, 0, 0) };
 
 DIB mikasa_dib = {
     MIKASA_EPIC_BASE, MIKASA_APECS_PCI_DENSE + MIKASA_APECS_PCI_DENSE_SIZE,
@@ -716,13 +770,6 @@ switch (reg) {
 return;
 }
 
-static void mikasa_pic_update_mask (void)
-{
-mikasa_irq_mask = ((uint32) mikasa_pic_imr[0]) |
-    (((uint32) mikasa_pic_imr[1]) << 8);
-return;
-}
-
 static uint8 mikasa_pic_read (uint32 port)
 {
 uint32 which = (port >= MIKASA_ISA_PIC2) ? 1 : 0;
@@ -738,7 +785,6 @@ uint32 which = (port >= MIKASA_ISA_PIC2) ? 1 : 0;
 
 if (port & 1) {
     mikasa_pic_imr[which] = val;
-    mikasa_pic_update_mask ();
     }
 else
     mikasa_pic_cmd[which] = val;
@@ -798,8 +844,10 @@ switch (index) {
         break;
 
     case MIKASA_RTC_INTR:
+        val = mikasa_rtc_reg[index];
         mikasa_rtc_reg[index] = 0;
-        val = 0;
+        mikasa_irq_summary &= ~MIKASA_RTC_INTBIT;
+        mikasa_irq_update ();
         break;
 
     case MIKASA_RTC_STATUSD:
@@ -823,11 +871,36 @@ static void mikasa_rtc_write_data (uint8 val)
 {
 uint8 index = mikasa_rtc_index & 0x7F;
 
-if ((index != MIKASA_RTC_INTR) && (index != MIKASA_RTC_STATUSD))
+if ((index != MIKASA_RTC_INTR) && (index != MIKASA_RTC_STATUSD)) {
     mikasa_rtc_reg[index] = val;
+    if ((index == MIKASA_RTC_STATUSB) &&
+        ((val & (MIKASA_RTC_UIE | MIKASA_RTC_AIE | MIKASA_RTC_PIE)) == 0)) {
+        mikasa_rtc_reg[MIKASA_RTC_INTR] = 0;
+        mikasa_irq_summary &= ~MIKASA_RTC_INTBIT;
+        mikasa_irq_update ();
+        }
+    }
 sim_debug (MIKASA_DBG_RTC, &mikasa_dev, "RTC write %02X=%02X\n",
     index, val);
 return;
+}
+
+t_stat mikasa_svc (UNIT *uptr)
+{
+uint8 status = 0;
+
+if (mikasa_rtc_reg[MIKASA_RTC_STATUSB] & MIKASA_RTC_PIE)
+    status |= MIKASA_RTC_PF;
+if (mikasa_rtc_reg[MIKASA_RTC_STATUSB] & MIKASA_RTC_UIE)
+    status |= MIKASA_RTC_UF;
+if ((status != 0) && (mikasa_irq_mask & MIKASA_RTC_INTBIT)) {
+    mikasa_rtc_reg[MIKASA_RTC_INTR] |= status | MIKASA_RTC_IRQF;
+    mikasa_irq_summary |= MIKASA_RTC_INTBIT;
+    mikasa_irq_update ();
+    }
+mikasa_uart_poll ();
+sim_activate (uptr, MIKASA_RTC_TICK);
+return SCPE_OK;
 }
 
 static uint8 mikasa_pit_read (uint32 port)
@@ -972,11 +1045,28 @@ static uint8 mikasa_ncr_read_b (uint32 reg)
 {
 uint8 val = mikasa_ncr_reg[reg & (MIKASA_NCR_REG_SIZE - 1)];
 
-if ((reg & (MIKASA_NCR_REG_SIZE - 1)) == MIKASA_NCR_REG_DSTAT)
+if ((reg & (MIKASA_NCR_REG_SIZE - 1)) == MIKASA_NCR_REG_DSTAT) {
     mikasa_ncr_reg[MIKASA_NCR_REG_DSTAT] &= MIKASA_NCR_DSTAT_DFE;
+    mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &= ~MIKASA_NCR_ISTAT_DIP;
+    if ((mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &
+        (MIKASA_NCR_ISTAT_SIP | MIKASA_NCR_ISTAT_DIP)) == 0) {
+        mikasa_irq_summary &= ~MIKASA_NCR_INTBIT;
+        mikasa_irq_update ();
+        }
+    }
 else if (((reg & (MIKASA_NCR_REG_SIZE - 1)) == MIKASA_NCR_REG_SIST0) ||
-    ((reg & (MIKASA_NCR_REG_SIZE - 1)) == MIKASA_NCR_REG_SIST1))
+    ((reg & (MIKASA_NCR_REG_SIZE - 1)) == MIKASA_NCR_REG_SIST1)) {
     mikasa_ncr_reg[reg & (MIKASA_NCR_REG_SIZE - 1)] = 0;
+    if ((mikasa_ncr_reg[MIKASA_NCR_REG_SIST0] == 0) &&
+        (mikasa_ncr_reg[MIKASA_NCR_REG_SIST1] == 0)) {
+        mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &= ~MIKASA_NCR_ISTAT_SIP;
+        if ((mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &
+            (MIKASA_NCR_ISTAT_SIP | MIKASA_NCR_ISTAT_DIP)) == 0) {
+            mikasa_irq_summary &= ~MIKASA_NCR_INTBIT;
+            mikasa_irq_update ();
+            }
+        }
+    }
 sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "NCR read %02X=%02X\n",
     reg, val);
 return val;
@@ -994,6 +1084,15 @@ val = ((uint32) mikasa_ncr_read_b (reg)) |
 return val;
 }
 
+static uint32 mikasa_ncr_reg_l (uint32 reg)
+{
+reg = reg & (MIKASA_NCR_REG_SIZE - 1);
+return ((uint32) mikasa_ncr_reg[reg]) |
+    (((uint32) mikasa_ncr_reg[(reg + 1) & (MIKASA_NCR_REG_SIZE - 1)]) << 8) |
+    (((uint32) mikasa_ncr_reg[(reg + 2) & (MIKASA_NCR_REG_SIZE - 1)]) << 16) |
+    (((uint32) mikasa_ncr_reg[(reg + 3) & (MIKASA_NCR_REG_SIZE - 1)]) << 24);
+}
+
 static t_uint64 mikasa_ncr_read_len (uint32 reg, uint32 lnt)
 {
 if (lnt == L_BYTE)
@@ -1004,9 +1103,447 @@ if (lnt == L_WORD)
 return mikasa_ncr_read_l (reg);
 }
 
+static const char *mikasa_ncr_script_name (uint32 op)
+{
+switch (op & 0xF8F80000u) {
+    case 0x80080000u:
+        return "JUMP";
+
+    case 0x80880000u:
+        return "JUMPR";
+
+    case 0x88080000u:
+        return "CALL";
+
+    case 0x88880000u:
+        return "CALLR";
+
+    case 0x90080000u:
+        return "RETURN";
+
+    case 0x98080000u:
+        return "INT";
+
+    case 0x98180000u:
+        return "INTF";
+        }
+
+switch (op & 0xF8000000u) {
+    case 0x80000000u:
+        return "JUMP";
+
+    case 0x88000000u:
+        return "CALL";
+
+    case 0x90000000u:
+        return "RETURN";
+
+    case 0x98000000u:
+        return "INT";
+        }
+
+switch (op & 0xFF000000u) {
+    case 0x40000000u:
+        return "SEL_ABS";
+
+    case 0x41000000u:
+        return "SEL_ABS_ATN";
+
+    case 0x42000000u:
+        return "SEL_TBL";
+
+    case 0x43000000u:
+        return "SEL_TBL_ATN";
+
+    case 0x48000000u:
+        return "WAIT_DISC";
+
+    case 0x50000000u:
+        return "WAIT_RESEL";
+
+    case 0x58000000u:
+        return "SET";
+
+    case 0x60000000u:
+        return "CLR";
+
+    case 0x68000000u:
+        return "SFBR_REG";
+
+    case 0x70000000u:
+        return "REG_SFBR";
+
+    case 0x78000000u:
+        return "REG_REG";
+        }
+
+switch (op & 0xC0000000u) {
+    case 0x00000000u:
+        return "MOVE";
+
+    case 0xC0000000u:
+        return "COPY";
+        }
+
+return "SCRIPT";
+}
+
+static void mikasa_ncr_trace_script (uint32 dsp)
+{
+t_uint64 pa;
+uint32 i;
+
+if (!sim_deb || (mikasa_ncr_script_trace_count >= MIKASA_NCR_TRACE_LIMIT))
+    return;
+mikasa_ncr_script_trace_count++;
+if (!mikasa_pci_dma_addr_to_pa (dsp, &pa)) {
+    sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+        "NCR DSP %08X is not in a mapped DMA window\n", dsp);
+    return;
+    }
+if (!ADDR_IS_MEM (pa + ((MIKASA_NCR_TRACE_INSNS * 12) - 1))) {
+    sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+        "NCR DSP %08X maps outside RAM at %llX\n", dsp,
+        (unsigned long long) pa);
+    return;
+    }
+
+sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+    "NCR DSP %08X maps to PA %llX, DSA=%08X\n", dsp,
+    (unsigned long long) pa, mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA));
+{
+uint32 dsa = mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA);
+t_uint64 dsa_pa;
+uint32 off;
+
+if (mikasa_pci_dma_addr_to_pa (dsa, &dsa_pa))
+    for (off = 0; off < 0x40; off += 8)
+        sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+            "NCR DSA +%02X: %08X %08X\n", off,
+            mikasa_read_phys_long (dsa_pa + off),
+            mikasa_read_phys_long (dsa_pa + off + 4));
+}
+for (i = 0; i < MIKASA_NCR_TRACE_INSNS; i++) {
+    uint32 op = mikasa_read_phys_long (pa);
+    uint32 arg = mikasa_read_phys_long (pa + 4);
+
+    if ((op & 0xC0000000u) == 0xC0000000u)
+        sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+            "NCR SCRIPT %08llX: %-11s %08X %08X %08X\n",
+            (unsigned long long) pa, mikasa_ncr_script_name (op), op, arg,
+            mikasa_read_phys_long (pa + 8));
+    else
+        sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+            "NCR SCRIPT %08llX: %-11s %08X %08X\n",
+            (unsigned long long) pa, mikasa_ncr_script_name (op), op, arg);
+    pa += ((op & 0xC0000000u) == 0xC0000000u) ? 12 : 8;
+    }
+return;
+}
+
+static void mikasa_ncr_set_reg_l (uint32 reg, uint32 val)
+{
+reg = reg & (MIKASA_NCR_REG_SIZE - 1);
+mikasa_ncr_reg[reg] = (uint8) val;
+mikasa_ncr_reg[(reg + 1) & (MIKASA_NCR_REG_SIZE - 1)] = (uint8) (val >> 8);
+mikasa_ncr_reg[(reg + 2) & (MIKASA_NCR_REG_SIZE - 1)] = (uint8) (val >> 16);
+mikasa_ncr_reg[(reg + 3) & (MIKASA_NCR_REG_SIZE - 1)] = (uint8) (val >> 24);
+return;
+}
+
+static void mikasa_irq_update (void)
+{
+uint32 active = mikasa_irq_summary & mikasa_irq_mask;
+
+int_req[MIKASA_IRQ_HWRE_LEVEL] =
+    (int_req[MIKASA_IRQ_HWRE_LEVEL] & ~mikasa_int_req_bits) | active;
+mikasa_int_req_bits = active;
+sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+    "ICU update summary=%04X mask=%04X active=%04X hwre=%u\n",
+    mikasa_irq_summary, mikasa_irq_mask, active, MIKASA_IRQ_HWRE_LEVEL);
+return;
+}
+
+static void mikasa_ncr_assert_irq (void)
+{
+mikasa_irq_summary |= MIKASA_NCR_INTBIT;
+mikasa_irq_update ();
+return;
+}
+
+static void mikasa_ncr_clear_irq (void)
+{
+mikasa_irq_summary &= ~MIKASA_NCR_INTBIT;
+mikasa_irq_update ();
+return;
+}
+
+static void mikasa_ncr_set_dip (uint8 dstat, uint32 dsps)
+{
+mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DSPS, dsps);
+mikasa_ncr_reg[MIKASA_NCR_REG_DSTAT] =
+    (mikasa_ncr_reg[MIKASA_NCR_REG_DSTAT] & MIKASA_NCR_DSTAT_DFE) |
+    MIKASA_NCR_DSTAT_DFE | dstat;
+mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] |= MIKASA_NCR_ISTAT_DIP;
+mikasa_ncr_assert_irq ();
+sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+    "NCR signal DIP dstat=%02X dsps=%u\n", dstat, dsps);
+return;
+}
+
+static void mikasa_ncr_set_sip (uint8 sist0, uint8 sist1)
+{
+mikasa_ncr_reg[MIKASA_NCR_REG_SIST0] |= sist0;
+mikasa_ncr_reg[MIKASA_NCR_REG_SIST1] |= sist1;
+mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] |= MIKASA_NCR_ISTAT_SIP;
+mikasa_ncr_assert_irq ();
+return;
+}
+
+static t_bool mikasa_ncr_table_entry (uint32 dsa, uint32 off, uint32 *count,
+    uint32 *addr)
+{
+return mikasa_pci_dma_read_long (dsa + off, count) &&
+    mikasa_pci_dma_read_long (dsa + off + 4, addr);
+}
+
+static t_bool mikasa_ncr_read_dma_buf (uint32 addr, uint8 *buf, uint32 len)
+{
+uint32 i;
+
+for (i = 0; i < len; i++)
+    if (!mikasa_pci_dma_read_byte (addr + i, &buf[i]))
+        return FALSE;
+return TRUE;
+}
+
+static t_bool mikasa_ncr_write_dma_buf (uint32 addr, const uint8 *buf,
+    uint32 len)
+{
+uint32 i;
+
+for (i = 0; i < len; i++)
+    if (!mikasa_pci_dma_write_byte (addr + i, buf[i]))
+        return FALSE;
+return TRUE;
+}
+
+static t_bool mikasa_ncr_write_dma_zero (uint32 addr, uint32 len)
+{
+uint32 i;
+
+for (i = 0; i < len; i++)
+    if (!mikasa_pci_dma_write_byte (addr + i, 0))
+        return FALSE;
+return TRUE;
+}
+
+static void mikasa_ncr_write_be32 (uint8 *buf, uint32 val)
+{
+buf[0] = (uint8) (val >> 24);
+buf[1] = (uint8) (val >> 16);
+buf[2] = (uint8) (val >> 8);
+buf[3] = (uint8) val;
+return;
+}
+
+static uint32 mikasa_ncr_min3 (uint32 a, uint32 b, uint32 c)
+{
+uint32 m = (a < b) ? a : b;
+
+return (m < c) ? m : c;
+}
+
+static void mikasa_ncr_write_status_msg (uint32 dsp, uint32 dsa,
+    uint8 status)
+{
+uint32 count;
+uint32 addr;
+uint32 off;
+
+if (mikasa_ncr_table_entry (dsa, 0x24, &count, &addr) && (count != 0))
+    (void) mikasa_pci_dma_write_byte (addr, status);
+for (off = 0; off < 0x200; off += 8) {
+    uint32 op;
+
+    if (!mikasa_pci_dma_read_long (dsp + off, &op))
+        break;
+    if (op == 0x0F000001u) {
+        if (mikasa_pci_dma_read_long (dsp + off + 4, &addr))
+            (void) mikasa_pci_dma_write_byte (addr, 0);
+        break;
+        }
+    }
+return;
+}
+
+static t_bool mikasa_ncr_scsi_read (uint32 unit, uint32 lbn, uint32 blocks,
+    uint32 data_addr, uint32 data_count)
+{
+uint8 buf[MIKASA_IO_BUFSIZE];
+UNIT *uptr = &dka_unit[unit];
+t_uint64 bytes_left = ((t_uint64) blocks) * MIKASA_DKA_BLOCK_SIZE;
+uint32 done = 0;
+
+if (bytes_left > data_count)
+    bytes_left = data_count;
+if (bytes_left == 0)
+    return TRUE;
+if ((uptr->flags & UNIT_ATT) == 0)
+    return FALSE;
+if ((uptr->capac != 0) && (((t_uint64) lbn + blocks) > uptr->capac))
+    return FALSE;
+if (sim_fseeko (uptr->fileref,
+    ((t_offset) lbn) * MIKASA_DKA_BLOCK_SIZE, SEEK_SET))
+    return FALSE;
+
+while (bytes_left != 0) {
+    uint32 chunk = (bytes_left > sizeof (buf)) ? sizeof (buf) :
+        (uint32) bytes_left;
+
+    if (sim_fread (buf, 1, chunk, uptr->fileref) != chunk)
+        return FALSE;
+    if (!mikasa_ncr_write_dma_buf (data_addr + done, buf, chunk))
+        return FALSE;
+    done = done + chunk;
+    bytes_left = bytes_left - chunk;
+    }
+return TRUE;
+}
+
+static t_bool mikasa_ncr_scsi_cmd (uint32 unit, const uint8 *cdb,
+    uint32 data_addr, uint32 data_count, uint8 *status)
+{
+uint8 buf[256];
+UNIT *uptr = &dka_unit[unit];
+uint32 len = 0;
+uint32 lbn;
+uint32 blocks;
+
+*status = 0;
+memset (buf, 0, sizeof (buf));
+switch (cdb[0]) {
+    case 0x00:                                              /* TEST UNIT READY */
+        return TRUE;
+
+    case 0x03:                                              /* REQUEST SENSE */
+        buf[0] = 0x70;
+        buf[7] = 0x0A;
+        len = mikasa_ncr_min3 (data_count, cdb[4], 18);
+        return mikasa_ncr_write_dma_buf (data_addr, buf, len);
+
+    case 0x08:                                              /* READ(6) */
+        lbn = (((uint32) cdb[1] & 0x1F) << 16) |
+            (((uint32) cdb[2]) << 8) | cdb[3];
+        blocks = cdb[4] ? cdb[4] : 256;
+        return mikasa_ncr_scsi_read (unit, lbn, blocks, data_addr,
+            data_count);
+
+    case 0x12:                                              /* INQUIRY */
+        buf[2] = 2;
+        buf[3] = 2;
+        buf[4] = 31;
+        memcpy (&buf[8], "DEC     ", 8);
+        memcpy (&buf[16], "RZ58     (C) DEC", 16);
+        memcpy (&buf[32], "2000", 4);
+        len = mikasa_ncr_min3 (data_count, cdb[4], 36);
+        return mikasa_ncr_write_dma_buf (data_addr, buf, len);
+
+    case 0x1A:                                              /* MODE SENSE(6) */
+        buf[0] = 3;
+        len = mikasa_ncr_min3 (data_count, cdb[4], 4);
+        return mikasa_ncr_write_dma_buf (data_addr, buf, len);
+
+    case 0x25:                                              /* READ CAPACITY(10) */
+        if ((uptr->flags & UNIT_ATT) == 0)
+            return FALSE;
+        mikasa_ncr_write_be32 (&buf[0],
+            uptr->capac ? ((uint32) uptr->capac - 1) : 0);
+        mikasa_ncr_write_be32 (&buf[4], MIKASA_DKA_BLOCK_SIZE);
+        len = (data_count < 8) ? data_count : 8;
+        return mikasa_ncr_write_dma_buf (data_addr, buf, len);
+
+    case 0x28:                                              /* READ(10) */
+        lbn = (((uint32) cdb[2]) << 24) | (((uint32) cdb[3]) << 16) |
+            (((uint32) cdb[4]) << 8) | cdb[5];
+        blocks = (((uint32) cdb[7]) << 8) | cdb[8];
+        return mikasa_ncr_scsi_read (unit, lbn, blocks, data_addr,
+            data_count);
+
+    default:
+        sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+            "NCR unsupported SCSI command %02X on target %u\n", cdb[0],
+            unit);
+        *status = 2;
+        return TRUE;
+        }
+}
+
+static t_bool mikasa_ncr_run_script (uint32 dsp)
+{
+uint32 script0;
+uint32 dsa = mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA);
+uint32 cmd_count;
+uint32 cmd_addr;
+uint32 data_count = 0;
+uint32 data_addr = 0;
+uint32 target;
+uint32 i;
+uint8 cdb[16];
+uint8 status;
+
+if (!mikasa_pci_dma_read_long (dsp, &script0))
+    return FALSE;
+if ((script0 & 0xFF000000u) != 0x41000000u)
+    return FALSE;
+target = (script0 >> 16) & 0xFF;
+if ((target >= MIKASA_DKA_UNITS) || ((dka_unit[target].flags & UNIT_ATT) == 0)) {
+    sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+        "NCR target %u select timeout\n", target);
+    mikasa_ncr_status_phase = FALSE;
+    mikasa_ncr_set_sip (0, MIKASA_NCR_SIST1_STO);
+    return TRUE;
+    }
+if (!mikasa_ncr_table_entry (dsa, 0x0C, &cmd_count, &cmd_addr) ||
+    (cmd_count == 0))
+    return FALSE;
+if (cmd_count > sizeof (cdb))
+    cmd_count = sizeof (cdb);
+memset (cdb, 0, sizeof (cdb));
+if (!mikasa_ncr_read_dma_buf (cmd_addr, cdb, cmd_count))
+    return FALSE;
+if (!mikasa_ncr_table_entry (dsa, 0x1C, &data_count, &data_addr))
+    data_count = data_addr = 0;
+
+sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+    "NCR target %u CDB", target);
+for (i = 0; i < cmd_count; i++)
+    sim_debug (MIKASA_DBG_PCI, &mikasa_dev, " %02X", cdb[i]);
+sim_debug (MIKASA_DBG_PCI, &mikasa_dev, " data=%08X/%u\n", data_addr,
+    data_count);
+
+if (!mikasa_ncr_scsi_cmd (target, cdb, data_addr, data_count, &status)) {
+    status = 2;
+    (void) mikasa_ncr_write_dma_zero (data_addr, data_count);
+    }
+if (data_count != 0) {
+    mikasa_ncr_status_phase = TRUE;
+    mikasa_ncr_status_byte = status;
+    mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SIR, MIKASA_NCR_DSPS_DAT_IN);
+    }
+else {
+    mikasa_ncr_status_phase = FALSE;
+    mikasa_ncr_write_status_msg (dsp, dsa, status);
+    mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SIR, MIKASA_NCR_DSPS_OK);
+    }
+return TRUE;
+}
+
 static void mikasa_ncr_init_regs (void)
 {
 memset (mikasa_ncr_reg, 0, sizeof (mikasa_ncr_reg));
+mikasa_ncr_status_phase = FALSE;
+mikasa_ncr_clear_irq ();
 mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL0] = MIKASA_NCR_SCNTL0_ARB;
 mikasa_ncr_reg[MIKASA_NCR_REG_DSTAT] = MIKASA_NCR_DSTAT_DFE;
 mikasa_ncr_reg[MIKASA_NCR_REG_CTEST1] = MIKASA_NCR_CTEST1_FMT;
@@ -1026,6 +1563,20 @@ sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "NCR write %02X=%02X\n",
 mikasa_ncr_reg[reg] = val;
 if ((reg == MIKASA_NCR_REG_ISTAT) && (val & MIKASA_NCR_ISTAT_SRST))
     mikasa_ncr_init_regs ();
+else if (reg == (MIKASA_NCR_REG_DSP + 3)) {
+    uint32 dsp = mikasa_ncr_reg_l (MIKASA_NCR_REG_DSP);
+
+    if (mikasa_ncr_status_phase) {
+        mikasa_ncr_status_phase = FALSE;
+        mikasa_ncr_write_status_msg (dsp, mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA),
+            mikasa_ncr_status_byte);
+        mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SIR, MIKASA_NCR_DSPS_OK);
+        }
+    else {
+        mikasa_ncr_trace_script (dsp);
+        (void) mikasa_ncr_run_script (dsp);
+        }
+    }
 return;
 }
 
@@ -1200,7 +1751,8 @@ return;
 
 static uint8 mikasa_isa_read (uint32 port)
 {
-uint32 icu = mikasa_irq_mask | MIKASA_ISA_ICU_PRESENT;
+uint32 irr = (~mikasa_irq_summary) & M16;
+uint32 imr = mikasa_irq_mask | MIKASA_ISA_ICU_PRESENT;
 uint8 val;
 
 if (mikasa_ncr_io_read (port, &val))
@@ -1239,8 +1791,10 @@ if ((port >= MIKASA_ISA_OCP) && (port < (MIKASA_ISA_OCP + 4))) {
         return mikasa_ocp_reg[reg] | MIKASA_OCP_READY;
     return mikasa_ocp_reg[reg];
     }
+if ((port == MIKASA_ISA_ICU_IRR) || (port == (MIKASA_ISA_ICU_IRR + 1)))
+    return (uint8) (irr >> ((port - MIKASA_ISA_ICU_IRR) << 3));
 if ((port == MIKASA_ISA_ICU_IMR) || (port == (MIKASA_ISA_ICU_IMR + 1)))
-    return (uint8) (icu >> ((port - MIKASA_ISA_ICU_IMR) << 3));
+    return (uint8) (imr >> ((port - MIKASA_ISA_ICU_IMR) << 3));
 if ((port == MIKASA_EISA_CRAM_PAGE_REG) ||
     ((port >= MIKASA_EISA_CRAM) &&
      (port < (MIKASA_EISA_CRAM + MIKASA_EISA_CRAM_SIZE))) ||
@@ -1310,12 +1864,18 @@ if ((port >= MIKASA_ISA_OCP) && (port < (MIKASA_ISA_OCP + 4))) {
     return;
     }
 if (port == MIKASA_ISA_ICU_IMR) {
-    mikasa_pic_imr[0] = val;
-    mikasa_pic_update_mask ();
+    mikasa_irq_mask = (mikasa_irq_mask & 0xFF00) | val;
+    mikasa_irq_mask &= ~MIKASA_ISA_ICU_PRESENT;
+    mikasa_irq_update ();
+    sim_debug (MIKASA_DBG_IO, &mikasa_dev, "ICU write %03X=%02X mask=%04X\n",
+        port, val, mikasa_irq_mask);
     }
 else if (port == (MIKASA_ISA_ICU_IMR + 1)) {
-    mikasa_pic_imr[1] = val;
-    mikasa_pic_update_mask ();
+    mikasa_irq_mask = (mikasa_irq_mask & 0x00FF) | (((uint32) val) << 8);
+    mikasa_irq_mask &= ~MIKASA_ISA_ICU_PRESENT;
+    mikasa_irq_update ();
+    sim_debug (MIKASA_DBG_IO, &mikasa_dev, "ICU write %03X=%02X mask=%04X\n",
+        port, val, mikasa_irq_mask);
     }
 else if (mikasa_eisa_write (port, val))
     return;
@@ -1883,6 +2443,7 @@ if (unitno != 0)
 if (!mikasa_rom_loaded)
     return sim_messagef (SCPE_UNATT,
         "MIKASA: ROM not loaded; use SET MIKASA ROM=<path>\n");
+mikasa_direct_apb = FALSE;
 mikasa_prepare_rom_cpu (mikasa_rom_pc, mikasa_rom_palbase);
 sim_printf ("Starting Mikasa SRM ROM from %s: PC=%08llX PALBASE=%08llX\n",
     mikasa_rom_path[0] ? mikasa_rom_path : "loaded image",
@@ -2339,6 +2900,79 @@ if ((count >= 5) && (values[4] < MIKASA_DKA_UNITS))
 return -1;
 }
 
+static t_bool mikasa_pci_dma_window_pa (uint32 window, uint32 addr,
+    t_uint64 *pa)
+{
+uint32 base_off = (window == 0) ? MIKASA_EPIC_PCI_BASE_1 :
+    MIKASA_EPIC_PCI_BASE_2;
+uint32 mask_off = (window == 0) ? MIKASA_EPIC_PCI_MASK_1 :
+    MIKASA_EPIC_PCI_MASK_2;
+uint32 tbase_off = (window == 0) ? MIKASA_EPIC_TBASE_1 :
+    MIKASA_EPIC_TBASE_2;
+uint32 base_reg = mikasa_epic_reg[base_off >> 5];
+uint32 base;
+uint32 mask;
+t_uint64 size;
+t_uint64 target_base;
+
+if ((base_reg & MIKASA_EPIC_PCI_BASE_WENB) == 0)
+    return FALSE;
+if (base_reg & MIKASA_EPIC_PCI_BASE_SGEN)
+    return FALSE;
+base = base_reg & MIKASA_EPIC_PCI_BASE_MASK;
+mask = mikasa_epic_reg[mask_off >> 5] & MIKASA_EPIC_PCI_MASK_MASK;
+size = ((t_uint64) mask) + 0x00100000ULL;
+if (((t_uint64) addr < base) || ((t_uint64) addr >= (((t_uint64) base) + size)))
+    return FALSE;
+target_base = ((t_uint64) (mikasa_epic_reg[tbase_off >> 5] &
+    MIKASA_EPIC_TBASE_MASK)) << MIKASA_EPIC_TBASE_SHIFT;
+*pa = target_base + ((t_uint64) addr - base);
+return ADDR_IS_MEM (*pa);
+}
+
+static t_bool mikasa_pci_dma_addr_to_pa (uint32 addr, t_uint64 *pa)
+{
+if (mikasa_pci_dma_window_pa (0, addr, pa))
+    return TRUE;
+if (mikasa_pci_dma_window_pa (1, addr, pa))
+    return TRUE;
+if (ADDR_IS_MEM (addr)) {
+    *pa = addr;
+    return TRUE;
+    }
+return FALSE;
+}
+
+static t_bool mikasa_pci_dma_read_byte (uint32 addr, uint8 *val)
+{
+t_uint64 pa;
+
+if (!mikasa_pci_dma_addr_to_pa (addr, &pa))
+    return FALSE;
+*val = mikasa_read_phys_byte (pa);
+return TRUE;
+}
+
+static t_bool mikasa_pci_dma_write_byte (uint32 addr, uint8 val)
+{
+t_uint64 pa;
+
+if (!mikasa_pci_dma_addr_to_pa (addr, &pa))
+    return FALSE;
+mikasa_write_phys_byte (pa, val);
+return TRUE;
+}
+
+static t_bool mikasa_pci_dma_read_long (uint32 addr, uint32 *val)
+{
+t_uint64 pa;
+
+if (!mikasa_pci_dma_addr_to_pa (addr, &pa) || (pa & 3))
+    return FALSE;
+*val = mikasa_read_phys_long (pa);
+return TRUE;
+}
+
 static t_bool mikasa_apb_io_target_pa (t_uint64 addr, t_uint64 *pa)
 {
 t_uint64 low_addr = addr & M32;
@@ -2419,6 +3053,13 @@ dat = dat & M32;
 if (pa & 4) M[pa >> 3] = (M[pa >> 3] & M32) | (dat << 32);
 else M[pa >> 3] = (M[pa >> 3] & ~((t_uint64) M32)) | dat;
 return;
+}
+
+static uint32 mikasa_read_phys_long (t_uint64 pa)
+{
+if (pa & 4)
+    return (uint32) ((M[pa >> 3] >> 32) & M32);
+return (uint32) (M[pa >> 3] & M32);
 }
 
 static void mikasa_write_phys_byte (t_uint64 pa, uint8 dat)
@@ -3437,6 +4078,9 @@ t_stat mikasa_pal_proc_inst (uint32 fnc)
 {
 uint32 arg32 = (uint32) R[16];
 
+if (!mikasa_direct_apb)
+    return SCPE_NOFNC;
+
 switch (fnc) {
 
     case MPAL_HALT:
@@ -3506,6 +4150,7 @@ switch (fnc) {
     case MPAL_MT_IPL:
         R[0] = mikasa_pal_ipl & MPAL_IPL_MASK;
         mikasa_pal_ipl = arg32 & MPAL_IPL_MASK;
+        ev5_ipl = mikasa_pal_ipl;
         break;
 
     case MPAL_MF_MCES:
@@ -3716,8 +4361,7 @@ switch (fnc) {
 
     case MPAL_RSCC:
         mikasa_pal_scc = mikasa_pal_scc +
-            ((t_uint64) ((pcc_l - mikasa_pal_last_pcc) & M32) *
-             (t_uint64) (mikasa_scc_scale? mikasa_scc_scale: 1));
+            (t_uint64) ((pcc_l - mikasa_pal_last_pcc) & M32);
         mikasa_pal_last_pcc = pcc_l;
         R[0] = mikasa_pal_scc;
         break;
@@ -3759,6 +4403,7 @@ t_uint64 bitmap_pa = MIKASA_PFN_BITMAP_PA;
 t_uint64 bitmap_cursor = bitmap_pa;
 uint32 cluster = 0;
 
+mikasa_direct_apb = TRUE;
 if (!ADDR_IS_MEM (hwrpb_pa + MIKASA_HWRPB_SIZE - 1))
     return SCPE_NXM;
 
@@ -3851,6 +4496,7 @@ mikasa_last_boot_bytes = image_bytes;
 mikasa_pal_pcbb = proc_pa;
 mikasa_pal_ptbr = MIKASA_L1_PT_PA;
 mikasa_pal_ipl = 0x1F;
+ev5_ipl = mikasa_pal_ipl;
 mikasa_pal_mces = 8;
 mikasa_pal_last_pcc = pcc_l;
 
@@ -3861,6 +4507,9 @@ t_stat mikasa_reset (DEVICE *dptr)
 {
 mikasa_irq_mask = 0;
 mikasa_irq_summary = 0;
+mikasa_irq_update ();
+sim_cancel (&mikasa_unit);
+mikasa_direct_apb = FALSE;
 mikasa_uart_lcr = 0;
 mikasa_uart_mcr = 0;
 mikasa_uart_ier = 0;
@@ -3907,5 +4556,6 @@ mikasa_pceb_cfg[0x04 >> 2] = 0x02000007u;
 mikasa_pceb_cfg[0x08 >> 2] = 0x06020003u;
 mikasa_pceb_cfg[0x40 >> 2] = 0x80800020u;
 memset (mikasa_ocp_reg, 0, sizeof (mikasa_ocp_reg));
+sim_activate (&mikasa_unit, MIKASA_RTC_TICK);
 return SCPE_OK;
 }

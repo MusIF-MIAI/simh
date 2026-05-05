@@ -50,6 +50,8 @@
 #include "alpha_defs.h"
 #include "alpha_ev5_defs.h"
 
+#define EV4_PALO_INTR   0x00E0
+
 t_uint64 ev5_palshad[PALSHAD_SIZE] = { 0 };             /* PAL shadow reg */
 t_uint64 ev5_palsave[PALSHAD_SIZE] = { 0 };             /* PAL save main */
 t_uint64 ev5_paltemp[PALTEMP_SIZE] = { 0 };             /* PAL temps */
@@ -87,6 +89,8 @@ uint32 ev5_ipl = 0;                                     /* ipl */
 uint32 ev5_sirr = 0;                                    /* software int req */
 uint32 ev5_astrr = 0;                                   /* AST requests */
 uint32 ev5_asten = 0;                                   /* AST enables */
+static uint32 ev4_hier = 0;                             /* hardware int enables */
+static uint32 ev4_ps_sw = 0;                            /* EV4 PS software bits */
 const uint32 ast_map[4] = { 0x1, 0x3, 0x7, 0xF };
 
 t_stat ev5_palent (t_uint64 fpc, uint32 off);
@@ -99,6 +103,7 @@ static t_stat ev4_pal_1d (uint32 ir);
 static t_bool pal_hwre_enabled (void);
 static t_bool ev4_ipr_is_mikasa (void);
 static t_bool ev4_icsr_hwe (void);
+static t_uint64 ev4_hirr_bits (uint32 pins);
 static t_uint64 ev4_read_icsr (void);
 static t_uint64 ev4_read_ibox_ipr (uint32 idx);
 static t_uint64 ev4_read_abox_ipr (uint32 idx);
@@ -241,6 +246,8 @@ DEVICE ev5pal_dev = {
 
 t_stat pal_proc_intr (uint32 lvl)
 {
+if (cpu_model == ALPHA_MODEL_MIKASA_4_266)
+    return ev5_palent (PC, EV4_PALO_INTR);
 return ev5_palent (PC, PALO_INTR);
 }
 
@@ -343,8 +350,12 @@ t_stat pal_proc_inst (uint32 fnc)
 {
 uint32 off = (fnc & 0x3F) << 6;
 
-if (cpu_model == ALPHA_MODEL_MIKASA_4_266)
-    return mikasa_pal_proc_inst (fnc);
+if (cpu_model == ALPHA_MODEL_MIKASA_4_266) {
+    t_stat r = mikasa_pal_proc_inst (fnc);
+
+    if (r != SCPE_NOFNC)
+        return r;
+    }
 if (fnc & 0x80) return ev5_palent (PC, PALO_CALLUNPR + off);
 if (itlb_cm != MODE_K) ABORT (EXC_RSVI);
 return ev5_palent (PC, PALO_CALLPR + off);
@@ -359,12 +370,27 @@ return ev5_palent (PC, PALO_CALLPR + off);
 uint32 pal_eval_intr (uint32 flag)
 {
 uint32 i, req = 0;
-uint32 lvl = flag? ev5_ipl: 0;
+uint32 lvl = (flag && !ev4_ipr_is_mikasa ())? ev5_ipl: 0;
 
 if (flag && pal_mode) return 0;
 if (ev5_mchk) req = IPL_1F;
 else if (ev5_crd && (ev5_icsr & ICSR_CRDE)) req = IPL_CRD;
 else if (ev5_pwrfl) req = IPL_PWRFL;
+else if (ev4_ipr_is_mikasa ()) {
+    uint32 hwre = 0;
+
+    for (i = 0; i < IPL_HLVL; i++) {
+        if (int_req[i])
+            hwre |= 1u << i;
+        }
+    hwre &= ev4_hier;
+    for (i = IPL_HLVL; i > 0; i--) {
+        if ((hwre >> (i - 1)) & 1) {
+            req = IPL_HMIN + i - 1;
+            break;
+            }
+        }
+    }
 else if (int_req[3] && !(ev5_icsr & ICSR_MSK3)) req = IPL_HMIN + 3;
 else if (int_req[2] && !(ev5_icsr & ICSR_MSK2)) req = IPL_HMIN + 2;
 else if (int_req[1] && !(ev5_icsr & ICSR_MSK1)) req = IPL_HMIN + 1;
@@ -914,8 +940,15 @@ fpen = (val & EV4_ICCSR_W_FPE)? 1: 0;
 
 static t_uint64 ev4_ps_read (void)
 {
-return (((t_uint64) (itlb_cm & 2)) << 33) |
-    (((t_uint64) (itlb_cm & 1)) << 2);
+return (ev4_ps_sw & 0x7) |
+    (((t_uint64) (itlb_cm & 3)) << 3) |
+    (((t_uint64) (ev5_ipl & 0x1F)) << 8);
+}
+
+static t_uint64 ev4_hirr_bits (uint32 pins)
+{
+return (((t_uint64) (pins & 0x38)) << 2) |
+    (((t_uint64) (pins & 0x07)) << 10);
 }
 
 static uint32 ev4_ps_write_mode (t_uint64 val)
@@ -961,8 +994,18 @@ switch (idx) {
     case 11:                                            /* PAL_BASE */
         return ev5_palbase & 0x00000003FFFFC000;
 
-    case 12:                                            /* HIRR */
-        return 0;
+    case 12: {                                          /* HIRR */
+        uint32 pins = 0;
+        uint32 i;
+        t_uint64 res;
+
+        for (i = 0; i < IPL_HLVL; i++) {
+            if (int_req[i])
+                pins |= 1u << i;
+        }
+        res = ev4_hirr_bits (pins) | ((pins & ev4_hier) ? 0x02 : 0);
+        return res;
+        }
 
     case 13:                                            /* SIRR */
         return ((t_uint64) (ev5_sirr & SIRR_M_SIRR)) << SIRR_V_SIRR;
@@ -970,7 +1013,12 @@ switch (idx) {
     case 14:                                            /* ASTRR */
         return ev5_astrr & AST_MASK;
 
-    case 16:                                            /* HIER */
+    case 16: {                                          /* HIER */
+        t_uint64 res = ev4_hirr_bits (ev4_hier);
+
+        return res;
+        }
+
     case 17:                                            /* SIER */
         return 0;
 
@@ -1041,7 +1089,9 @@ switch (idx) {
         break;
 
     case 9:                                             /* PS */
+        ev4_ps_sw = ((uint32) val) & 0x7;
         itlb_set_cm (ev4_ps_write_mode (val));
+        ev5_ipl = (((uint32) val) >> 8) & 0x1F;
         break;
 
     case 10:                                            /* EXC_SUM */
@@ -1059,6 +1109,10 @@ switch (idx) {
 
     case 14:                                            /* ASTRR */
         ev5_astrr = ((uint32) val) & AST_MASK;
+        break;
+
+    case 16:                                            /* HIER */
+        ev4_hier = (((uint32) val) >> 9) & 0x3F;
         break;
 
     case 18:                                            /* ASTER */
@@ -1163,6 +1217,8 @@ ev5_mchk = 0;
 ev5_pwrfl = 0;
 ev5_crd = 0;
 ev5_sli = 0;
+ev4_hier = 0;
+ev4_ps_sw = 0;
 itlb_set_cm (MODE_K);
 itlb_set_asn (0);
 itlb_set_spage (0);

@@ -383,9 +383,9 @@ typedef struct {                                        /* device info block */
     uint32              ipl;
     } DIB;
 
-/* Interrupt system - 6 levels in EV4 and EV6, 4 in EV5 - software expects 4 */
+/* Interrupt system - 6 levels in EV4 and EV6, 4 in EV5 */
 
-#define IPL_HMAX        0x17                            /* highest hwre level */
+#define IPL_HMAX        0x19                            /* highest hwre level */
 #define IPL_HMIN        0x14                            /* lowest hwre level */
 #define IPL_HLVL        (IPL_HMAX - IPL_HMIN + 1)       /* # hardware levels */
 #define IPL_SMAX        0x0F                            /* highest swre level */

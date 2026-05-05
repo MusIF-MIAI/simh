@@ -213,6 +213,7 @@ t_stat cpu_show_hist (FILE *st, UNIT *uptr, int32 val, CONST void *desc);
 t_stat cpu_show_virt (FILE *of, UNIT *uptr, int32 val, CONST void *desc);
 t_stat cpu_fprint_one_inst (FILE *st, uint32 ir, t_uint64 pc, t_uint64 ra, t_uint64 rb);
 t_stat mikasa_boot_rom (int32 unitno);
+extern uint32 mikasa_scc_scale;
 
 extern t_uint64 op_ldf (t_uint64 op);
 extern t_uint64 op_ldg (t_uint64 op);
@@ -428,7 +429,12 @@ while (reason == 0) {
         }
 
     sim_interval = sim_interval - 1;                    /* count instr */
-    pcc_l = pcc_l + pcc_enb;
+    if (pcc_enb) {
+        if ((cpu_model == ALPHA_MODEL_MIKASA_4_266) && mikasa_scc_scale)
+            pcc_l = pcc_l + mikasa_scc_scale;
+        else
+            pcc_l = pcc_l + 1;
+        }
     ir = ReadI (PC);                                    /* get instruction */
     op = I_GETOP (ir);                                  /* get opcode */
     ra = I_GETRA (ir);                                  /* get ra */
