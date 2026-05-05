@@ -94,6 +94,65 @@ t_stat ev5_palent_d (t_uint64 fpc, uint32 off, uint32 sta);
 t_stat pal_proc_reset_hwre (DEVICE *dptr);
 t_stat pal_proc_intr_ev5 (uint32 lvl);
 uint32 pal_eval_intr_ev5 (uint32 flag);
+static t_stat ev4_pal_19 (uint32 ir);
+static t_stat ev4_pal_1d (uint32 ir);
+static t_bool pal_hwre_enabled (void);
+static t_bool ev4_ipr_is_mikasa (void);
+static t_bool ev4_icsr_hwe (void);
+static t_uint64 ev4_read_icsr (void);
+static t_uint64 ev4_read_ibox_ipr (uint32 idx);
+static t_uint64 ev4_read_abox_ipr (uint32 idx);
+static void ev4_write_icsr (t_uint64 val);
+static void ev4_write_ibox_ipr (uint32 idx, t_uint64 val);
+static void ev4_write_abox_ipr (uint32 idx, t_uint64 val);
+
+#define EV4_ICCSR_W_V_ASN       47
+#define EV4_ICCSR_W_M_ASN       0x3F
+#define EV4_ICCSR_W_V_PCE       44
+#define EV4_ICCSR_W_M_PCE       0x3
+#define EV4_ICCSR_W_RES46       (((t_uint64) 1u) << 46)
+#define EV4_ICCSR_W_RES43       (((t_uint64) 1u) << 43)
+#define EV4_ICCSR_W_FPE         (((t_uint64) 1u) << 42)
+#define EV4_ICCSR_W_MAP         (((t_uint64) 1u) << 41)
+#define EV4_ICCSR_W_HWE         (((t_uint64) 1u) << 40)
+#define EV4_ICCSR_W_DI          (((t_uint64) 1u) << 39)
+#define EV4_ICCSR_W_BHE         (((t_uint64) 1u) << 38)
+#define EV4_ICCSR_W_JSE         (((t_uint64) 1u) << 37)
+#define EV4_ICCSR_W_BPE         (((t_uint64) 1u) << 36)
+#define EV4_ICCSR_W_PIPE        (((t_uint64) 1u) << 35)
+#define EV4_ICCSR_W_V_PCMUX1    32
+#define EV4_ICCSR_W_M_PCMUX1    0x7
+#define EV4_ICCSR_W_V_PCMUX0    8
+#define EV4_ICCSR_W_M_PCMUX0    0xF
+#define EV4_ICCSR_W_RES4        (((t_uint64) 1u) << 4)
+#define EV4_ICCSR_W_PC0         (((t_uint64) 1u) << 3)
+#define EV4_ICCSR_W_PC1         (((t_uint64) 1u) << 0)
+#define EV4_ICCSR_W_RW          (((t_uint64) EV4_ICCSR_W_M_ASN << EV4_ICCSR_W_V_ASN) | \
+                                 ((t_uint64) EV4_ICCSR_W_M_PCE << EV4_ICCSR_W_V_PCE) | \
+                                 EV4_ICCSR_W_RES46 | EV4_ICCSR_W_RES43 | \
+                                 EV4_ICCSR_W_FPE | EV4_ICCSR_W_MAP | EV4_ICCSR_W_HWE | \
+                                 EV4_ICCSR_W_DI | EV4_ICCSR_W_BHE | EV4_ICCSR_W_JSE | \
+                                 EV4_ICCSR_W_BPE | EV4_ICCSR_W_PIPE | \
+                                 ((t_uint64) EV4_ICCSR_W_M_PCMUX1 << EV4_ICCSR_W_V_PCMUX1) | \
+                                 ((t_uint64) EV4_ICCSR_W_M_PCMUX0 << EV4_ICCSR_W_V_PCMUX0) | \
+                                 EV4_ICCSR_W_RES4 | EV4_ICCSR_W_PC0 | EV4_ICCSR_W_PC1)
+
+#define EV4_ICCSR_R_V_ASN       28
+#define EV4_ICCSR_R_V_PCE       44
+#define EV4_ICCSR_R_RES34       (((t_uint64) 1u) << 34)
+#define EV4_ICCSR_R_V_RES       24
+#define EV4_ICCSR_R_FPE         (((t_uint64) 1u) << 23)
+#define EV4_ICCSR_R_MAP         (((t_uint64) 1u) << 22)
+#define EV4_ICCSR_R_HWE         (((t_uint64) 1u) << 21)
+#define EV4_ICCSR_R_DI          (((t_uint64) 1u) << 20)
+#define EV4_ICCSR_R_BHE         (((t_uint64) 1u) << 19)
+#define EV4_ICCSR_R_JSE         (((t_uint64) 1u) << 18)
+#define EV4_ICCSR_R_BPE         (((t_uint64) 1u) << 17)
+#define EV4_ICCSR_R_PIPE        (((t_uint64) 1u) << 16)
+#define EV4_ICCSR_R_V_PCMUX1    13
+#define EV4_ICCSR_R_V_PCMUX0    9
+#define EV4_ICCSR_R_PC1         (((t_uint64) 1u) << 2)
+#define EV4_ICCSR_R_PC0         (((t_uint64) 1u) << 1)
 
 extern t_uint64 R[32];
 extern t_uint64 PC;
@@ -367,7 +426,7 @@ t_uint64 dsp, ea, res;
 uint32 ra, rb, acc, mode;
 
 if (!pal_mode && (!(itlb_cm == MODE_K) ||               /* pal mode, or kernel */
-    !(ev5_icsr & ICSR_HWE))) ABORT (EXC_RSVI);          /* and enabled? */
+    !pal_hwre_enabled ())) ABORT (EXC_RSVI);            /* and enabled? */
 ra = I_GETRA (ir);                                      /* get ra */
 rb = I_GETRB (ir);                                      /* get rb */
 dsp = HW_LD_GETDSP (ir);                                /* get displacement */
@@ -399,7 +458,7 @@ t_uint64 dsp, ea;
 uint32 ra, rb, acc, mode;
 
 if (!pal_mode && (!(itlb_cm == MODE_K) ||               /* pal mode, or kernel */
-    !(ev5_icsr & ICSR_HWE))) ABORT (EXC_RSVI);          /* and enabled? */
+    !pal_hwre_enabled ())) ABORT (EXC_RSVI);            /* and enabled? */
 ra = I_GETRA (ir);                                      /* get ra */
 rb = I_GETRB (ir);                                      /* get rb */
 dsp = HW_LD_GETDSP (ir);                                /* get displacement */
@@ -426,7 +485,7 @@ t_stat pal_1e (uint32 ir)
 uint32 new_pal = ((uint32) ev5_excaddr) & 1;
 
 if (!pal_mode && (!(itlb_cm == MODE_K) ||               /* pal mode, or kernel */
-    !(ev5_icsr & ICSR_HWE))) ABORT (EXC_RSVI);          /* and enabled? */
+    !pal_hwre_enabled ())) ABORT (EXC_RSVI);            /* and enabled? */
 PCQ_ENTRY;
 PC = ev5_excaddr;
 if (pal_mode && !new_pal && (ev5_icsr & ICSR_SDE)) {    /* leaving PAL mode? */
@@ -445,10 +504,12 @@ uint32 fnc, ra;
 static const uint32 itbr_map_gh[4] = {
     ITBR_PTE_GH0, ITBR_PTE_GH1, ITBR_PTE_GH2, ITBR_PTE_GH3 };
 
-if (!pal_mode && (!(itlb_cm == MODE_K) ||               /* pal mode, or kernel */
-    !(ev5_icsr & ICSR_HWE))) ABORT (EXC_RSVI);          /* and enabled? */
 fnc = I_GETMDSP (ir);
 ra = I_GETRA (ir);
+if (ev4_ipr_is_mikasa ())
+    return ev4_pal_19 (ir);
+if (!pal_mode && (!(itlb_cm == MODE_K) ||               /* pal mode, or kernel */
+    !pal_hwre_enabled ())) ABORT (EXC_RSVI);            /* and enabled? */
 switch (fnc) {
 
     case ISR:                                           /* intr summary */
@@ -615,8 +676,10 @@ uint32 fnc = I_GETMDSP (ir);
 uint32 ra = I_GETRA (ir);
 t_uint64 val = R[ra];
 
+if (ev4_ipr_is_mikasa ())
+    return ev4_pal_1d (ir);
 if (!pal_mode && (!(itlb_cm == MODE_K) ||               /* pal mode, or kernel */
-    !(ev5_icsr & ICSR_HWE))) ABORT (EXC_RSVI);          /* and enabled? */
+    !pal_hwre_enabled ())) ABORT (EXC_RSVI);            /* and enabled? */
 switch (fnc) {
 
     case ITB_TAG:
@@ -787,6 +850,307 @@ switch (fnc) {
         break;
         }
 
+return SCPE_OK;
+}
+
+static t_bool ev4_ipr_is_mikasa (void)
+{
+return cpu_model == ALPHA_MODEL_MIKASA_4_266;
+}
+
+static t_bool pal_hwre_enabled (void)
+{
+if (ev4_ipr_is_mikasa ())
+    return ev4_icsr_hwe ();
+return (ev5_icsr & ICSR_HWE) != 0;
+}
+
+static t_bool ev4_icsr_hwe (void)
+{
+return (ev5_icsr & EV4_ICCSR_W_HWE) != 0;
+}
+
+static t_uint64 ev4_read_icsr (void)
+{
+t_uint64 res = 0;
+
+res |= ((ev5_icsr >> EV4_ICCSR_W_V_PCE) & EV4_ICCSR_W_M_PCE) <<
+    EV4_ICCSR_R_V_PCE;
+res |= ((ev5_icsr >> EV4_ICCSR_W_V_ASN) & EV4_ICCSR_W_M_ASN) <<
+    EV4_ICCSR_R_V_ASN;
+if (fpen)
+    res |= EV4_ICCSR_R_FPE;
+if (ev5_icsr & EV4_ICCSR_W_MAP)
+    res |= EV4_ICCSR_R_MAP;
+if (ev5_icsr & EV4_ICCSR_W_HWE)
+    res |= EV4_ICCSR_R_HWE;
+if (ev5_icsr & EV4_ICCSR_W_DI)
+    res |= EV4_ICCSR_R_DI;
+if (ev5_icsr & EV4_ICCSR_W_BHE)
+    res |= EV4_ICCSR_R_BHE;
+if (ev5_icsr & EV4_ICCSR_W_JSE)
+    res |= EV4_ICCSR_R_JSE;
+if (ev5_icsr & EV4_ICCSR_W_BPE)
+    res |= EV4_ICCSR_R_BPE;
+if (ev5_icsr & EV4_ICCSR_W_PIPE)
+    res |= EV4_ICCSR_R_PIPE;
+res |= ((ev5_icsr >> EV4_ICCSR_W_V_PCMUX1) & EV4_ICCSR_W_M_PCMUX1) <<
+    EV4_ICCSR_R_V_PCMUX1;
+res |= ((ev5_icsr >> EV4_ICCSR_W_V_PCMUX0) & EV4_ICCSR_W_M_PCMUX0) <<
+    EV4_ICCSR_R_V_PCMUX0;
+if (ev5_icsr & EV4_ICCSR_W_PC1)
+    res |= EV4_ICCSR_R_PC1;
+if (ev5_icsr & EV4_ICCSR_W_PC0)
+    res |= EV4_ICCSR_R_PC0;
+return res;
+}
+
+static void ev4_write_icsr (t_uint64 val)
+{
+ev5_icsr = val & EV4_ICCSR_W_RW;
+itlb_set_spage ((val & EV4_ICCSR_W_MAP)? SPEN_43: 0);
+fpen = (val & EV4_ICCSR_W_FPE)? 1: 0;
+}
+
+static t_uint64 ev4_ps_read (void)
+{
+return (((t_uint64) (itlb_cm & 2)) << 33) |
+    (((t_uint64) (itlb_cm & 1)) << 2);
+}
+
+static uint32 ev4_ps_write_mode (t_uint64 val)
+{
+return ((uint32) (val >> 3)) & 3;
+}
+
+static t_uint64 ev4_read_ibox_ipr (uint32 idx)
+{
+t_uint64 res;
+static const uint32 itbr_map_gh[4] = {
+    ITBR_PTE_GH0, ITBR_PTE_GH1, ITBR_PTE_GH2, ITBR_PTE_GH3 };
+
+switch (idx) {
+
+    case 1:                                             /* ITB_PTE */
+        res = itlb_read ();
+        ev5_itb_pte_temp = (res & PFN_MASK) |
+            ((res & PTE_ASM)? ITBR_PTE_ASM: 0) |
+            ((res & (PTE_KRE|PTE_ERE|PTE_SRE|PTE_URE)) <<
+                (ITBR_PTE_V_KRE - PTE_V_KRE)) |
+            itbr_map_gh[PTE_GETGH (res)];
+        return 0;
+
+    case 2:                                             /* ICCSR */
+        return ev4_read_icsr ();
+
+    case 3:                                             /* ITB_PTE_TEMP */
+        return ev5_itb_pte_temp;
+
+    case 4:                                             /* EXC_ADDR */
+        return ev5_excaddr;
+
+    case 5:                                             /* SL_RCV */
+        return 0;
+
+    case 9:                                             /* PS */
+        return ev4_ps_read ();
+
+    case 10:                                            /* EXC_SUM */
+        return trap_summ & TRAP_SUMM_RW;
+
+    case 11:                                            /* PAL_BASE */
+        return ev5_palbase & 0x00000003FFFFC000;
+
+    case 12:                                            /* HIRR */
+        return 0;
+
+    case 13:                                            /* SIRR */
+        return ((t_uint64) (ev5_sirr & SIRR_M_SIRR)) << SIRR_V_SIRR;
+
+    case 14:                                            /* ASTRR */
+        return ev5_astrr & AST_MASK;
+
+    case 16:                                            /* HIER */
+    case 17:                                            /* SIER */
+        return 0;
+
+    case 18:                                            /* ASTER */
+        return ev5_asten & AST_MASK;
+
+    default:
+        return 0;
+        }
+}
+
+static t_uint64 ev4_read_abox_ipr (uint32 idx)
+{
+switch (idx) {
+
+    case 2:                                             /* DTB_PTE */
+        ev5_dtb_pte_temp = dtlb_read ();
+        return 0;
+
+    case 3:                                             /* DTB_PTE_TEMP */
+        return ev5_dtb_pte_temp;
+
+    case 4:                                             /* MM_CSR */
+        return ev5_mm_stat;
+
+    case 5:                                             /* VA */
+        ev5_va_lock = 0;
+        return ev5_va;
+
+    case 12:                                            /* DC_STAT/C_STAT */
+        return 0;
+
+    case 16:                                            /* CC */
+        return (((t_uint64) pcc_h) << 32) | ((t_uint64) pcc_l);
+
+    default:
+        return 0;
+        }
+}
+
+static void ev4_write_ibox_ipr (uint32 idx, t_uint64 val)
+{
+switch (idx) {
+
+    case 0:                                             /* TB_TAG */
+        ev5_itb_tag = VA_GETVPN (val);
+        ev5_dtb_tag = VA_GETVPN (val);
+        break;
+
+    case 1:                                             /* ITB_PTE */
+        ev5_itb_pte = (val | PTE_V) & (PFN_MASK | ((t_uint64) (PTE_ASM | PTE_GH |
+            PTE_KRE | PTE_ERE | PTE_SRE | PTE_URE)));
+        itlb_load (ev5_itb_tag, ev5_itb_pte);
+        break;
+
+    case 2:                                             /* ICCSR */
+        ev4_write_icsr (val);
+        break;
+
+    case 4:                                             /* EXC_ADDR */
+        ev5_excaddr = val;
+        break;
+
+    case 6:                                             /* ITBZAP */
+    case 7:                                             /* ITBASM */
+    case 8:                                             /* ITBIS */
+        tlb_ia (TLB_CI);
+        break;
+
+    case 9:                                             /* PS */
+        itlb_set_cm (ev4_ps_write_mode (val));
+        break;
+
+    case 10:                                            /* EXC_SUM */
+        trap_summ = 0;
+        trap_mask = 0;
+        break;
+
+    case 11:                                            /* PAL_BASE */
+        ev5_palbase = val & 0x00000003FFFFC000;
+        break;
+
+    case 13:                                            /* SIRR */
+        ev5_sirr = (((uint32) val) >> SIRR_V_SIRR) & SIRR_M_SIRR;
+        break;
+
+    case 14:                                            /* ASTRR */
+        ev5_astrr = ((uint32) val) & AST_MASK;
+        break;
+
+    case 18:                                            /* ASTER */
+        ev5_asten = ((uint32) val) & AST_MASK;
+        break;
+
+    case 19:                                            /* SL_CLR */
+    case 22:                                            /* SL_XMIT */
+    default:
+        break;
+        }
+}
+
+static void ev4_write_abox_ipr (uint32 idx, t_uint64 val)
+{
+switch (idx) {
+
+    case 2:                                             /* DTB_PTE */
+        ev5_dtb_pte = (val | PTE_V) & (PFN_MASK |
+            ((t_uint64) (PTE_MASK & ~PTE_FOE)));
+        dtlb_load (ev5_dtb_tag, ev5_dtb_pte);
+        break;
+
+    case 6:                                             /* DTBZAP */
+    case 7:                                             /* DTBASM */
+    case 8:                                             /* DTBIS */
+        tlb_ia (TLB_CD);
+        break;
+
+    case 15:                                            /* ALT_MODE */
+        ev5_alt_mode = ev4_ps_write_mode (val);
+        break;
+
+    case 16:                                            /* CC */
+        pcc_h = (uint32) ((val >> 32) & M32);
+        break;
+
+    case 17:                                            /* CC_CTL */
+        pcc_l = ((uint32) val) & (M32 & ~CC_CTL_MBZ);
+        pcc_enb = (val & CC_CTL_ENB)? 1: 0;
+        break;
+
+    case 21:                                            /* FLUSH_IC */
+    case 23:                                            /* FLUSH_IC_ASM */
+    default:
+        break;
+        }
+}
+
+static t_stat ev4_pal_19 (uint32 ir)
+{
+uint32 fnc = I_GETMDSP (ir);
+uint32 ra = I_GETRA (ir);
+uint32 idx = fnc & 0x1F;
+uint32 is_paltemp = fnc & 0x80;
+uint32 is_abox = fnc & 0x40;
+uint32 is_ibox = fnc & 0x20;
+t_uint64 res = 0;
+
+if (!pal_mode && (!(itlb_cm == MODE_K) ||               /* pal mode, or kernel */
+    !pal_hwre_enabled ())) ABORT (EXC_RSVI);            /* and enabled? */
+if (is_paltemp)
+    res = ev5_paltemp[idx];
+else if (is_ibox)
+    res = ev4_read_ibox_ipr (idx);
+else if (is_abox)
+    res = ev4_read_abox_ipr (idx);
+else
+    return SCPE_OK;
+if (ra != 31)
+    R[ra] = res & M64;
+return SCPE_OK;
+}
+
+static t_stat ev4_pal_1d (uint32 ir)
+{
+uint32 fnc = I_GETMDSP (ir);
+uint32 ra = I_GETRA (ir);
+uint32 idx = fnc & 0x1F;
+uint32 is_paltemp = fnc & 0x80;
+uint32 is_abox = fnc & 0x40;
+uint32 is_ibox = fnc & 0x20;
+t_uint64 val = R[ra];
+
+if (!pal_mode && (!(itlb_cm == MODE_K) ||               /* pal mode, or kernel */
+    !pal_hwre_enabled ())) ABORT (EXC_RSVI);            /* and enabled? */
+if (is_paltemp)
+    ev5_paltemp[idx] = val;
+if (is_ibox)
+    ev4_write_ibox_ipr (idx, val);
+if (is_abox)
+    ev4_write_abox_ipr (idx, val);
 return SCPE_OK;
 }
 
@@ -975,4 +1339,3 @@ switch (I_GETOP (val)) {
 if (*cptr != 0) return SCPE_ARG;
 return -3;
 }
-

@@ -27,8 +27,17 @@ Implemented:
     LFU wrapper. This is the preferred config path for repeatable local boots.
   - `BOOT CPU` starts the loaded SRM image, matching the VAX SIMH convention
     where CPU boot enters the platform firmware.
-  - The real `mksrmrom.exe` now runs past the earlier branch-link/alignment
-    halt at `0x900304` and enters the firmware copy/decompression path.
+  - The real `mksrmrom.exe` now runs through ROM copy/decompression, probes
+    PCI/EISA, passes the Mikasa ICU presence check, and prints the DEC/MIKASA
+    SRM banner:
+
+    ```text
+    V5.4-101, built on Mar 24 1999 at 13:58:27
+    ```
+
+  - `DEP MIKASA SCCSCALE <n>` can be used as a debug accelerator for SRM
+    delay loops. The default is `1`, which preserves the normal PAL `RSCC`
+    counter behavior.
 - OpenVMS Alpha APB direct loader:
   - Reads LBN/count from the primary boot block offsets used by the dump.
   - Loads the primary bootstrap at physical `0x00200000`.
@@ -51,12 +60,11 @@ Implemented:
 
 Not implemented yet:
 
-- Real Mikasa 21071/CIA PCI host bridge behavior.
+- Complete real Mikasa 21071/CIA PCI host bridge behavior.
 - NCR/Symbios 53C810 PCI SCSI DMA engine.
 - Network, VGA, NVRAM, and multiprocessor support.
 - A complete SRM-compatible firmware execution environment. The real SRM image
-  runs far enough to exercise privileged PAL-mode ROM code, but it does not
-  reach an SRM prompt yet.
+  now reaches the SRM banner, but it does not reach an SRM prompt yet.
 
 So this is not yet a complete OpenVMS boot. It is a controlled first point:
 SIMH can identify the machine profile, attach all four recovered disks, load the
@@ -67,12 +75,24 @@ Current verified SRM progress:
 
 ```text
 Loaded Mikasa SRM ROM payload from ../firmware/as1000/mksrmrom.payload.bin: 475648 bytes at 00900000, PC=00900000 PALBASE=00900000
-Step expired, PC: 900128 (BNE R1,900114)
+ff.fe.fd.fc.fb.fa.f9.f8.f7.f6.f5.f3.f2.f1.f0.ef.df.ee.f4.
+probing hose 0, PCI
+probing hose 1, EISA
+ed.ec.eb.....ea.e9.e8.e7.e6.e5.e4.e3.e2.e1.e0.
+V5.4-101, built on Mar 24 1999 at 13:58:27
 ```
 
-This is the firmware copy/decompression loop. The previous early stop was a
-HALT at `0x900304`, caused by preserving `PCALG` in branch link registers; the
-CPU core now stores aligned return addresses for `BSR`/`BR`/`JMP` links.
+Earlier SRM stops fixed during bring-up:
+
+- HALT at `0x900304`, caused by preserving `PCALG` in branch link registers.
+  The CPU core now stores aligned return addresses for `BSR`/`BR`/`JMP` links.
+- FPDIS while executing ROM PALmode code. Mikasa now decodes the EV4/21064
+  IPR layout for `HW_MFPR`/`HW_MTPR`, including ICCSR/HWE.
+- `*** Error, incorrect console for AlphaServer 1000A`. The firmware checks
+  the AlphaServer 1000 ICU at ISA port `0x536` and expects bit `0x8000` to be
+  visible in the 16-bit readback.
+- Infinite `LDQ_L`/`STQ_C` retry loop. The common Alpha CPU core now writes
+  success value `1` back to the source register on successful `STL_C`/`STQ_C`.
 
 Current verified direct-APB diagnostic stop:
 
@@ -111,6 +131,16 @@ The main config loads the real AlphaServer 1000 SRM firmware and starts it with
 ```text
 BOOT DKA0
 ```
+
+The real SRM contains long delay loops. For debug runs where wall-clock speed
+matters more than cycle precision, add this before `BOOT CPU`:
+
+```text
+DEP MIKASA SCCSCALE 65536
+```
+
+Do not use that setting when checking timing-sensitive behavior; it exists to
+make firmware bring-up interactive.
 
 The config also attaches the four extracted dump images read-only:
 
@@ -261,10 +291,10 @@ debug tracing, the PC cycles inside the ROM decompressor around `0x900301` and
 
 ## Next implementation steps
 
-1. Advance the real SRM firmware path.
-   The real `mksrmrom.exe` now starts under SIMH and gets into the early ROM
-   copy/decompression path. The next blockers should be handled in the SRM path
-   first, because that gives the most faithful AlphaServer 1000 boot context.
+1. Advance the real SRM firmware path to the `P00>>>` prompt.
+   The real `mksrmrom.exe` now prints the DEC/MIKASA SRM V5.4-101 banner. The
+   next work is to continue through console initialization and remaining
+   PAL/platform synchronization code until `BOOT DKA0` can be issued from SRM.
 
 2. Understand the direct-APB `SYSBOOT.EXE` lookup failure.
    The APB now reaches the system root and reads `SYSEXE`-related ODS-2
@@ -281,9 +311,11 @@ debug tracing, the PC cycles inside the ROM decompressor around `0x900301` and
    CTB/CRB and callback descriptors exist, but PAL revision fields, DSR data,
    and SWRPB/boot context are still minimal.
 
-5. Add Mikasa platform I/O.
-   Linux identifies Mikasa PCI interrupt summary/mask registers at ISA ports
-   `0x534` and `0x536`, with NCR 810 SCSI on the PCI interrupt summary bit 12.
+5. Add more Mikasa platform I/O.
+   The current model implements APECS sparse ISA I/O enough for COM1 and the
+   AlphaServer 1000 ICU register at `0x536`. Remaining likely SRM probes include
+   RTC/NVRAM ports `0x70`/`0x71`, EISA configuration ports `0x22`/`0x23`, OCP
+   ports around `0x530`, and eventual PCI configuration space.
 
 6. Add a new NCR/Symbios 53C810 frontend.
    SIMH has a common SCSI backend, but no 53C810 PCI DMA frontend in this tree.

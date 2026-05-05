@@ -159,7 +159,7 @@ typedef struct {
 
 /* Internal registers */
 
-#define PALTEMP_SIZE            24
+#define PALTEMP_SIZE            32
 
 enum ev5_internal_reg {
     ISR = 0x100, ITB_TAG, ITB_PTE, ITB_ASN,

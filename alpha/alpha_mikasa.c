@@ -103,6 +103,21 @@
 #define MIKASA_ROM_WORKSPACE_SIZE   0x01000000
 #define MIKASA_AXPBOX_ROM_MEMSIZE   0x00200000
 #define MIKASA_AXPBOX_ROM_SIZE      (16 + MIKASA_AXPBOX_ROM_MEMSIZE)
+#define MIKASA_APECS_PCI_SIO        0x1C0000000ULL
+#define MIKASA_APECS_PCI_SIO_SIZE   0x02000000
+#define MIKASA_ISA_COM1             0x3F8
+#define MIKASA_ISA_ICU_IMR          0x536
+#define MIKASA_ISA_ICU_PRESENT      0x8000
+
+#define MIKASA_UART_LSR_DR          0x01
+#define MIKASA_UART_LSR_THRE        0x20
+#define MIKASA_UART_LSR_TEMT        0x40
+#define MIKASA_UART_IIR_NOPEND      0x01
+#define MIKASA_UART_LCR_DLAB        0x80
+#define MIKASA_UART_MSR_DCTS        0x01
+#define MIKASA_UART_MSR_CTS         0x10
+#define MIKASA_UART_MSR_DSR         0x20
+#define MIKASA_UART_MSR_DCD         0x80
 
 #define HWRPB_ID                    0x0000004250525748ULL
 #define HWRPB_CHECKSUM_OFF          0x120
@@ -230,10 +245,13 @@ t_stat mikasa_boot_prepare (CONST char *bootdev, uint32 osflags,
 t_stat mikasa_set_rom (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat mikasa_set_rom_payload (UNIT *uptr, int32 val, CONST char *cptr,
     void *desc);
+t_stat mikasa_save_rom (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat mikasa_boot_rom (int32 unitno);
 void mikasa_mem_write (t_uint64 pa, t_uint64 dat, uint32 lnt);
 t_stat mikasa_pal_proc_excp (uint32 abval);
 t_stat mikasa_pal_proc_inst (uint32 fnc);
+static t_bool mikasa_io_rd (t_uint64 pa, t_uint64 *val, uint32 lnt);
+static t_bool mikasa_io_wr (t_uint64 pa, t_uint64 val, uint32 lnt);
 
 static void mikasa_zero_phys (t_uint64 pa, uint32 size);
 static t_stat mikasa_ensure_mem (void);
@@ -252,6 +270,7 @@ static t_stat mikasa_load_axpbox_rom (FILE *fileref, const char *path,
     const uint8 *header);
 static t_stat mikasa_load_raw_rom_payload (FILE *fileref, t_offset fsize,
     const char *path);
+static t_stat mikasa_write_le64 (FILE *fileref, t_uint64 val);
 static t_uint64 mikasa_sum_qwords (t_uint64 pa, uint32 size);
 static t_uint64 mikasa_fill_bitmap (t_uint64 bitmap_pa, t_uint64 bits);
 static void mikasa_write_mem_cluster (t_uint64 mddt_pa, uint32 cluster,
@@ -321,6 +340,13 @@ static void mikasa_close_io (void);
 static void mikasa_read_io (void);
 static void mikasa_write_io (void);
 static t_stat mikasa_console_callback (void);
+static void mikasa_uart_poll (void);
+static uint8 mikasa_uart_read (uint32 port);
+static void mikasa_uart_write (uint32 port, uint8 val);
+static uint8 mikasa_isa_read (uint32 port);
+static void mikasa_isa_write (uint32 port, uint8 val);
+static t_uint64 mikasa_sparse_read (t_uint64 pa, uint32 lnt);
+static void mikasa_sparse_write (t_uint64 pa, t_uint64 val, uint32 lnt);
 
 static char mikasa_auto_action[] = "BOOT";
 static char mikasa_booted_dev[64] = "SCSI 0 6 0 0 0 0 0";
@@ -335,8 +361,22 @@ static t_bool mikasa_rom_loaded = FALSE;
 static t_uint64 mikasa_rom_pc = 0;
 static t_uint64 mikasa_rom_palbase = 0;
 static char mikasa_rom_path[CBUFSIZE] = "";
+static uint8 mikasa_uart_lcr = 0;
+static uint8 mikasa_uart_mcr = 0;
+static uint8 mikasa_uart_ier = 0;
+static uint8 mikasa_uart_scr = 0;
+static uint8 mikasa_uart_dll = 0;
+static uint8 mikasa_uart_dlm = 0;
+static uint8 mikasa_uart_rbr = 0;
+static t_bool mikasa_uart_rbr_valid = FALSE;
+static uint32 mikasa_scc_scale = 1;
 
 UNIT mikasa_unit = { UDATA (NULL, 0, 0) };
+
+DIB mikasa_dib = {
+    MIKASA_APECS_PCI_SIO, MIKASA_APECS_PCI_SIO + MIKASA_APECS_PCI_SIO_SIZE,
+    &mikasa_io_rd, &mikasa_io_wr, 0
+    };
 
 REG mikasa_reg[] = {
     { HRDATA (HWRPB, mikasa_hwrpb_pa, 64), REG_RO },
@@ -360,6 +400,7 @@ REG mikasa_reg[] = {
     { HRDATA (PALIPL, mikasa_pal_ipl, 5) },
     { HRDATA (PALPCBB, mikasa_pal_pcbb, 64) },
     { HRDATA (PALSCBB, mikasa_pal_scbb, 64) },
+    { DRDATA (SCCSCALE, mikasa_scc_scale, 32) },
     { NULL }
     };
 
@@ -370,6 +411,9 @@ MTAB mikasa_mod[] = {
     { MTAB_XTD|MTAB_VDV|MTAB_VALR|MTAB_NC, 0, "ROMPAYLOAD", "ROMPAYLOAD",
       &mikasa_set_rom_payload, NULL, NULL,
       "Load an extracted Mikasa SRM LFU payload image" },
+    { MTAB_XTD|MTAB_VDV|MTAB_VALR|MTAB_NC, 0, "ROMSAVE", "ROMSAVE",
+      &mikasa_save_rom, NULL, NULL,
+      "Save the current decompressed Mikasa SRM ROM image" },
     { 0 }
     };
 
@@ -377,9 +421,202 @@ DEVICE mikasa_dev = {
     "MIKASA", &mikasa_unit, mikasa_reg, mikasa_mod,
     1, 16, 32, 1, 16, 8,
     NULL, NULL, &mikasa_reset,
-    NULL, NULL, NULL, NULL,
-    0, 0, NULL
+    NULL, NULL, NULL, &mikasa_dib,
+    DEV_DIB, 0, NULL
     };
+
+static void mikasa_uart_poll (void)
+{
+t_stat c;
+
+if (mikasa_uart_rbr_valid)
+    return;
+c = sim_poll_kbd ();
+if (c >= SCPE_KFLAG) {
+    mikasa_uart_rbr = (uint8) (c & M8);
+    mikasa_uart_rbr_valid = TRUE;
+    }
+return;
+}
+
+static uint8 mikasa_uart_read (uint32 port)
+{
+uint32 reg = port - MIKASA_ISA_COM1;
+
+switch (reg) {
+
+    case 0:
+        if (mikasa_uart_lcr & MIKASA_UART_LCR_DLAB)
+            return mikasa_uart_dll;
+        mikasa_uart_poll ();
+        if (mikasa_uart_rbr_valid) {
+            mikasa_uart_rbr_valid = FALSE;
+            return mikasa_uart_rbr;
+            }
+        return 0;
+
+    case 1:
+        if (mikasa_uart_lcr & MIKASA_UART_LCR_DLAB)
+            return mikasa_uart_dlm;
+        return mikasa_uart_ier;
+
+    case 2:
+        return MIKASA_UART_IIR_NOPEND;
+
+    case 3:
+        return mikasa_uart_lcr;
+
+    case 4:
+        return mikasa_uart_mcr;
+
+    case 5:
+        mikasa_uart_poll ();
+        return MIKASA_UART_LSR_THRE | MIKASA_UART_LSR_TEMT |
+            (mikasa_uart_rbr_valid? MIKASA_UART_LSR_DR: 0);
+
+    case 6:
+        return MIKASA_UART_MSR_CTS | MIKASA_UART_MSR_DSR |
+            MIKASA_UART_MSR_DCD | MIKASA_UART_MSR_DCTS;
+
+    case 7:
+        return mikasa_uart_scr;
+
+    default:
+        return 0;
+        }
+}
+
+static void mikasa_uart_write (uint32 port, uint8 val)
+{
+uint32 reg = port - MIKASA_ISA_COM1;
+int32 c;
+
+switch (reg) {
+
+    case 0:
+        if (mikasa_uart_lcr & MIKASA_UART_LCR_DLAB)
+            mikasa_uart_dll = val;
+        else {
+            c = sim_tt_outcvt (val, TT_MODE_8B);
+            if (c >= 0)
+                (void) sim_putchar_s (c);
+            }
+        break;
+
+    case 1:
+        if (mikasa_uart_lcr & MIKASA_UART_LCR_DLAB)
+            mikasa_uart_dlm = val;
+        else
+            mikasa_uart_ier = val;
+        break;
+
+    case 3:
+        mikasa_uart_lcr = val;
+        break;
+
+    case 4:
+        mikasa_uart_mcr = val;
+        break;
+
+    case 7:
+        mikasa_uart_scr = val;
+        break;
+
+    default:
+        break;
+        }
+return;
+}
+
+static uint8 mikasa_isa_read (uint32 port)
+{
+uint32 icu = mikasa_irq_mask | MIKASA_ISA_ICU_PRESENT;
+
+if ((port >= MIKASA_ISA_COM1) && (port < (MIKASA_ISA_COM1 + 8)))
+    return mikasa_uart_read (port);
+if ((port == MIKASA_ISA_ICU_IMR) || (port == (MIKASA_ISA_ICU_IMR + 1)))
+    return (uint8) (icu >> ((port - MIKASA_ISA_ICU_IMR) << 3));
+return 0;
+}
+
+static void mikasa_isa_write (uint32 port, uint8 val)
+{
+if ((port >= MIKASA_ISA_COM1) && (port < (MIKASA_ISA_COM1 + 8))) {
+    mikasa_uart_write (port, val);
+    return;
+    }
+if (port == MIKASA_ISA_ICU_IMR)
+    mikasa_irq_mask = (mikasa_irq_mask & 0xFF00) | val;
+else if (port == (MIKASA_ISA_ICU_IMR + 1))
+    mikasa_irq_mask = (mikasa_irq_mask & 0x00FF) | (((uint32) val) << 8);
+return;
+}
+
+static t_uint64 mikasa_sparse_read (t_uint64 pa, uint32 lnt)
+{
+t_uint64 off = pa - MIKASA_APECS_PCI_SIO;
+uint32 port = (uint32) (off >> 5);
+uint32 mode = (uint32) ((off >> 3) & 3);
+uint32 val = 0;
+
+if (mode == 1) {
+    val = ((uint32) mikasa_isa_read (port & ~1u)) |
+        (((uint32) mikasa_isa_read ((port & ~1u) + 1)) << 8);
+    return ((t_uint64) val) << (8 * (port & 2));
+    }
+if (mode == 3) {
+    val = ((uint32) mikasa_isa_read (port & ~3u)) |
+        (((uint32) mikasa_isa_read ((port & ~3u) + 1)) << 8) |
+        (((uint32) mikasa_isa_read ((port & ~3u) + 2)) << 16) |
+        (((uint32) mikasa_isa_read ((port & ~3u) + 3)) << 24);
+    return val;
+    }
+val = mikasa_isa_read (port);
+if (lnt == L_BYTE)
+    return val;
+return ((t_uint64) val) << (8 * (port & 3));
+}
+
+static void mikasa_sparse_write (t_uint64 pa, t_uint64 val, uint32 lnt)
+{
+t_uint64 off = pa - MIKASA_APECS_PCI_SIO;
+uint32 port = (uint32) (off >> 5);
+uint32 mode = (uint32) ((off >> 3) & 3);
+
+if (mode == 1) {
+    uint32 data = (uint32) (val >> (8 * (port & 2)));
+
+    mikasa_isa_write (port & ~1u, (uint8) data);
+    mikasa_isa_write ((port & ~1u) + 1, (uint8) (data >> 8));
+    return;
+    }
+if (mode == 3) {
+    uint32 data = (uint32) val;
+
+    mikasa_isa_write (port & ~3u, (uint8) data);
+    mikasa_isa_write ((port & ~3u) + 1, (uint8) (data >> 8));
+    mikasa_isa_write ((port & ~3u) + 2, (uint8) (data >> 16));
+    mikasa_isa_write ((port & ~3u) + 3, (uint8) (data >> 24));
+    return;
+    }
+if (lnt == L_BYTE)
+    mikasa_isa_write (port, (uint8) val);
+else
+    mikasa_isa_write (port, (uint8) (val >> (8 * (port & 3))));
+return;
+}
+
+static t_bool mikasa_io_rd (t_uint64 pa, t_uint64 *val, uint32 lnt)
+{
+*val = mikasa_sparse_read (pa, lnt);
+return TRUE;
+}
+
+static t_bool mikasa_io_wr (t_uint64 pa, t_uint64 val, uint32 lnt)
+{
+mikasa_sparse_write (pa, val, lnt);
+return TRUE;
+}
 
 static void mikasa_zero_phys (t_uint64 pa, uint32 size)
 {
@@ -685,6 +922,63 @@ fsize = sim_fsize_ex (fileref);
 r = mikasa_load_raw_rom_payload (fileref, fsize, cptr);
 fclose (fileref);
 return r;
+}
+
+static t_stat mikasa_write_le64 (FILE *fileref, t_uint64 val)
+{
+uint8 buf[8];
+
+buf[0] = (uint8) val;
+buf[1] = (uint8) (val >> 8);
+buf[2] = (uint8) (val >> 16);
+buf[3] = (uint8) (val >> 24);
+buf[4] = (uint8) (val >> 32);
+buf[5] = (uint8) (val >> 40);
+buf[6] = (uint8) (val >> 48);
+buf[7] = (uint8) (val >> 56);
+if (sim_fwrite (buf, 1, sizeof (buf), fileref) != sizeof (buf))
+    return SCPE_IOERR;
+return SCPE_OK;
+}
+
+t_stat mikasa_save_rom (UNIT *uptr, int32 val, CONST char *cptr, void *desc)
+{
+FILE *fileref;
+t_uint64 pc;
+t_uint64 pa;
+t_stat r;
+
+if ((cptr == NULL) || (*cptr == 0))
+    return SCPE_ARG;
+if (!ADDR_IS_MEM (MIKASA_AXPBOX_ROM_MEMSIZE - 1))
+    return SCPE_NXM;
+
+fileref = sim_fopen (cptr, "wb");
+if (fileref == NULL)
+    return sim_messagef (SCPE_OPENERR,
+        "MIKASA: cannot open ROM output image %s\n", cptr);
+
+pc = (PC & ~((t_uint64) 3)) | (pc_align & 3);
+r = mikasa_write_le64 (fileref, pc);
+if (r == SCPE_OK)
+    r = mikasa_write_le64 (fileref, ev5_palbase);
+for (pa = 0; (r == SCPE_OK) && (pa < MIKASA_AXPBOX_ROM_MEMSIZE); pa++) {
+    uint8 byte = ReadPB (pa);
+
+    if (sim_fwrite (&byte, 1, 1, fileref) != 1)
+        r = SCPE_IOERR;
+    }
+fclose (fileref);
+if (r != SCPE_OK)
+    return r;
+
+sim_printf ("Saved Mikasa decompressed SRM ROM to %s: PC=%08llX "
+    "PALBASE=%08llX, %u bytes at 00000000\n",
+    cptr,
+    (unsigned long long) pc,
+    (unsigned long long) ev5_palbase,
+    MIKASA_AXPBOX_ROM_MEMSIZE);
+return SCPE_OK;
 }
 
 t_stat mikasa_boot_rom (int32 unitno)
@@ -2527,7 +2821,8 @@ switch (fnc) {
 
     case MPAL_RSCC:
         mikasa_pal_scc = mikasa_pal_scc +
-            ((pcc_l - mikasa_pal_last_pcc) & M32);
+            ((t_uint64) ((pcc_l - mikasa_pal_last_pcc) & M32) *
+             (t_uint64) (mikasa_scc_scale? mikasa_scc_scale: 1));
         mikasa_pal_last_pcc = pcc_l;
         R[0] = mikasa_pal_scc;
         break;
@@ -2671,5 +2966,13 @@ t_stat mikasa_reset (DEVICE *dptr)
 {
 mikasa_irq_mask = 0;
 mikasa_irq_summary = 0;
+mikasa_uart_lcr = 0;
+mikasa_uart_mcr = 0;
+mikasa_uart_ier = 0;
+mikasa_uart_scr = 0;
+mikasa_uart_dll = 0;
+mikasa_uart_dlm = 0;
+mikasa_uart_rbr = 0;
+mikasa_uart_rbr_valid = FALSE;
 return SCPE_OK;
 }

@@ -629,7 +629,10 @@ while (reason == 0) {
     case OP_STL_C:                                      /* STL_C */
         dsp = I_GETMDSP (ir);
         ea = (R[rb] + SEXT_MDSP (dsp)) & M64;
-        if (lock_flag) WriteL (ea, R[ra]);              /* unlocking? ok */
+        if (lock_flag) {                                /* unlocking? ok */
+            WriteL (ea, R[ra]);
+            if (ra != 31) R[ra] = 1;                    /* write succeeds */
+            }
         else R[ra] = 0;                                 /* write fails */
         lock_flag = 0;                                  /* clear lock */
         break;
@@ -637,7 +640,10 @@ while (reason == 0) {
     case OP_STQ_C:                                      /* STQ_C */
         dsp = I_GETMDSP (ir);
         ea = (R[rb] + SEXT_MDSP (dsp)) & M64;
-        if (lock_flag) WriteQ (ea, R[ra]);              /* unlocking? ok */
+        if (lock_flag) {                                /* unlocking? ok */
+            WriteQ (ea, R[ra]);
+            if (ra != 31) R[ra] = 1;                    /* write succeeds */
+            }
         else R[ra] = 0;                                 /* write fails */
         lock_flag = 0;                                  /* clear lock */
         break;
