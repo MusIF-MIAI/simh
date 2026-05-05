@@ -80,6 +80,45 @@ SET DKA0 OSFLAGS=1
 BOOT DKA0
 ```
 
+## Persistent Debug Console
+
+The debug config puts the SIMH remote console on a telnet socket. A small proxy
+keeps that telnet connection open, so local clients can connect, disconnect,
+inject commands, and reconnect without ending the SIMH-side session.
+
+SIMH remote master mode also requires the simulator console to be telnet or
+serial. `mikasa-fermi-debug.ini` therefore opens a buffered simulator console
+on `23232`; normal debugging uses the remote console on `23230` through the
+proxy on `23231`.
+
+Start the proxy first:
+
+```text
+python3 alpha/tools/simh-console-proxy.py --simh-port 23230 --listen-port 23231
+```
+
+Start SIMH with the debug config:
+
+```text
+BIN/alpha alpha/mikasa-fermi-debug.ini
+```
+
+Then connect to the stable raw proxy port:
+
+```text
+nc 127.0.0.1 23231
+```
+
+The remote console accepts single commands directly. For one-shot command
+injection:
+
+```text
+printf 'show cpu history\n' | nc 127.0.0.1 23231
+```
+
+Send Ctrl-E through the proxy to enter multi-command mode on the persistent
+remote connection.
+
 ## Next implementation steps
 
 1. Replace the minimal HWRPB with the exact SRM layout APB expects.
