@@ -24,6 +24,8 @@
 #include "alpha_ev5_defs.h"
 #include "sim_fio.h"
 
+#include <time.h>
+
 #define MIKASA_HWRPB_PA             0x00380000
 #define MIKASA_HWRPB_VA             0x10000000
 #define MIKASA_HWRPB_SIZE           0x8000
@@ -105,10 +107,28 @@
 #define MIKASA_AXPBOX_ROM_SIZE      (16 + MIKASA_AXPBOX_ROM_MEMSIZE)
 #define MIKASA_APECS_PCI_SIO        0x1C0000000ULL
 #define MIKASA_APECS_PCI_SIO_SIZE   0x02000000
+#define MIKASA_ISA_DMA1             0x000
+#define MIKASA_ISA_PIC1             0x020
+#define MIKASA_ISA_CFG_INDEX        0x022
+#define MIKASA_ISA_CFG_DATA         0x023
+#define MIKASA_ISA_PIT              0x040
+#define MIKASA_ISA_PORTB            0x061
+#define MIKASA_ISA_RTC_INDEX        0x070
+#define MIKASA_ISA_RTC_DATA         0x071
+#define MIKASA_ISA_PIC2             0x0A0
+#define MIKASA_ISA_COM2             0x2F8
+#define MIKASA_ISA_SIO_INDEX        0x398
+#define MIKASA_ISA_SIO_DATA         0x399
 #define MIKASA_ISA_COM1             0x3F8
+#define MIKASA_ISA_NMI_CTRL         0x461
 #define MIKASA_ISA_OCP              0x530
 #define MIKASA_ISA_ICU_IMR          0x536
 #define MIKASA_ISA_ICU_PRESENT      0x8000
+#define MIKASA_EISA_CRAM            0x0800
+#define MIKASA_EISA_CRAM_SIZE       0x0100
+#define MIKASA_EISA_CRAM_PAGES      32
+#define MIKASA_EISA_CRAM_PAGE_REG   0x0C00
+#define MIKASA_EISA_SLOT_ID         0x0C80
 #define MIKASA_OCP_READY            0x80
 
 #define MIKASA_UART_LSR_DR          0x01
@@ -120,6 +140,15 @@
 #define MIKASA_UART_MSR_CTS         0x10
 #define MIKASA_UART_MSR_DSR         0x20
 #define MIKASA_UART_MSR_DCD         0x80
+
+#define MIKASA_RTC_STATUSA          0x0A
+#define MIKASA_RTC_STATUSB          0x0B
+#define MIKASA_RTC_INTR            0x0C
+#define MIKASA_RTC_STATUSD          0x0D
+#define MIKASA_RTC_CENTURY          0x32
+#define MIKASA_RTC_BINARY           0x04
+#define MIKASA_RTC_24HR             0x02
+#define MIKASA_RTC_POWER_OK         0x80
 
 #define MIKASA_DBG_IO               0x0001
 #define MIKASA_DBG_UART             0x0002
@@ -374,6 +403,26 @@ static uint8 mikasa_uart_dll = 0;
 static uint8 mikasa_uart_dlm = 0;
 static uint8 mikasa_uart_rbr = 0;
 static t_bool mikasa_uart_rbr_valid = FALSE;
+static uint8 mikasa_com2_lcr = 0;
+static uint8 mikasa_com2_mcr = 0;
+static uint8 mikasa_com2_ier = 0;
+static uint8 mikasa_com2_scr = 0;
+static uint8 mikasa_com2_dll = 0;
+static uint8 mikasa_com2_dlm = 0;
+static uint8 mikasa_pic_cmd[2] = { 0 };
+static uint8 mikasa_pic_imr[2] = { 0xFF, 0xFF };
+static uint8 mikasa_cfg_index = 0;
+static uint8 mikasa_cfg_reg[256] = { 0 };
+static uint8 mikasa_pit_mode = 0;
+static uint8 mikasa_pit_reg[3] = { 0 };
+static uint8 mikasa_portb = 0;
+static uint8 mikasa_rtc_index = 0;
+static uint8 mikasa_rtc_reg[128] = { 0 };
+static uint8 mikasa_sio_index = 0;
+static uint8 mikasa_sio_reg[256] = { 0 };
+static uint8 mikasa_nmi_ctrl = 0;
+static uint8 mikasa_eisa_cram_page = 0;
+static uint8 mikasa_eisa_cram[MIKASA_EISA_CRAM_PAGES][MIKASA_EISA_CRAM_SIZE];
 static uint8 mikasa_ocp_reg[4] = { 0 };
 static uint32 mikasa_scc_scale = 1;
 
@@ -542,12 +591,266 @@ switch (reg) {
 return;
 }
 
+static uint8 mikasa_com2_read (uint32 port)
+{
+uint32 reg = port - MIKASA_ISA_COM2;
+
+switch (reg) {
+    case 0:
+        return (mikasa_com2_lcr & MIKASA_UART_LCR_DLAB) ?
+            mikasa_com2_dll : 0;
+
+    case 1:
+        return (mikasa_com2_lcr & MIKASA_UART_LCR_DLAB) ?
+            mikasa_com2_dlm : mikasa_com2_ier;
+
+    case 2:
+        return MIKASA_UART_IIR_NOPEND;
+
+    case 3:
+        return mikasa_com2_lcr;
+
+    case 4:
+        return mikasa_com2_mcr;
+
+    case 5:
+        return MIKASA_UART_LSR_THRE | MIKASA_UART_LSR_TEMT;
+
+    case 6:
+        return MIKASA_UART_MSR_CTS |
+            MIKASA_UART_MSR_DSR |
+            MIKASA_UART_MSR_DCD;
+
+    case 7:
+        return mikasa_com2_scr;
+
+    default:
+        return 0;
+        }
+}
+
+static void mikasa_com2_write (uint32 port, uint8 val)
+{
+uint32 reg = port - MIKASA_ISA_COM2;
+int32 c;
+
+switch (reg) {
+    case 0:
+        if (mikasa_com2_lcr & MIKASA_UART_LCR_DLAB)
+            mikasa_com2_dll = val;
+        else {
+            c = sim_tt_outcvt (val, TT_MODE_8B);
+            sim_debug (MIKASA_DBG_UART, &mikasa_dev,
+                "COM2 transmit %02X\n", val);
+            if (c >= 0)
+                (void) sim_putchar_s (c);
+            }
+        break;
+
+    case 1:
+        if (mikasa_com2_lcr & MIKASA_UART_LCR_DLAB)
+            mikasa_com2_dlm = val;
+        else
+            mikasa_com2_ier = val;
+        break;
+
+    case 3:
+        mikasa_com2_lcr = val;
+        break;
+
+    case 4:
+        mikasa_com2_mcr = val;
+        break;
+
+    case 7:
+        mikasa_com2_scr = val;
+        break;
+
+    default:
+        break;
+        }
+return;
+}
+
+static void mikasa_pic_update_mask (void)
+{
+mikasa_irq_mask = ((uint32) mikasa_pic_imr[0]) |
+    (((uint32) mikasa_pic_imr[1]) << 8);
+return;
+}
+
+static uint8 mikasa_pic_read (uint32 port)
+{
+uint32 which = (port >= MIKASA_ISA_PIC2) ? 1 : 0;
+
+if (port & 1)
+    return mikasa_pic_imr[which];
+return 0;
+}
+
+static void mikasa_pic_write (uint32 port, uint8 val)
+{
+uint32 which = (port >= MIKASA_ISA_PIC2) ? 1 : 0;
+
+if (port & 1) {
+    mikasa_pic_imr[which] = val;
+    mikasa_pic_update_mask ();
+    }
+else
+    mikasa_pic_cmd[which] = val;
+return;
+}
+
+static uint8 mikasa_rtc_encode (uint32 val)
+{
+if (mikasa_rtc_reg[MIKASA_RTC_STATUSB] & MIKASA_RTC_BINARY)
+    return (uint8) val;
+return (uint8) (((val / 10) << 4) | (val % 10));
+}
+
+static uint8 mikasa_rtc_read_data (void)
+{
+uint8 index = mikasa_rtc_index & 0x7F;
+time_t now;
+struct tm *tm;
+
+now = time (NULL);
+tm = localtime (&now);
+if (tm == NULL)
+    return mikasa_rtc_reg[index];
+
+switch (index) {
+    case 0x00:
+        return mikasa_rtc_encode ((uint32) tm->tm_sec);
+
+    case 0x02:
+        return mikasa_rtc_encode ((uint32) tm->tm_min);
+
+    case 0x04:
+        return mikasa_rtc_encode ((uint32) tm->tm_hour);
+
+    case 0x06:
+        return mikasa_rtc_encode ((uint32) (tm->tm_wday + 1));
+
+    case 0x07:
+        return mikasa_rtc_encode ((uint32) tm->tm_mday);
+
+    case 0x08:
+        return mikasa_rtc_encode ((uint32) (tm->tm_mon + 1));
+
+    case 0x09:
+        return mikasa_rtc_encode ((uint32) (tm->tm_year % 100));
+
+    case MIKASA_RTC_STATUSA:
+        return (mikasa_rtc_reg[index] & 0x7F) | 0x20;
+
+    case MIKASA_RTC_INTR:
+        mikasa_rtc_reg[index] = 0;
+        return 0;
+
+    case MIKASA_RTC_STATUSD:
+        return MIKASA_RTC_POWER_OK;
+
+    case MIKASA_RTC_CENTURY:
+        return mikasa_rtc_encode ((uint32) ((tm->tm_year + 1900) / 100));
+
+    default:
+        return mikasa_rtc_reg[index];
+        }
+}
+
+static void mikasa_rtc_write_data (uint8 val)
+{
+uint8 index = mikasa_rtc_index & 0x7F;
+
+if ((index != MIKASA_RTC_INTR) && (index != MIKASA_RTC_STATUSD))
+    mikasa_rtc_reg[index] = val;
+return;
+}
+
+static uint8 mikasa_pit_read (uint32 port)
+{
+if (port == (MIKASA_ISA_PIT + 3))
+    return mikasa_pit_mode;
+return mikasa_pit_reg[port - MIKASA_ISA_PIT];
+}
+
+static void mikasa_pit_write (uint32 port, uint8 val)
+{
+if (port == (MIKASA_ISA_PIT + 3))
+    mikasa_pit_mode = val;
+else
+    mikasa_pit_reg[port - MIKASA_ISA_PIT] = val;
+return;
+}
+
+static t_bool mikasa_eisa_slot_id_port (uint32 port)
+{
+return ((port & 0x0FFF) >= MIKASA_EISA_SLOT_ID) &&
+    ((port & 0x0FFF) < (MIKASA_EISA_SLOT_ID + 4));
+}
+
+static uint8 mikasa_eisa_read (uint32 port)
+{
+if ((port >= MIKASA_EISA_CRAM) &&
+    (port < (MIKASA_EISA_CRAM + MIKASA_EISA_CRAM_SIZE)))
+    return mikasa_eisa_cram[mikasa_eisa_cram_page &
+        (MIKASA_EISA_CRAM_PAGES - 1)][port - MIKASA_EISA_CRAM];
+if (port == MIKASA_EISA_CRAM_PAGE_REG)
+    return mikasa_eisa_cram_page;
+if (mikasa_eisa_slot_id_port (port))
+    return 0xFF;
+return 0;
+}
+
+static t_bool mikasa_eisa_write (uint32 port, uint8 val)
+{
+if ((port >= MIKASA_EISA_CRAM) &&
+    (port < (MIKASA_EISA_CRAM + MIKASA_EISA_CRAM_SIZE))) {
+    mikasa_eisa_cram[mikasa_eisa_cram_page &
+        (MIKASA_EISA_CRAM_PAGES - 1)][port - MIKASA_EISA_CRAM] = val;
+    return TRUE;
+    }
+if (port == MIKASA_EISA_CRAM_PAGE_REG) {
+    mikasa_eisa_cram_page = val & (MIKASA_EISA_CRAM_PAGES - 1);
+    return TRUE;
+    }
+if (mikasa_eisa_slot_id_port (port))
+    return TRUE;
+return FALSE;
+}
+
 static uint8 mikasa_isa_read (uint32 port)
 {
 uint32 icu = mikasa_irq_mask | MIKASA_ISA_ICU_PRESENT;
 
+if ((port >= MIKASA_ISA_DMA1) && (port < (MIKASA_ISA_DMA1 + 0x10)))
+    return 0;
+if ((port == MIKASA_ISA_PIC1) || (port == (MIKASA_ISA_PIC1 + 1)) ||
+    (port == MIKASA_ISA_PIC2) || (port == (MIKASA_ISA_PIC2 + 1)))
+    return mikasa_pic_read (port);
+if (port == MIKASA_ISA_CFG_INDEX)
+    return mikasa_cfg_index;
+if (port == MIKASA_ISA_CFG_DATA)
+    return mikasa_cfg_reg[mikasa_cfg_index];
+if ((port >= MIKASA_ISA_PIT) && (port < (MIKASA_ISA_PIT + 4)))
+    return mikasa_pit_read (port);
+if (port == MIKASA_ISA_PORTB)
+    return mikasa_portb;
+if (port == MIKASA_ISA_RTC_INDEX)
+    return mikasa_rtc_index;
+if (port == MIKASA_ISA_RTC_DATA)
+    return mikasa_rtc_read_data ();
+if ((port >= MIKASA_ISA_COM2) && (port < (MIKASA_ISA_COM2 + 8)))
+    return mikasa_com2_read (port);
+if (port == MIKASA_ISA_SIO_INDEX)
+    return mikasa_sio_index;
+if (port == MIKASA_ISA_SIO_DATA)
+    return mikasa_sio_reg[mikasa_sio_index];
 if ((port >= MIKASA_ISA_COM1) && (port < (MIKASA_ISA_COM1 + 8)))
     return mikasa_uart_read (port);
+if (port == MIKASA_ISA_NMI_CTRL)
+    return mikasa_nmi_ctrl;
 if ((port >= MIKASA_ISA_OCP) && (port < (MIKASA_ISA_OCP + 4))) {
     uint32 reg = port - MIKASA_ISA_OCP;
 
@@ -557,24 +860,82 @@ if ((port >= MIKASA_ISA_OCP) && (port < (MIKASA_ISA_OCP + 4))) {
     }
 if ((port == MIKASA_ISA_ICU_IMR) || (port == (MIKASA_ISA_ICU_IMR + 1)))
     return (uint8) (icu >> ((port - MIKASA_ISA_ICU_IMR) << 3));
+if ((port == MIKASA_EISA_CRAM_PAGE_REG) ||
+    ((port >= MIKASA_EISA_CRAM) &&
+     (port < (MIKASA_EISA_CRAM + MIKASA_EISA_CRAM_SIZE))) ||
+    mikasa_eisa_slot_id_port (port))
+    return mikasa_eisa_read (port);
 sim_debug (MIKASA_DBG_IO, &mikasa_dev, "unhandled ISA read %03X\n", port);
 return 0;
 }
 
 static void mikasa_isa_write (uint32 port, uint8 val)
 {
+if ((port >= MIKASA_ISA_DMA1) && (port < (MIKASA_ISA_DMA1 + 0x10)))
+    return;
+if ((port == MIKASA_ISA_PIC1) || (port == (MIKASA_ISA_PIC1 + 1)) ||
+    (port == MIKASA_ISA_PIC2) || (port == (MIKASA_ISA_PIC2 + 1))) {
+    mikasa_pic_write (port, val);
+    return;
+    }
+if (port == MIKASA_ISA_CFG_INDEX) {
+    mikasa_cfg_index = val;
+    return;
+    }
+if (port == MIKASA_ISA_CFG_DATA) {
+    mikasa_cfg_reg[mikasa_cfg_index] = val;
+    return;
+    }
+if ((port >= MIKASA_ISA_PIT) && (port < (MIKASA_ISA_PIT + 4))) {
+    mikasa_pit_write (port, val);
+    return;
+    }
+if (port == MIKASA_ISA_PORTB) {
+    mikasa_portb = val;
+    return;
+    }
+if (port == MIKASA_ISA_RTC_INDEX) {
+    mikasa_rtc_index = val;
+    return;
+    }
+if (port == MIKASA_ISA_RTC_DATA) {
+    mikasa_rtc_write_data (val);
+    return;
+    }
+if ((port >= MIKASA_ISA_COM2) && (port < (MIKASA_ISA_COM2 + 8))) {
+    mikasa_com2_write (port, val);
+    return;
+    }
+if (port == MIKASA_ISA_SIO_INDEX) {
+    mikasa_sio_index = val;
+    return;
+    }
+if (port == MIKASA_ISA_SIO_DATA) {
+    mikasa_sio_reg[mikasa_sio_index] = val;
+    return;
+    }
 if ((port >= MIKASA_ISA_COM1) && (port < (MIKASA_ISA_COM1 + 8))) {
     mikasa_uart_write (port, val);
+    return;
+    }
+if (port == MIKASA_ISA_NMI_CTRL) {
+    mikasa_nmi_ctrl = val;
     return;
     }
 if ((port >= MIKASA_ISA_OCP) && (port < (MIKASA_ISA_OCP + 4))) {
     mikasa_ocp_reg[port - MIKASA_ISA_OCP] = val;
     return;
     }
-if (port == MIKASA_ISA_ICU_IMR)
-    mikasa_irq_mask = (mikasa_irq_mask & 0xFF00) | val;
-else if (port == (MIKASA_ISA_ICU_IMR + 1))
-    mikasa_irq_mask = (mikasa_irq_mask & 0x00FF) | (((uint32) val) << 8);
+if (port == MIKASA_ISA_ICU_IMR) {
+    mikasa_pic_imr[0] = val;
+    mikasa_pic_update_mask ();
+    }
+else if (port == (MIKASA_ISA_ICU_IMR + 1)) {
+    mikasa_pic_imr[1] = val;
+    mikasa_pic_update_mask ();
+    }
+else if (mikasa_eisa_write (port, val))
+    return;
 else
     sim_debug (MIKASA_DBG_IO, &mikasa_dev,
         "unhandled ISA write %03X=%02X\n", port, val);
@@ -3003,6 +3364,30 @@ mikasa_uart_dll = 0;
 mikasa_uart_dlm = 0;
 mikasa_uart_rbr = 0;
 mikasa_uart_rbr_valid = FALSE;
+mikasa_com2_lcr = 0;
+mikasa_com2_mcr = 0;
+mikasa_com2_ier = 0;
+mikasa_com2_scr = 0;
+mikasa_com2_dll = 0;
+mikasa_com2_dlm = 0;
+mikasa_pic_cmd[0] = 0;
+mikasa_pic_cmd[1] = 0;
+mikasa_pic_imr[0] = 0;
+mikasa_pic_imr[1] = 0;
+mikasa_cfg_index = 0;
+memset (mikasa_cfg_reg, 0, sizeof (mikasa_cfg_reg));
+mikasa_pit_mode = 0;
+memset (mikasa_pit_reg, 0, sizeof (mikasa_pit_reg));
+mikasa_portb = 0;
+mikasa_rtc_index = 0;
+memset (mikasa_rtc_reg, 0, sizeof (mikasa_rtc_reg));
+mikasa_rtc_reg[MIKASA_RTC_STATUSA] = 0x26;
+mikasa_rtc_reg[MIKASA_RTC_STATUSB] = MIKASA_RTC_24HR;
+mikasa_sio_index = 0;
+memset (mikasa_sio_reg, 0, sizeof (mikasa_sio_reg));
+mikasa_nmi_ctrl = 0;
+mikasa_eisa_cram_page = 0;
+memset (mikasa_eisa_cram, 0xFF, sizeof (mikasa_eisa_cram));
 memset (mikasa_ocp_reg, 0, sizeof (mikasa_ocp_reg));
 return SCPE_OK;
 }
