@@ -167,6 +167,7 @@ uint32 pcc_h = 0;                                       /* rpcc low */
 uint32 pcc_enb = 0;
 uint32 arch_mask = AMASK_BWX | AMASK_PRC;               /* arch mask */
 uint32 impl_ver = IMPLV_EV5;                            /* impl version */
+uint32 cpu_model = ALPHA_MODEL_500AU;                   /* system model */
 uint32 lock_flag = 0;                                   /* load lock flag */
 uint32 vax_flag = 0;                                    /* vax intr flag */
 uint32 intr_summ = 0;                                   /* interrupt summary */
@@ -205,7 +206,9 @@ t_stat cpu_boot (int32 unitno, DEVICE *dptr);
 t_stat cpu_ex (t_value *vptr, t_addr exta, UNIT *uptr, int32 sw);
 t_stat cpu_dep (t_value val, t_addr exta, UNIT *uptr, int32 sw);
 t_stat cpu_set_size (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
+t_stat cpu_set_model (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat cpu_set_hist (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
+t_stat cpu_show_model (FILE *st, UNIT *uptr, int32 val, CONST void *desc);
 t_stat cpu_show_hist (FILE *st, UNIT *uptr, int32 val, CONST void *desc);
 t_stat cpu_show_virt (FILE *of, UNIT *uptr, int32 val, CONST void *desc);
 t_stat cpu_fprint_one_inst (FILE *st, uint32 ir, t_uint64 pc, t_uint64 ra, t_uint64 rb);
@@ -322,6 +325,7 @@ REG cpu_reg[] = {
     { FLDATA (PALMODE, pal_mode, 0) },
     { HRDATA (PALTYPE, pal_type, 2), REG_HRO },
     { FLDATA (DMAPEN, dmapen, 0) },
+    { DRDATA (MODEL, cpu_model, 8), REG_HRO },
     { HRDATA (AMASK, arch_mask, 13), REG_RO },
     { HRDATA (IMPLV, impl_ver, 2), REG_RO },
     { BRDATA (PCQ, pcq, 16, 32, PCQ_SIZE), REG_RO+REG_CIRC },
@@ -331,13 +335,22 @@ REG cpu_reg[] = {
     };
 
 MTAB cpu_mod[] = {
+    { MTAB_XTD|MTAB_VDV, ALPHA_MODEL_500AU, NULL, "500AU",
+      &cpu_set_model, NULL, NULL, "Set CPU model to AlphaStation 500au" },
+    { MTAB_XTD|MTAB_VDV, ALPHA_MODEL_MIKASA_4_266, NULL, "MIKASA",
+      &cpu_set_model, NULL, NULL, "Set CPU model to AlphaServer 1000 4/266 Mikasa" },
+    { MTAB_XTD|MTAB_VDV, ALPHA_MODEL_MIKASA_4_266, NULL, "MIKASA-4/266",
+      &cpu_set_model, NULL, NULL, "Set CPU model to AlphaServer 1000 4/266 Mikasa" },
     { UNIT_MSIZE, (1u << 25), NULL, "32M", &cpu_set_size },
     { UNIT_MSIZE, (1u << 26), NULL, "64M", &cpu_set_size },
     { UNIT_MSIZE, (1u << 27), NULL, "128M", &cpu_set_size },
     { UNIT_MSIZE, (1u << 28), NULL, "256M", &cpu_set_size },
     { UNIT_MSIZE, (1u << 29), NULL, "512M", &cpu_set_size },
+    { UNIT_MSIZE, (1u << 30), NULL, "1G", &cpu_set_size },
     { UNIT_CONH, 0, "HALT to SIMH", "SIMHALT", NULL },
     { UNIT_CONH, UNIT_CONH, "HALT to console", "CONHALT", NULL },
+    { MTAB_XTD|MTAB_VDV|MTAB_NMO|MTAB_SHP, 0, "MODEL", NULL,
+      NULL, &cpu_show_model },
     { MTAB_XTD|MTAB_VDV|MTAB_NMO|MTAB_SHP, 0, "VIRTUAL", NULL,
       NULL, &cpu_show_virt },
     { MTAB_XTD|MTAB_VDV|MTAB_NMO|MTAB_SHP, 0, "ITLB", NULL,
@@ -1671,6 +1684,49 @@ return SCPE_OK;
 t_stat cpu_boot (int32 unitno, DEVICE *dptr)
 {
 return SCPE_ARG;
+}
+
+/* CPU model */
+
+t_stat cpu_set_model (UNIT *uptr, int32 val, CONST char *cptr, void *desc)
+{
+switch (val) {
+
+    case ALPHA_MODEL_500AU:
+        cpu_model = ALPHA_MODEL_500AU;
+        impl_ver = IMPLV_EV5;
+        arch_mask = AMASK_BWX | AMASK_PRC;
+        break;
+
+    case ALPHA_MODEL_MIKASA_4_266:
+        cpu_model = ALPHA_MODEL_MIKASA_4_266;
+        impl_ver = IMPLV_EV4;
+        arch_mask = 0;
+        break;
+
+    default:
+        return SCPE_ARG;
+        }
+return SCPE_OK;
+}
+
+t_stat cpu_show_model (FILE *st, UNIT *uptr, int32 val, CONST void *desc)
+{
+switch (cpu_model) {
+
+    case ALPHA_MODEL_500AU:
+        fprintf (st, "AlphaStation 500au (EV5/21164 profile)");
+        break;
+
+    case ALPHA_MODEL_MIKASA_4_266:
+        fprintf (st, "AlphaServer 1000 4/266 Mikasa (EV45/21064A profile)");
+        break;
+
+    default:
+        fprintf (st, "unknown Alpha model %u", cpu_model);
+        break;
+        }
+return SCPE_OK;
 }
 
 /* Memory examine */

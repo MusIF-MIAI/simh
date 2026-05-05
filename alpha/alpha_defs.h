@@ -57,6 +57,7 @@
 #define STOP_KSNV       4                               /* kernel stk inval */
 #define STOP_INVABO     5                               /* invalid abort code */
 #define STOP_MME        6                               /* console mem mgt error */
+#define STOP_BUGCHK     7                               /* VMS/APB bugcheck PAL */
 
 /* Bit patterns */
 
@@ -83,6 +84,9 @@
 #define IMPLV_EV5       0x1                             /* EV5 (21164) */
 #define IMPLV_EV6       0x2                             /* EV6 (21264) */
 #define IMPLV_EV7       0x3                             /* EV7 (21364) */
+
+#define ALPHA_MODEL_500AU           0
+#define ALPHA_MODEL_MIKASA_4_266    1
 
 /* Instruction formats */
 

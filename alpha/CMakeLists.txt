@@ -18,12 +18,14 @@ add_simulator(alpha
     SOURCES
         alpha_500au_syslist.c
         alpha_cpu.c
+        alpha_dka.c
         alpha_ev5_cons.c
         alpha_ev5_pal.c
         alpha_ev5_tlb.c
         alpha_fpi.c
         alpha_fpv.c
         alpha_io.c
+        alpha_mikasa.c
         alpha_mmu.c
         alpha_sys.c
     INCLUDES

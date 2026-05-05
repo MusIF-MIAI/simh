@@ -2220,10 +2220,11 @@ CDC1700_OPT = -I ${CDC1700D}
 
 ALPHAD = ${SIMHD}/alpha
 ALPHA = ${ALPHAD}/alpha_500au_syslist.c ${ALPHAD}/alpha_cpu.c \
+    ${ALPHAD}/alpha_dka.c \
     ${ALPHAD}/alpha_ev5_cons.c ${ALPHAD}/alpha_ev5_pal.c \
     ${ALPHAD}/alpha_ev5_tlb.c ${ALPHAD}/alpha_fpi.c \
     ${ALPHAD}/alpha_fpv.c ${ALPHAD}/alpha_io.c \
-    ${ALPHAD}/alpha_mmu.c ${ALPHAD}/alpha_sys.c
+    ${ALPHAD}/alpha_mikasa.c ${ALPHAD}/alpha_mmu.c ${ALPHAD}/alpha_sys.c
 ALPHA_OPT = -I ${ALPHAD} -DUSE_ADDR64 -DUSE_INT64
 
 SAGED = ${SIMHD}/SAGE

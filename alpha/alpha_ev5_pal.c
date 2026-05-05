@@ -106,6 +106,7 @@ extern uint32 pcc_h, pcc_l, pcc_enb;
 extern uint32 trap_summ;
 extern uint32 arch_mask;
 extern uint32 pal_mode, pal_type;
+extern uint32 cpu_model;
 extern uint32 int_req[IPL_HLVL];
 extern uint32 itlb_cm, dtlb_cm;
 extern uint32 itlb_asn, dtlb_asn;
@@ -116,6 +117,7 @@ extern t_uint64 pcq[PCQ_SIZE];                          /* PC queue */
 extern int32 pcq_p;                                     /* PC queue ptr */
 
 extern int32 parse_reg (const char *cptr);
+extern t_stat mikasa_pal_proc_inst (uint32 fnc);
 
 /* EV5PAL data structures
 
@@ -270,6 +272,8 @@ t_stat pal_proc_inst (uint32 fnc)
 {
 uint32 off = (fnc & 0x3F) << 6;
 
+if (cpu_model == ALPHA_MODEL_MIKASA_4_266)
+    return mikasa_pal_proc_inst (fnc);
 if (fnc & 0x80) return ev5_palent (PC, PALO_CALLUNPR + off);
 if (itlb_cm != MODE_K) ABORT (EXC_RSVI);
 return ev5_palent (PC, PALO_CALLPR + off);

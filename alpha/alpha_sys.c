@@ -60,7 +60,8 @@ const char *sim_stop_messages[SCPE_BASE] = {
     "Unsupported PAL variation",
     "Kernel stack not valid",
     "Unknown abort code",
-    "Memory management error"
+    "Memory management error",
+    "VMS/APB bugcheck"
     };
 
 /* Binary loader

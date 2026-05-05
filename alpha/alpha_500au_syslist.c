@@ -30,6 +30,11 @@ extern DEVICE cpu_dev;
 extern DEVICE tlb_dev;
 extern DEVICE ev5pal_dev;
 extern DEVICE rom_dev;
+extern DEVICE mikasa_dev;
+extern DEVICE dka0_dev;
+extern DEVICE dka100_dev;
+extern DEVICE dka200_dev;
+extern DEVICE dka300_dev;
 
 /* SCP data structures and interface routines
 
@@ -43,7 +48,12 @@ DEVICE *sim_devices[] = {
     &cpu_dev,
     &tlb_dev,
     &ev5pal_dev,
+    &mikasa_dev,
     &rom_dev,
+    &dka0_dev,
+    &dka100_dev,
+    &dka200_dev,
+    &dka300_dev,
     NULL
     };
 
