@@ -53,11 +53,14 @@ VMS/APB bugcheck, PC: 2000B2F0 (LDL R25,0(R3))
 
 The APB reaches this after passing its first HWRPB platform checks and after
 using the bootstrap virtual mapping. The current failure is still before CRB
-callbacks: `CALLBACKS`, `GETENVS`, `IOREADS`, and `IOWRITES` remain zero. The
-latest trace shows APB returning status `0x124` while allocating/mapping a
-bootstrap page-table page around the `0x40000000` boot page-table window. The
-next missing piece is therefore the precise SRM boot memory/page-table context,
-not SCSI I/O yet.
+callbacks: `CALLBACKS`, `GETENVS`, `IOREADS`, and `IOWRITES` remain zero.
+
+Earlier traces stopped with `R0=0x124` (`SS$_INSFMEM`) while manipulating the
+`0x40000000` boot page-table window. The current trace has advanced to
+`R0=0x14` (`SS$_BADPARAM`): APB reads a descriptor/PTE status at
+`0x200649D0`, sees low bit clear, and returns through the same bugcheck
+wrapper. The next missing piece is therefore still the precise SRM boot
+memory/page-table context, not SCSI I/O yet.
 
 ## Fisica dump quick start
 
@@ -142,13 +145,39 @@ When disassembling the APB, remember that SIMH `EX -M` takes physical
 addresses. APB virtual `0x200030A0` is physical `0x002030A0`, not
 `0x200030A0`.
 
+## SRM Firmware Images
+
+The downloaded AlphaServer 1000 firmware set is outside this repository:
+
+```text
+../firmware/as1000/
+```
+
+For the recovered AlphaServer 1000 4/266, the SRM candidate is:
+
+```text
+../firmware/as1000/mksrmrom.exe  DEC/MIKASA/SRM v5.4-101
+```
+
+`alpha/tools/extract-axpbox-srm-rom.py` can parse DEC LFU ROM headers and can
+drive AXPbox's ES40 self-decompression path. This is useful for the known ES40
+ROM format:
+
+```text
+alpha/tools/extract-axpbox-srm-rom.py ../axpbox/cl67srmrom.exe /tmp/cl67.decompressed.rom
+```
+
+The same AXPbox EV68 path does not currently complete for `mksrmrom.exe`; with
+debug tracing, the PC cycles inside the ROM decompressor around `0x900301` and
+`0x902009`. The tool intentionally rejects chunk-limited output so partial
+`decompressed.rom` files are not mistaken for usable SRM images.
+
 ## Next implementation steps
 
-1. Reconstruct the exact SRM boot memory/page-table context.
-   The present blocker is APB status `0x124` in its bootstrap allocator, before
-   any callback. Focus on HWRPB processor slot `PTBR`/`PT_VA`, the MDDT
-   cluster layout, and the APB page-table descriptor around physical
-   `0x00258E24`.
+1. Reconstruct the remaining SRM boot memory/page-table context.
+   Keep checking HWRPB VPTB/processor-slot `PTBR`/`PT_VA`, the MDDT cluster
+   layout, and the APB page-table descriptors around physical `0x00258E24` and
+   `0x002649D0`.
 
 2. Tighten the remaining HWRPB/SRM fields.
    CTB/CRB and callback descriptors exist, but PAL revision fields, DSR data,

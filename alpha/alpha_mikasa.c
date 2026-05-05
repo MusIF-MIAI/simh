@@ -60,16 +60,16 @@
 #define MIKASA_PT_SPACE_PA          0x00400000
 #define MIKASA_PT_SPACE_SIZE        0x00800000
 #define MIKASA_L1_PT_PA             MIKASA_PT_SPACE_PA
+#define MIKASA_L2_PT_OFF            0x00002000
 #define MIKASA_L3_REGION0_OFF       0x00040000
 #define MIKASA_L3_REGION1_OFF       0x00080000
-#define MIKASA_L3_PTSPACE_OFF       0x000C0000
-#define MIKASA_L2_PT_OFF            0x00100000
+#define MIKASA_L3_PTSPACE_OFF       0x00100000
 #define MIKASA_L3_REGION0_PA        (MIKASA_PT_SPACE_PA + MIKASA_L3_REGION0_OFF)
 #define MIKASA_L3_REGION1_PA        (MIKASA_PT_SPACE_PA + MIKASA_L3_REGION1_OFF)
 #define MIKASA_L3_PTSPACE_PA        (MIKASA_PT_SPACE_PA + MIKASA_L3_PTSPACE_OFF)
 #define MIKASA_L2_PT_PA             (MIKASA_PT_SPACE_PA + MIKASA_L2_PT_OFF)
 #define MIKASA_TLB_SPAN             0x00400000
-#define MIKASA_BOOT_PT_RESERVED_END (MIKASA_L2_PT_PA + MIKASA_PAGE_SIZE)
+#define MIKASA_BOOT_PT_RESERVED_END (MIKASA_PT_SPACE_PA + MIKASA_PT_SPACE_SIZE)
 
 #define HWRPB_ID                    0x0000004250525748ULL
 #define HWRPB_CHECKSUM_OFF          0x120
@@ -259,18 +259,11 @@ return sum;
 static t_uint64 mikasa_fill_bitmap (t_uint64 bitmap_pa, t_uint64 bits)
 {
 t_uint64 qwords = (bits + 63) >> 6;
-t_uint64 sum = 0;
 t_uint64 i;
 
-for (i = 0; i < qwords; i++) {
-    t_uint64 q = M64;
-
-    if ((i == (qwords - 1)) && (bits & 63))
-        q = (((t_uint64) 1) << (bits & 63)) - 1;
-    WritePQ (bitmap_pa + (i << 3), q);
-    sum = sum + q;
-    }
-return sum;
+for (i = 0; i < qwords; i++)
+    WritePQ (bitmap_pa + (i << 3), 0);
+return 0;
 }
 
 static t_uint64 mikasa_hwrpb_va_for_pa (t_uint64 pa)
@@ -1173,6 +1166,7 @@ WritePQ (hwrpb_pa + 0x058, 0);                         /* variation */
 WritePQ (hwrpb_pa + 0x060, 0);                         /* revision */
 WritePQ (hwrpb_pa + 0x068, 1024 * 4096);               /* interval freq */
 WritePQ (hwrpb_pa + 0x070, 266000000);                 /* cycle counter */
+WritePQ (hwrpb_pa + 0x078, MIKASA_PT_SPACE_VA);        /* VPTB */
 WritePQ (hwrpb_pa + 0x090, 1);                         /* processors */
 WritePQ (hwrpb_pa + 0x098, MIKASA_PROCESSOR_SIZE);
 WritePQ (hwrpb_pa + 0x0A0, MIKASA_PROCESSOR_OFF);
