@@ -253,9 +253,11 @@ do {
     if ((itlb_asn == itlb[p].asn) && 
         (((vpn ^ itlb[p].tag) &
          ~((uint32) itlb[p].gh_mask)) == 0)) {          /* match to TLB? */
+        uint32 delta = (vpn - itlb[p].tag) & itlb[p].gh_mask;
         i_mini_tlb.tag = vpn;
         i_mini_tlb.pte = itlb[p].pte;
-        i_mini_tlb.pfn = itlb[p].pfn;
+        i_mini_tlb.pfn = itlb[p].pfn + delta;
+        i_mini_tlb.gh_mask = 0;
         itlb_nlu = itlb[p].idx + 1;
         if (itlb_nlu >= ITLB_SIZE) itlb_nlu = 0;
         return &i_mini_tlb;
@@ -281,9 +283,11 @@ do {
     if ((dtlb_asn == dtlb[p].asn) && 
         (((vpn ^ dtlb[p].tag) &
          ~((uint32) dtlb[p].gh_mask)) == 0)) {          /* match to TLB? */
+        uint32 delta = (vpn - dtlb[p].tag) & dtlb[p].gh_mask;
         d_mini_tlb.tag = vpn;
         d_mini_tlb.pte = dtlb[p].pte;
-        d_mini_tlb.pfn = dtlb[p].pfn;
+        d_mini_tlb.pfn = dtlb[p].pfn + delta;
+        d_mini_tlb.gh_mask = 0;
         dtlb_nlu = dtlb[p].idx + 1;
         if (dtlb_nlu >= DTLB_SIZE) dtlb_nlu = 0;
         return &d_mini_tlb;
@@ -309,7 +313,7 @@ for (i = 0; i < ITLB_SIZE; i++) {
         itlb_nlu = itlb_nlu + 1;
         if (itlb_nlu >= ITLB_SIZE) itlb_nlu = 0;
         tlbp->tag = vpn;
-        tlbp->pte = (uint32) (l3pte & PTE_MASK) ^ (PTE_FOR|PTE_FOR|PTE_FOE);
+        tlbp->pte = (uint32) (l3pte & PTE_MASK) ^ (PTE_FOR|PTE_FOW|PTE_FOE);
         tlbp->pfn = ((uint32) (l3pte >> PTE_V_PFN)) & PFN_MASK;
         tlbp->asn = itlb_asn;
         gh = PTE_GETGH (tlbp->pte);
@@ -332,9 +336,9 @@ for (i = 0; i < DTLB_SIZE; i++) {
     if (dtlb[i].idx == dtlb_nlu) {
         TLBENT *tlbp = dtlb + i;
         dtlb_nlu = dtlb_nlu + 1;
-        if (dtlb_nlu >= ITLB_SIZE) dtlb_nlu = 0;
+        if (dtlb_nlu >= DTLB_SIZE) dtlb_nlu = 0;
         tlbp->tag = vpn;
-        tlbp->pte = (uint32) (l3pte & PTE_MASK) ^ (PTE_FOR|PTE_FOR|PTE_FOE);
+        tlbp->pte = (uint32) (l3pte & PTE_MASK) ^ (PTE_FOR|PTE_FOW|PTE_FOE);
         tlbp->pfn = ((uint32) (l3pte >> PTE_V_PFN)) & PFN_MASK;
         tlbp->asn = dtlb_asn;
         gh = PTE_GETGH (tlbp->pte);
@@ -361,7 +365,7 @@ for (i = 0; i < ITLB_SIZE; i++) {
         itlb_nlu = itlb_nlu + 1;
         if (itlb_nlu >= ITLB_SIZE) itlb_nlu = 0;
         return (((t_uint64) tlbp->pfn) << PTE_V_PFN) |
-            ((tlbp->pte ^ (PTE_FOR|PTE_FOR|PTE_FOE)) & PTE_MASK);
+            ((tlbp->pte ^ (PTE_FOR|PTE_FOW|PTE_FOE)) & PTE_MASK);
         }
     }
 fprintf (stderr, "%%ITLB entry not found, itlb_nlu = %d\n", itlb_nlu);
@@ -379,7 +383,7 @@ for (i = 0; i < DTLB_SIZE; i++) {
         dtlb_nlu = dtlb_nlu + 1;
         if (dtlb_nlu >= DTLB_SIZE) dtlb_nlu = 0;
         return (((t_uint64) tlbp->pfn) << PTE_V_PFN) |
-            ((tlbp->pte ^ (PTE_FOR|PTE_FOR|PTE_FOE)) & PTE_MASK);
+            ((tlbp->pte ^ (PTE_FOR|PTE_FOW|PTE_FOE)) & PTE_MASK);
         }
     }
 fprintf (stderr, "%%DTLB entry not found, dtlb_nlu = %d\n", dtlb_nlu);

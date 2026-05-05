@@ -19,8 +19,14 @@ Implemented:
   - `DKA300`
 - OpenVMS Alpha APB loader:
   - Reads LBN/count from the primary boot block offsets used by the dump.
-  - Loads the primary bootstrap at physical `0x20000000`.
-  - Builds a minimal HWRPB at physical `0x10000000`.
+  - Loads the primary bootstrap at physical `0x00200000`.
+  - Enters it at virtual `0x20000000`, matching `EXE$K_PRIMBOOT`.
+  - Builds a minimal HWRPB at physical `0x00002000`, visible at virtual
+    `0x10000000`, matching `EXE$K_HWRPB`.
+  - Builds bootstrap page tables and preloads EV5 ITB/DTB entries for HWRPB,
+    APB, and the bootstrap page-table window.
+  - Exposes CTB/CRB console callback descriptors and generic callback handlers
+    for environment variables and DKA-backed open/read/write services.
   - Passes APB flags in `R5`.
   - Passes HWRPB physical address in `R16`.
 
@@ -28,9 +34,9 @@ Not implemented yet:
 
 - Real Mikasa 21071/CIA PCI host bridge behavior.
 - NCR/Symbios 53C810 PCI SCSI DMA engine.
-- SRM console callbacks used by OpenVMS after APB starts.
-- Full console terminal block/CRB in HWRPB.
 - Network, VGA, NVRAM, and multiprocessor support.
+- A complete SRM-compatible boot context. The callback path is present but the
+  recovered APB does not reach it yet.
 
 So this is not yet a complete OpenVMS boot. It is a controlled first point:
 SIMH can identify the machine profile, attach all four recovered disks, load the
@@ -40,14 +46,18 @@ state instead of a DS10/ES40 state.
 Current verified stop:
 
 ```text
-Loaded OpenVMS Alpha APB from DKA0: LBN 4455271, 1049 blocks, 537088 bytes at 20000000
+Loaded OpenVMS Alpha APB from DKA0: LBN 4455271, 1049 blocks, 537088 bytes at 00200000
 
 VMS/APB bugcheck, PC: 2000B2F0 (LDL R25,0(R3))
 ```
 
-The APB reaches this after passing its first HWRPB platform checks. The next
-missing piece is the firmware callback path that APB uses for console/disk
-services, followed by real 53C810 SCSI once OpenVMS takes over.
+The APB reaches this after passing its first HWRPB platform checks and after
+using the bootstrap virtual mapping. The current failure is still before CRB
+callbacks: `CALLBACKS`, `GETENVS`, `IOREADS`, and `IOWRITES` remain zero. The
+latest trace shows APB returning status `0x124` while allocating/mapping a
+bootstrap page-table page around the `0x40000000` boot page-table window. The
+next missing piece is therefore the precise SRM boot memory/page-table context,
+not SCSI I/O yet.
 
 ## Fisica dump quick start
 
@@ -78,6 +88,15 @@ For conversational OpenVMS boot, set APB bit 0 before booting:
 ```text
 SET DKA0 OSFLAGS=1
 BOOT DKA0
+```
+
+Useful status counters after a boot attempt:
+
+```text
+EX MIKASA CALLBACKS
+EX MIKASA GETENVS
+EX MIKASA IOREADS
+EX MIKASA IOWRITES
 ```
 
 ## Persistent Debug Console
@@ -119,28 +138,35 @@ printf 'show cpu history\n' | nc 127.0.0.1 23231
 Send Ctrl-E through the proxy to enter multi-command mode on the persistent
 remote connection.
 
+When disassembling the APB, remember that SIMH `EX -M` takes physical
+addresses. APB virtual `0x200030A0` is physical `0x002030A0`, not
+`0x200030A0`.
+
 ## Next implementation steps
 
-1. Replace the minimal HWRPB with the exact SRM layout APB expects.
-   Required fields to tighten first:
-   - console terminal block table
-   - console callback routine block
-   - processor slot PAL revision values
-   - Dynamic System Recognition data block, if this OpenVMS release uses it
+1. Reconstruct the exact SRM boot memory/page-table context.
+   The present blocker is APB status `0x124` in its bootstrap allocator, before
+   any callback. Focus on HWRPB processor slot `PTBR`/`PT_VA`, the MDDT
+   cluster layout, and the APB page-table descriptor around physical
+   `0x00258E24`.
 
-2. Add Mikasa platform I/O.
+2. Tighten the remaining HWRPB/SRM fields.
+   CTB/CRB and callback descriptors exist, but PAL revision fields, DSR data,
+   and SWRPB/boot context are still minimal.
+
+3. Add Mikasa platform I/O.
    Linux identifies Mikasa PCI interrupt summary/mask registers at ISA ports
    `0x534` and `0x536`, with NCR 810 SCSI on the PCI interrupt summary bit 12.
 
-3. Add a new NCR/Symbios 53C810 frontend.
+4. Add a new NCR/Symbios 53C810 frontend.
    SIMH has a common SCSI backend, but no 53C810 PCI DMA frontend in this tree.
    The implementation must be written cleanly for SIMH licensing; do not copy
    GPL code from AXPbox.
 
-4. Wire the 53C810 frontend to the four DKA images.
+5. Wire the 53C810 frontend to the four DKA images.
    Once APB switches from firmware disk reads to OS disk I/O, the current raw
    loader path is not enough. OpenVMS will need the real SCSI controller model.
 
-5. Add regression tests that do not require redistributing the disk dump.
+6. Add regression tests that do not require redistributing the disk dump.
    A small synthetic OpenVMS-style boot block can verify LBN/count parsing and
    APB placement.

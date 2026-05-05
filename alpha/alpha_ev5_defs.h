@@ -55,7 +55,7 @@
 #define VA_GETOFF(x)    (((uint32) (x)) & VA_M_OFF)
 #define VA_GETVPN(x)    (((uint32) ((x) >> VA_V_VPN)) & VA_M_VPN)
 #define VA_GETSEXT(x)   (((uint32) ((x) >> VA_V_SEXT)) & VA_M_SEXT)
-#define PHYS_ADDR(p,v)  (((((t_uint64) (p)) < VA_N_OFF) | VA_GETOFF (v)) & EV5_PA_MASK)
+#define PHYS_ADDR(p,v)  (((((t_uint64) (p)) << VA_N_OFF) | VA_GETOFF (v)) & EV5_PA_MASK)
 
 /* 43b and 32b superpages - present in all implementations */
 
@@ -411,6 +411,8 @@ enum ev5_internal_reg {
 
 void tlb_ia (uint32 flags);
 void tlb_is (t_uint64 va, uint32 flags);
+t_stat tlb_reset (DEVICE *dptr);
+uint32 tlb_set_cm (int32 cm);
 void itlb_set_asn (uint32 asn);
 void itlb_set_cm (uint32 mode);
 void itlb_set_spage (uint32 spage);

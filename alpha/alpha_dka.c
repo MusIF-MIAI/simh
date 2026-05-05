@@ -26,7 +26,8 @@
 
 #define DKA_NUMUNITS            4
 #define DKA_BLOCK_SIZE          512
-#define DKA_APB_LOAD_PA         0x20000000
+#define DKA_APB_LOAD_PA         0x00200000
+#define DKA_APB_ENTRY_VA        0x20000000
 #define DKA_BOOT_COUNT_OFF      0x1E0
 #define DKA_BOOT_LBN_OFF        0x1E8
 #define DKA_MAX_BOOT_BLOCKS     4096
@@ -41,7 +42,8 @@ t_stat dka_attach (UNIT *uptr, CONST char *cptr);
 t_stat dka_boot (int32 unitno, DEVICE *dptr);
 t_stat dka_set_osflags (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat dka_show_osflags (FILE *st, UNIT *uptr, int32 val, CONST void *desc);
-t_stat mikasa_boot_prepare (CONST char *bootdev, uint32 osflags);
+t_stat mikasa_boot_prepare (CONST char *bootdev, uint32 osflags,
+    t_uint64 image_bytes);
 
 static uint32 dka_get_unit_index (UNIT *uptr);
 static uint32 dka_get_le32 (const uint8 *buf, uint32 off);
@@ -213,14 +215,14 @@ boot_name = sim_uname (uptr);
 r = dka_read_blocks (uptr, boot_lbn, (uint32) boot_blocks, DKA_APB_LOAD_PA);
 if (r != SCPE_OK)
     return r;
-r = mikasa_boot_prepare (boot_name, dka_osflags);
+image_bytes = boot_blocks * DKA_BLOCK_SIZE;
+r = mikasa_boot_prepare (boot_name, dka_osflags, image_bytes);
 if (r != SCPE_OK)
     return r;
 
-image_bytes = boot_blocks * DKA_BLOCK_SIZE;
-PC = DKA_APB_LOAD_PA;
+PC = DKA_APB_ENTRY_VA;
 pc_align = 0;
-R[27] = DKA_APB_LOAD_PA;
+R[27] = DKA_APB_ENTRY_VA;
 
 sim_printf ("Loaded OpenVMS Alpha APB from %s: LBN %llu, %llu blocks, "
     "%llu bytes at %08llX\n",
