@@ -212,6 +212,7 @@ t_stat cpu_show_model (FILE *st, UNIT *uptr, int32 val, CONST void *desc);
 t_stat cpu_show_hist (FILE *st, UNIT *uptr, int32 val, CONST void *desc);
 t_stat cpu_show_virt (FILE *of, UNIT *uptr, int32 val, CONST void *desc);
 t_stat cpu_fprint_one_inst (FILE *st, uint32 ir, t_uint64 pc, t_uint64 ra, t_uint64 rb);
+t_stat mikasa_boot_rom (int32 unitno);
 
 extern t_uint64 op_ldf (t_uint64 op);
 extern t_uint64 op_ldg (t_uint64 op);
@@ -646,14 +647,14 @@ while (reason == 0) {
     case OP_JMP:                                        /* JMP */
         PCQ_ENTRY;
         rbv = R[rb];                                    /* in case Ra = Rb */
-        if (ra != 31) R[ra] = PC;                       /* save PC */
-        PC = rbv;                                       /* jump */
+        if (ra != 31) R[ra] = PC & ~((t_uint64) 3);     /* save PC */
+        PC = (rbv & ~((t_uint64) 3)) | (PC & 3);        /* jump */
         break;
 
     case OP_BR:                                         /* BR, BSR */
     case OP_BSR:
         PCQ_ENTRY;
-        if (ra != 31) R[ra] = PC;                       /* save PC */
+        if (ra != 31) R[ra] = PC & ~((t_uint64) 3);     /* save PC */
         dsp = I_GETBDSP (ir);
         PC = (PC + (SEXT_BDSP (dsp) << 2)) & M64;       /* branch */
         break;
@@ -1683,6 +1684,14 @@ return SCPE_OK;
 
 t_stat cpu_boot (int32 unitno, DEVICE *dptr)
 {
+switch (cpu_model) {
+
+    case ALPHA_MODEL_MIKASA_4_266:
+        return mikasa_boot_rom (unitno);
+
+    default:
+        break;
+        }
 return SCPE_ARG;
 }
 

@@ -17,7 +17,19 @@ Implemented:
   - `DKA100`
   - `DKA200`
   - `DKA300`
-- OpenVMS Alpha APB loader:
+- Mikasa SRM firmware loader:
+  - `SET MIKASA ROM=<path>` accepts the AlphaServer 1000 LFU SRM image
+    `mksrmrom.exe` and AXPbox-style `decompressed.rom` files.
+  - LFU images are not treated as raw ROM bytes. The loader validates the LFU
+    header, skips the `0x240` byte wrapper, and starts the embedded SRM payload
+    at `0x00900000`.
+  - `SET MIKASA ROMPAYLOAD=<path>` loads a payload already extracted from the
+    LFU wrapper. This is the preferred config path for repeatable local boots.
+  - `BOOT CPU` starts the loaded SRM image, matching the VAX SIMH convention
+    where CPU boot enters the platform firmware.
+  - The real `mksrmrom.exe` now runs past the earlier branch-link/alignment
+    halt at `0x900304` and enters the firmware copy/decompression path.
+- OpenVMS Alpha APB direct loader:
   - Reads LBN/count from the primary boot block offsets used by the dump.
   - Loads the primary bootstrap at physical `0x00200000`.
   - Enters it at virtual `0x20000000`, matching `EXE$K_PRIMBOOT`.
@@ -42,15 +54,27 @@ Not implemented yet:
 - Real Mikasa 21071/CIA PCI host bridge behavior.
 - NCR/Symbios 53C810 PCI SCSI DMA engine.
 - Network, VGA, NVRAM, and multiprocessor support.
-- A complete SRM-compatible boot context. The callback path is present but the
-  recovered APB does not reach it yet.
+- A complete SRM-compatible firmware execution environment. The real SRM image
+  runs far enough to exercise privileged PAL-mode ROM code, but it does not
+  reach an SRM prompt yet.
 
 So this is not yet a complete OpenVMS boot. It is a controlled first point:
 SIMH can identify the machine profile, attach all four recovered disks, load the
 same APB that AXPbox/AlphaVM loaded, and enter it with Mikasa-specific HWRPB
 state instead of a DS10/ES40 state.
 
-Current verified stop:
+Current verified SRM progress:
+
+```text
+Loaded Mikasa SRM ROM payload from ../firmware/as1000/mksrmrom.payload.bin: 475648 bytes at 00900000, PC=00900000 PALBASE=00900000
+Step expired, PC: 900128 (BNE R1,900114)
+```
+
+This is the firmware copy/decompression loop. The previous early stop was a
+HALT at `0x900304`, caused by preserving `PCALG` in branch link registers; the
+CPU core now stores aligned return addresses for `BSR`/`BR`/`JMP` links.
+
+Current verified direct-APB diagnostic stop:
 
 ```text
 Loaded OpenVMS Alpha APB from DKA0: LBN 4455271, 1049 blocks, 537088 bytes at 00200000
@@ -81,7 +105,14 @@ make alpha
 BIN/alpha alpha/mikasa-fermi.ini
 ```
 
-The config attaches the four extracted dump images read-only:
+The main config loads the real AlphaServer 1000 SRM firmware and starts it with
+`BOOT CPU`. Once the SRM prompt is reached, the expected firmware command is:
+
+```text
+BOOT DKA0
+```
+
+The config also attaches the four extracted dump images read-only:
 
 ```text
 DKA0    AXPVMSSYS   system disk
@@ -90,10 +121,16 @@ DKA200  FERMI_USR1
 DKA300  SPOOL
 ```
 
-The boot command is:
+The installed operating system appears to be OpenVMS Alpha V6.2. Evidence in
+`disco1.img` includes a DECshare startup/configuration record for
+`AlphaServer 1000 4/266` with `OpenVMS Version: V6.2`, installation text for
+`OpenVMS Operating System, Version V6.2`, and SDA text for `OpenVMS (TM) Alpha
+Operating System, Version V6.2` dated 2-DEC-1996.
+
+For the old direct APB bypass, use:
 
 ```text
-BOOT DKA0
+BIN/alpha alpha/mikasa-fermi-apb.ini
 ```
 
 For conversational OpenVMS boot, set APB bit 0 before booting:
@@ -184,6 +221,31 @@ For the recovered AlphaServer 1000 4/266, the SRM candidate is:
 ../firmware/as1000/mksrmrom.exe  DEC/MIKASA/SRM v5.4-101
 ```
 
+Extract the LFU wrapper once:
+
+```text
+alpha/tools/extract-lfu-rom.py ../firmware/as1000/mksrmrom.exe ../firmware/as1000/mksrmrom.payload.bin
+```
+
+The current extracted payload is:
+
+```text
+../firmware/as1000/mksrmrom.payload.bin
+size:   0x74200
+sha256: b4c3b18a0417a4d5714358cb85462747e1ac195d6ee421b6da07b6787cad9eb3
+```
+
+SIMH then loads the extracted payload:
+
+```text
+SET MIKASA ROMPAYLOAD=../firmware/as1000/mksrmrom.payload.bin
+BOOT CPU
+```
+
+For quick experiments, `SET MIKASA ROM=../firmware/as1000/mksrmrom.exe` still
+performs the same LFU stripping in memory, but the payload file is clearer for
+the main config.
+
 `alpha/tools/extract-axpbox-srm-rom.py` can parse DEC LFU ROM headers and can
 drive AXPbox's ES40 self-decompression path. This is useful for the known ES40
 ROM format:
@@ -199,34 +261,39 @@ debug tracing, the PC cycles inside the ROM decompressor around `0x900301` and
 
 ## Next implementation steps
 
-1. Understand the APB `SYSBOOT.EXE` lookup failure.
+1. Advance the real SRM firmware path.
+   The real `mksrmrom.exe` now starts under SIMH and gets into the early ROM
+   copy/decompression path. The next blockers should be handled in the SRM path
+   first, because that gives the most faithful AlphaServer 1000 boot context.
+
+2. Understand the direct-APB `SYSBOOT.EXE` lookup failure.
    The APB now reaches the system root and reads `SYSEXE`-related ODS-2
    metadata. The next check is whether its search path should be
    `[SYS0.SYSEXE]`, `[SYS0.SYSCOMMON.SYSEXE]`, or both, and why it misses the
    on-disk `SYSBOOT.EXE;2` header.
 
-2. Keep tightening the remaining SRM boot memory/page-table context.
+3. Keep tightening the remaining SRM boot memory/page-table context.
    HWRPB VPTB/processor-slot `PTBR`/`PT_VA`, the MDDT cluster layout, and APB
    page-table behavior around `EXE$K_BOOTPT` remain useful checks. Dynamic TLB
    misses are handled for bring-up, but this is not complete SRM PALcode.
 
-3. Tighten the remaining HWRPB/SRM fields.
+4. Tighten the remaining HWRPB/SRM fields.
    CTB/CRB and callback descriptors exist, but PAL revision fields, DSR data,
    and SWRPB/boot context are still minimal.
 
-4. Add Mikasa platform I/O.
+5. Add Mikasa platform I/O.
    Linux identifies Mikasa PCI interrupt summary/mask registers at ISA ports
    `0x534` and `0x536`, with NCR 810 SCSI on the PCI interrupt summary bit 12.
 
-5. Add a new NCR/Symbios 53C810 frontend.
+6. Add a new NCR/Symbios 53C810 frontend.
    SIMH has a common SCSI backend, but no 53C810 PCI DMA frontend in this tree.
    The implementation must be written cleanly for SIMH licensing; do not copy
    GPL code from AXPbox.
 
-6. Wire the 53C810 frontend to the four DKA images.
+7. Wire the 53C810 frontend to the four DKA images.
    Once APB switches from firmware disk reads to OS disk I/O, the current raw
    loader path is not enough. OpenVMS will need the real SCSI controller model.
 
-7. Add regression tests that do not require redistributing the disk dump.
+8. Add regression tests that do not require redistributing the disk dump.
    A small synthetic OpenVMS-style boot block can verify LBN/count parsing and
    APB placement.
