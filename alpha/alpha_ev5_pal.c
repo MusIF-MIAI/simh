@@ -117,6 +117,7 @@ extern t_uint64 pcq[PCQ_SIZE];                          /* PC queue */
 extern int32 pcq_p;                                     /* PC queue ptr */
 
 extern int32 parse_reg (const char *cptr);
+extern t_stat mikasa_pal_proc_excp (uint32 abval);
 extern t_stat mikasa_pal_proc_inst (uint32 fnc);
 
 /* EV5PAL data structures
@@ -197,6 +198,16 @@ return ev5_palent (PC, PALO_TRAP);
 
 t_stat pal_proc_excp (uint32 abval)
 {
+if ((cpu_model == ALPHA_MODEL_MIKASA_4_266) &&
+    ((abval == (EXC_TBM + EXC_E)) ||
+     (abval == (EXC_TBM + EXC_R)) ||
+     (abval == (EXC_TBM + EXC_W)))) {
+    t_stat r = mikasa_pal_proc_excp (abval);
+
+    if (r != SCPE_NOFNC)
+        return r;
+    }
+
 switch (abval) {
 
     case EXC_RSVI:                                      /* reserved instruction */

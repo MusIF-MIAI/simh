@@ -58,18 +58,23 @@
 #define MIKASA_BOOT_RESERVED_SIZE   0x00100000
 #define MIKASA_PT_SPACE_VA          0x40000000
 #define MIKASA_PT_SPACE_PA          0x00400000
-#define MIKASA_PT_SPACE_SIZE        0x00800000
+#define MIKASA_PT_SPACE_VA_SIZE     (((t_uint64) 1) << (VA_N_VPN + 3))
 #define MIKASA_L1_PT_PA             MIKASA_PT_SPACE_PA
 #define MIKASA_L2_PT_OFF            0x00002000
 #define MIKASA_L3_REGION0_OFF       0x00040000
 #define MIKASA_L3_REGION1_OFF       0x00080000
-#define MIKASA_L3_PTSPACE_OFF       0x00100000
+#define MIKASA_L3_BOOTPTS_OFF       0x00100000
+#define MIKASA_L3_BOOTPTS_PAGES     (VA_M_LVL + 1)
 #define MIKASA_L3_REGION0_PA        (MIKASA_PT_SPACE_PA + MIKASA_L3_REGION0_OFF)
 #define MIKASA_L3_REGION1_PA        (MIKASA_PT_SPACE_PA + MIKASA_L3_REGION1_OFF)
-#define MIKASA_L3_PTSPACE_PA        (MIKASA_PT_SPACE_PA + MIKASA_L3_PTSPACE_OFF)
+#define MIKASA_L3_BOOTPTS_PA        (MIKASA_PT_SPACE_PA + MIKASA_L3_BOOTPTS_OFF)
 #define MIKASA_L2_PT_PA             (MIKASA_PT_SPACE_PA + MIKASA_L2_PT_OFF)
+#define MIKASA_PT_SPACE_SIZE        (MIKASA_L3_BOOTPTS_OFF + \
+                                      (MIKASA_L3_BOOTPTS_PAGES * \
+                                      MIKASA_PAGE_SIZE))
 #define MIKASA_TLB_SPAN             0x00400000
-#define MIKASA_BOOT_PT_RESERVED_END (MIKASA_PT_SPACE_PA + MIKASA_PT_SPACE_SIZE)
+#define MIKASA_BOOT_PT_RESERVED_END (MIKASA_PT_SPACE_PA + \
+                                      MIKASA_PT_SPACE_SIZE)
 
 #define HWRPB_ID                    0x0000004250525748ULL
 #define HWRPB_CHECKSUM_OFF          0x120
@@ -132,11 +137,16 @@
 #define ALPHA_INSN_RET              0x6BFA8001
 
 extern UNIT cpu_unit;
+extern jmp_buf save_env;
 extern t_uint64 R[32];
+extern t_uint64 PC;
+extern t_uint64 p1;
 extern uint32 pal_mode;
 extern uint32 pal_type;
 extern uint32 dmapen;
 extern uint32 fpen;
+extern uint32 cm_macc;
+extern uint32 cm_wacc;
 extern uint32 pcc_l;
 extern UNIT dka_unit[];
 
@@ -145,6 +155,7 @@ uint32 mikasa_irq_summary = 0;
 t_uint64 mikasa_hwrpb_pa = MIKASA_HWRPB_PA;
 t_uint64 mikasa_last_osflags = 0;
 t_uint64 mikasa_last_boot_bytes = 0;
+t_uint64 mikasa_next_l3_pt_pa = MIKASA_L3_BOOTPTS_PA;
 t_uint64 mikasa_callback_count = 0;
 t_uint64 mikasa_getenv_count = 0;
 t_uint64 mikasa_ioread_count = 0;
@@ -169,6 +180,7 @@ uint32 mikasa_pal_last_pcc = 0;
 t_stat mikasa_reset (DEVICE *dptr);
 t_stat mikasa_boot_prepare (CONST char *bootdev, uint32 osflags,
     t_uint64 image_bytes);
+t_stat mikasa_pal_proc_excp (uint32 abval);
 t_stat mikasa_pal_proc_inst (uint32 fnc);
 
 static void mikasa_zero_phys (t_uint64 pa, uint32 size);
@@ -179,12 +191,38 @@ static void mikasa_write_mem_cluster (t_uint64 mddt_pa, uint32 cluster,
     t_uint64 *bitmap_pa);
 static t_uint64 mikasa_hwrpb_va_for_pa (t_uint64 pa);
 static t_uint64 mikasa_pte (t_uint64 pa, uint32 flags);
+static t_bool mikasa_pte_to_pa (t_uint64 pte, t_uint64 page_off,
+    t_uint64 *pa);
+static t_bool mikasa_boot_pt_walk_pte (t_uint64 va, t_uint64 *pte);
+static t_bool mikasa_boot_pt_va_to_pa (t_uint64 va, t_uint64 *pa);
+static t_bool mikasa_boot_pt_va_to_pte (t_uint64 va, t_uint64 *pte);
+static t_bool mikasa_boot_va_to_pte (t_uint64 va, t_uint64 *pte);
+static t_bool mikasa_boot_va_to_pa (t_uint64 va, t_uint64 *pa);
+static t_uint64 mikasa_alloc_l3_pt (void);
+static void mikasa_set_l2_entry (uint32 l2_index, t_uint64 l3_pa);
 static void mikasa_map_range (t_uint64 l3_pa, t_uint64 va_base,
     t_uint64 pa_base, t_uint64 bytes);
 static void mikasa_build_boot_pt (void);
 static void mikasa_load_tlb_range (t_uint64 va, t_uint64 pa, t_uint64 bytes,
     uint32 flags);
+static void mikasa_load_itlb_page (t_uint64 va, t_uint64 pa, uint32 flags);
+static void mikasa_load_dtlb_page (t_uint64 va, t_uint64 pa, uint32 flags);
 static void mikasa_load_boot_tlb (void);
+static uint32 mikasa_pal_probe (uint32 acc);
+static t_int64 mikasa_pal_insqhil (void);
+static t_int64 mikasa_pal_insqtil (void);
+static t_int64 mikasa_pal_insqhiq (void);
+static t_int64 mikasa_pal_insqtiq (void);
+static t_int64 mikasa_pal_insquel (uint32 defer);
+static t_int64 mikasa_pal_insqueq (uint32 defer);
+static t_int64 mikasa_pal_remqhil (void);
+static t_int64 mikasa_pal_remqtil (void);
+static t_int64 mikasa_pal_remqhiq (void);
+static t_int64 mikasa_pal_remqtiq (void);
+static t_int64 mikasa_pal_remquel (uint32 defer);
+static t_int64 mikasa_pal_remqueq (uint32 defer);
+static t_uint64 mikasa_pal_read_una_l (t_uint64 va);
+static void mikasa_pal_write_una_l (t_uint64 va, t_uint64 val);
 static void mikasa_write_console_crb (t_uint64 hwrpb_pa);
 static void mikasa_set_boot_env (CONST char *bootdev, uint32 osflags);
 static t_uint64 mikasa_callback_status (t_uint64 status, t_uint64 count);
@@ -307,6 +345,150 @@ static t_uint64 mikasa_pte (t_uint64 pa, uint32 flags)
 return (((pa >> VA_N_OFF) & PFN_MASK) << PTE_V_PFN) | flags | PTE_V;
 }
 
+static t_bool mikasa_pte_to_pa (t_uint64 pte, t_uint64 page_off, t_uint64 *pa)
+{
+if ((pte & PTE_V) == 0)
+    return FALSE;
+*pa = (((pte >> PTE_V_PFN) & PFN_MASK) << VA_N_OFF) | page_off;
+return ADDR_IS_MEM (*pa);
+}
+
+static t_bool mikasa_boot_pt_walk_pte (t_uint64 va, t_uint64 *pte)
+{
+uint32 vpn = VA_GETVPN (va);
+t_uint64 l1pte, l2pte, l3pte;
+t_uint64 l2_pa, l3_pa;
+
+l1pte = ReadPQ (MIKASA_L1_PT_PA + VPN_GETLVL1 (vpn));
+if (!mikasa_pte_to_pa (l1pte, 0, &l2_pa))
+    return FALSE;
+l2pte = ReadPQ (l2_pa + VPN_GETLVL2 (vpn));
+if (!mikasa_pte_to_pa (l2pte, 0, &l3_pa))
+    return FALSE;
+l3pte = ReadPQ (l3_pa + VPN_GETLVL3 (vpn));
+if ((l3pte & PTE_V) == 0)
+    return FALSE;
+*pte = l3pte;
+return TRUE;
+}
+
+static t_bool mikasa_boot_pt_walk (t_uint64 va, t_uint64 *pa)
+{
+t_uint64 l3pte;
+
+if (!mikasa_boot_pt_walk_pte (va, &l3pte))
+    return FALSE;
+return mikasa_pte_to_pa (l3pte, va & VA_M_OFF, pa);
+}
+
+static t_bool mikasa_boot_pt_va_to_pa (t_uint64 va, t_uint64 *pa)
+{
+t_uint64 pteva = va - MIKASA_PT_SPACE_VA;
+uint32 pte_vpn;
+t_uint64 l2_ptea;
+t_uint64 l1pte, l2pte;
+t_uint64 l2_pa, l3_pa;
+
+if (pteva >= (((t_uint64) 1) << (VA_N_VPN + 3)))
+    return FALSE;
+pte_vpn = (uint32) (pteva >> 3);
+l1pte = ReadPQ (MIKASA_L1_PT_PA + VPN_GETLVL1 (pte_vpn));
+if (!mikasa_pte_to_pa (l1pte, 0, &l2_pa))
+    return FALSE;
+l2_ptea = l2_pa + VPN_GETLVL2 (pte_vpn);
+l2pte = ReadPQ (l2_ptea);
+if (!mikasa_pte_to_pa (l2pte, 0, &l3_pa)) {
+    l3_pa = mikasa_alloc_l3_pt ();
+    if (l3_pa == 0)
+        return FALSE;
+    WritePQ (l2_ptea, mikasa_pte (l3_pa, PTE_KRE | PTE_KWE));
+    }
+*pa = l3_pa + VPN_GETLVL3 (pte_vpn) + (va & 7);
+return ADDR_IS_MEM (*pa);
+}
+
+static t_bool mikasa_boot_pt_va_to_pte (t_uint64 va, t_uint64 *pte)
+{
+t_uint64 pa;
+
+if (!mikasa_boot_pt_va_to_pa (va, &pa))
+    return FALSE;
+*pte = mikasa_pte (pa & ~((t_uint64) VA_M_OFF), PTE_KRE | PTE_KWE);
+return TRUE;
+}
+
+static t_bool mikasa_boot_va_to_pte (t_uint64 va, t_uint64 *pte)
+{
+t_uint64 pa;
+
+if (va < MIKASA_BOOT_PT_RESERVED_END) {
+    *pte = mikasa_pte (va, PTE_KRE | PTE_KWE);
+    return TRUE;
+    }
+if ((va >= MIKASA_HWRPB_VA) &&
+    (va < (MIKASA_HWRPB_VA + MIKASA_HWRPB_SIZE))) {
+    pa = MIKASA_HWRPB_PA + (va - MIKASA_HWRPB_VA);
+    *pte = mikasa_pte (pa, PTE_KRE | PTE_KWE);
+    return TRUE;
+    }
+if ((va >= MIKASA_BOOT_IMAGE_VA) &&
+    (va < (MIKASA_BOOT_IMAGE_VA + MIKASA_BOOT_RESERVED_SIZE))) {
+    pa = MIKASA_BOOT_IMAGE_PA + (va - MIKASA_BOOT_IMAGE_VA);
+    *pte = mikasa_pte (pa, PTE_KRE | PTE_KWE);
+    return TRUE;
+    }
+if ((va >= MIKASA_PT_SPACE_VA) &&
+    ((va - MIKASA_PT_SPACE_VA) < MIKASA_PT_SPACE_VA_SIZE) &&
+    mikasa_boot_pt_va_to_pte (va, pte))
+    return TRUE;
+return mikasa_boot_pt_walk_pte (va, pte);
+}
+
+static t_bool mikasa_boot_va_to_pa (t_uint64 va, t_uint64 *pa)
+{
+if (va < MIKASA_BOOT_PT_RESERVED_END) {
+    *pa = va;
+    return TRUE;
+    }
+if ((va >= MIKASA_HWRPB_VA) &&
+    (va < (MIKASA_HWRPB_VA + MIKASA_HWRPB_SIZE))) {
+    *pa = MIKASA_HWRPB_PA + (va - MIKASA_HWRPB_VA);
+    return TRUE;
+    }
+if ((va >= MIKASA_BOOT_IMAGE_VA) &&
+    (va < (MIKASA_BOOT_IMAGE_VA + MIKASA_BOOT_RESERVED_SIZE))) {
+    *pa = MIKASA_BOOT_IMAGE_PA + (va - MIKASA_BOOT_IMAGE_VA);
+    return TRUE;
+    }
+if ((va >= MIKASA_PT_SPACE_VA) &&
+    ((va - MIKASA_PT_SPACE_VA) < MIKASA_PT_SPACE_VA_SIZE) &&
+    mikasa_boot_pt_va_to_pa (va, pa))
+    return TRUE;
+if (mikasa_boot_pt_walk (va, pa))
+    return TRUE;
+return FALSE;
+}
+
+static t_uint64 mikasa_alloc_l3_pt (void)
+{
+t_uint64 pa = mikasa_next_l3_pt_pa;
+t_uint64 end_pa = MIKASA_L3_BOOTPTS_PA +
+    (((t_uint64) MIKASA_L3_BOOTPTS_PAGES) << VA_N_OFF);
+
+if ((pa + MIKASA_PAGE_SIZE) > end_pa)
+    return 0;
+mikasa_next_l3_pt_pa = pa + MIKASA_PAGE_SIZE;
+return pa;
+}
+
+static void mikasa_set_l2_entry (uint32 l2_index, t_uint64 l3_pa)
+{
+t_uint64 pte = mikasa_pte (l3_pa, PTE_KRE | PTE_KWE);
+
+WritePQ (MIKASA_L2_PT_PA + (((t_uint64) l2_index) << 3), pte);
+return;
+}
+
 static void mikasa_map_range (t_uint64 l3_pa, t_uint64 va_base,
     t_uint64 pa_base, t_uint64 bytes)
 {
@@ -328,19 +510,15 @@ uint32 l2_region1 = (MIKASA_BOOT_IMAGE_VA >> (VA_N_OFF + VA_N_LVL)) &
 uint32 l2_ptspace = (MIKASA_PT_SPACE_VA >> (VA_N_OFF + VA_N_LVL)) & VA_M_LVL;
 
 mikasa_zero_phys (MIKASA_PT_SPACE_PA, MIKASA_PT_SPACE_SIZE);
+mikasa_next_l3_pt_pa = MIKASA_L3_BOOTPTS_PA;
 WritePQ (MIKASA_L1_PT_PA, mikasa_pte (MIKASA_L2_PT_PA, PTE_KRE | PTE_KWE));
-WritePQ (MIKASA_L2_PT_PA + (l2_region0 << 3),
-    mikasa_pte (MIKASA_L3_REGION0_PA, PTE_KRE | PTE_KWE));
-WritePQ (MIKASA_L2_PT_PA + (l2_region1 << 3),
-    mikasa_pte (MIKASA_L3_REGION1_PA, PTE_KRE | PTE_KWE));
-WritePQ (MIKASA_L2_PT_PA + (l2_ptspace << 3),
-    mikasa_pte (MIKASA_L3_PTSPACE_PA, PTE_KRE | PTE_KWE));
+mikasa_set_l2_entry (l2_region0, MIKASA_L3_REGION0_PA);
+mikasa_set_l2_entry (l2_region1, MIKASA_L3_REGION1_PA);
+mikasa_set_l2_entry (l2_ptspace, MIKASA_L2_PT_PA);
 mikasa_map_range (MIKASA_L3_REGION0_PA, MIKASA_HWRPB_VA, MIKASA_HWRPB_PA,
     MIKASA_HWRPB_SIZE);
 mikasa_map_range (MIKASA_L3_REGION1_PA, MIKASA_BOOT_IMAGE_VA,
     MIKASA_BOOT_IMAGE_PA, MIKASA_BOOT_RESERVED_SIZE);
-mikasa_map_range (MIKASA_L3_PTSPACE_PA, MIKASA_PT_SPACE_VA,
-    MIKASA_PT_SPACE_PA, MIKASA_PT_SPACE_SIZE);
 return;
 }
 
@@ -359,6 +537,18 @@ for (offset = 0; offset < bytes; offset = offset + span) {
 return;
 }
 
+static void mikasa_load_itlb_page (t_uint64 va, t_uint64 pa, uint32 flags)
+{
+itlb_load (VA_GETVPN (va), mikasa_pte (pa, flags));
+return;
+}
+
+static void mikasa_load_dtlb_page (t_uint64 va, t_uint64 pa, uint32 flags)
+{
+dtlb_load (VA_GETVPN (va), mikasa_pte (pa, flags));
+return;
+}
+
 static void mikasa_load_boot_tlb (void)
 {
 tlb_reset (NULL);
@@ -369,8 +559,6 @@ mikasa_load_tlb_range (MIKASA_HWRPB_PA, MIKASA_HWRPB_PA, MIKASA_TLB_SPAN,
     PTE_KRE | PTE_KWE);
 mikasa_load_tlb_range (MIKASA_BOOT_IMAGE_VA, MIKASA_BOOT_IMAGE_PA,
     MIKASA_BOOT_RESERVED_SIZE, PTE_KRE | PTE_KWE);
-mikasa_load_tlb_range (MIKASA_PT_SPACE_VA, MIKASA_PT_SPACE_PA,
-    MIKASA_PT_SPACE_SIZE, PTE_KRE | PTE_KWE);
 return;
 }
 
@@ -828,6 +1016,421 @@ switch (fnc) {
 return SCPE_OK;
 }
 
+t_stat mikasa_pal_proc_excp (uint32 abval)
+{
+t_uint64 va = p1;
+t_uint64 pa;
+
+switch (abval) {
+
+    case EXC_TBM + EXC_E:
+        if (!mikasa_boot_va_to_pa (va, &pa))
+            return SCPE_NOFNC;
+        mikasa_load_itlb_page (va & ~((t_uint64) VA_M_OFF),
+            pa & ~((t_uint64) VA_M_OFF), PTE_KRE | PTE_KWE);
+        return SCPE_OK;
+
+    case EXC_TBM + EXC_R:
+    case EXC_TBM + EXC_W:
+        if (!mikasa_boot_va_to_pa (va, &pa))
+            return SCPE_NOFNC;
+        mikasa_load_dtlb_page (va & ~((t_uint64) VA_M_OFF),
+            pa & ~((t_uint64) VA_M_OFF), PTE_KRE | PTE_KWE);
+        PC = (PC - 4) & M64;
+        return SCPE_OK;
+        }
+
+return SCPE_NOFNC;
+}
+
+static uint32 mikasa_pal_probe (uint32 acc)
+{
+t_uint64 pte;
+uint32 pm = ((uint32) R[18]) & 3;
+uint32 req;
+t_uint64 end_va = (R[16] + R[17]) & M64;
+
+if (pm <= MODE_K)
+    pm = MODE_K;
+req = (acc << pm) | PTE_V;
+if (!mikasa_boot_va_to_pte (R[16], &pte))
+    return 0;
+if (req & ~((uint32) pte))
+    return 0;
+if (!mikasa_boot_va_to_pte (end_va, &pte))
+    return 0;
+if (req & ~((uint32) pte))
+    return 0;
+return 1;
+}
+
+static t_int64 mikasa_pal_insqhil (void)
+{
+t_uint64 h = R[16];
+t_uint64 d = R[17];
+t_uint64 ar, a;
+
+if ((h == d) || ((h | d) & 07) ||
+    ((SEXT_L_Q (h) & M64) != h) ||
+    ((SEXT_L_Q (d) & M64) != d))
+    ABORT (EXC_RSVO);
+ReadAccQ (d, cm_wacc);
+ar = ReadQ (h);
+if (ar & 06)
+    ABORT (EXC_RSVO);
+if (ar & 01)
+    return -1;
+WriteQ (h, ar | 1);
+a = (SEXT_L_Q (ar + h)) & M64;
+ReadAccQ (a, cm_wacc);
+WriteL (a + 4, (uint32) (d - a));
+WriteL (d, (uint32) (a - d));
+WriteL (d + 4, (uint32) (h - d));
+WriteL (h, (uint32) (d - h));
+return ((ar & M32) == 0) ? 0 : +1;
+}
+
+static t_int64 mikasa_pal_insqtil (void)
+{
+t_uint64 h = R[16];
+t_uint64 d = R[17];
+t_uint64 ar, c;
+
+if ((h == d) || ((h | d) & 07) ||
+    ((SEXT_L_Q (h) & M64) != h) ||
+    ((SEXT_L_Q (d) & M64) != d))
+    ABORT (EXC_RSVO);
+ReadAccQ (d, cm_wacc);
+ar = ReadQ (h);
+if ((ar & M32) == 0)
+    return mikasa_pal_insqhil ();
+if (ar & 06)
+    ABORT (EXC_RSVO);
+if (ar & 01)
+    return -1;
+WriteQ (h, ar | 1);
+c = ar >> 32;
+c = (SEXT_L_Q (c + h)) & M64;
+if (c & 07) {
+    WriteQ (h, ar);
+    ABORT (EXC_RSVO);
+    }
+ReadAccQ (c, cm_wacc);
+WriteL (c, (uint32) (d - c));
+WriteL (d, (uint32) (h - d));
+WriteL (d + 4, (uint32) (c - d));
+WriteL (h + 4, (uint32) (d - h));
+WriteL (h, (uint32) ar);
+return 0;
+}
+
+static t_int64 mikasa_pal_insqhiq (void)
+{
+t_uint64 h = R[16];
+t_uint64 d = R[17];
+t_uint64 ar, a;
+
+if ((h == d) || ((h | d) & 0xF))
+    ABORT (EXC_RSVO);
+ReadAccQ (d, cm_wacc);
+ar = ReadQ (h);
+if (ar & 0xE)
+    ABORT (EXC_RSVO);
+if (ar & 01)
+    return -1;
+WriteQ (h, ar | 1);
+a = (ar + h) & M64;
+ReadAccQ (a, cm_wacc);
+WriteQ (a + 8, (d - a) & M64);
+WriteQ (d, (a - d) & M64);
+WriteQ (d + 8, (h - d) & M64);
+WriteQ (h, (d - h) & M64);
+return (ar == 0) ? 0 : +1;
+}
+
+static t_int64 mikasa_pal_insqtiq (void)
+{
+t_uint64 h = R[16];
+t_uint64 d = R[17];
+t_uint64 ar, c;
+
+if ((h == d) || ((h | d) & 0xF))
+    ABORT (EXC_RSVO);
+ReadAccQ (d, cm_wacc);
+ar = ReadQ (h);
+if (ar == 0)
+    return mikasa_pal_insqhiq ();
+if (ar & 0xE)
+    ABORT (EXC_RSVO);
+if (ar & 01)
+    return -1;
+WriteQ (h, ar | 1);
+c = ReadQ (h + 8);
+c = (c + h) & M64;
+if (c & 0xF) {
+    WriteQ (h, ar);
+    ABORT (EXC_RSVO);
+    }
+ReadAccQ (c, cm_wacc);
+WriteQ (c, (d - c) & M64);
+WriteQ (d, (h - d) & M64);
+WriteQ (d + 8, (c - d) & M64);
+WriteQ (h + 8, (d - h) & M64);
+WriteQ (h, ar);
+return 0;
+}
+
+static t_int64 mikasa_pal_remqhil (void)
+{
+t_uint64 h = R[16];
+t_uint64 ar, a, b;
+
+if ((h & 07) || ((SEXT_L_Q (h) & M64) != h))
+    ABORT (EXC_RSVO);
+ar = ReadQ (h);
+if (ar & 06)
+    ABORT (EXC_RSVO);
+if (ar & 01)
+    return -1;
+if ((ar & M32) == 0)
+    return 0;
+WriteQ (h, ar | 1);
+a = (SEXT_L_Q (ar + h)) & M64;
+ReadAccQ (a, cm_wacc);
+b = ReadL (a);
+b = (SEXT_L_Q (b + a)) & M64;
+if (b & 07) {
+    WriteQ (h, ar);
+    ABORT (EXC_RSVO);
+    }
+ReadAccQ (b, cm_wacc);
+WriteL (b + 4, (uint32) (h - b));
+WriteL (h, (uint32) (b - h));
+R[1] = a;
+return ((b & M32) == (h & M32)) ? +2 : +1;
+}
+
+static t_int64 mikasa_pal_remqtil (void)
+{
+t_uint64 h = R[16];
+t_uint64 ar, b, c;
+
+if ((h & 07) || ((SEXT_L_Q (h) & M64) != h))
+    ABORT (EXC_RSVO);
+ar = ReadQ (h);
+if (ar & 06)
+    ABORT (EXC_RSVO);
+if (ar & 01)
+    return -1;
+if ((ar & M32) == 0)
+    return 0;
+WriteQ (h, ar | 1);
+c = ar >> 32;
+if (c & 07) {
+    WriteQ (h, ar);
+    ABORT (EXC_RSVO);
+    }
+if ((ar & M32) == (c & M32)) {
+    WriteQ (h, ar);
+    return mikasa_pal_remqhil ();
+    }
+c = (SEXT_L_Q (c + h)) & M64;
+ReadL (c + 4);
+b = ReadL (c + 4);
+b = (SEXT_L_Q (b + c)) & M64;
+if (b & 07) {
+    WriteQ (h, ar);
+    ABORT (EXC_RSVO);
+    }
+ReadAccQ (b, cm_wacc);
+WriteL (b, (uint32) (h - b));
+WriteL (h + 4, (uint32) (b - h));
+WriteL (h, (uint32) ar);
+R[1] = c;
+return +1;
+}
+
+static t_int64 mikasa_pal_remqhiq (void)
+{
+t_uint64 h = R[16];
+t_uint64 ar, a, b;
+
+if (h & 0xF)
+    ABORT (EXC_RSVO);
+ar = ReadQ (h);
+if (ar & 0xE)
+    ABORT (EXC_RSVO);
+if (ar & 01)
+    return -1;
+if (ar == 0)
+    return 0;
+WriteQ (h, ar | 1);
+a = (ar + h) & M64;
+ReadAccQ (a, cm_wacc);
+b = ReadQ (a);
+b = (b + a) & M64;
+if (b & 0xF) {
+    WriteQ (h, ar);
+    ABORT (EXC_RSVO);
+    }
+ReadAccQ (b, cm_wacc);
+WriteQ (b + 8, (h - b) & M64);
+WriteQ (h, (b - h) & M64);
+R[1] = a;
+return (b == h) ? +2 : +1;
+}
+
+static t_int64 mikasa_pal_remqtiq (void)
+{
+t_uint64 h = R[16];
+t_uint64 ar, b, c;
+
+if (h & 0xF)
+    ABORT (EXC_RSVO);
+ar = ReadQ (h);
+if (ar & 0xE)
+    ABORT (EXC_RSVO);
+if (ar & 01)
+    return -1;
+if (ar == 0)
+    return 0;
+WriteQ (h, ar | 1);
+c = ReadQ (h + 8);
+if (c & 0xF) {
+    WriteQ (h, ar);
+    ABORT (EXC_RSVO);
+    }
+if (ar == c) {
+    WriteQ (h, ar);
+    return mikasa_pal_remqhiq ();
+    }
+c = (c + h) & M64;
+ReadAccQ (c + 8, cm_wacc);
+b = ReadQ (c + 8);
+b = (b + c) & M64;
+if (b & 0xF) {
+    WriteQ (h, ar);
+    ABORT (EXC_RSVO);
+    }
+ReadAccQ (b, cm_wacc);
+WriteQ (b, (h - b) & M64);
+WriteQ (h + 8, (b - h) & M64);
+WriteQ (h, ar);
+R[1] = c;
+return +1;
+}
+
+static t_int64 mikasa_pal_insquel (uint32 defer)
+{
+t_uint64 p = SEXT_L_Q (R[16]) & M64;
+t_uint64 e = SEXT_L_Q (R[17]) & M64;
+t_uint64 s;
+
+if (defer) {
+    p = mikasa_pal_read_una_l (p);
+    p = SEXT_L_Q (p) & M64;
+    }
+s = mikasa_pal_read_una_l (p);
+s = SEXT_L_Q (s) & M64;
+(void) mikasa_pal_read_una_l ((s + 4) & M64);
+(void) mikasa_pal_read_una_l ((e + 4) & M64);
+mikasa_pal_write_una_l (e, s);
+mikasa_pal_write_una_l ((e + 4) & M64, p);
+mikasa_pal_write_una_l ((s + 4) & M64, e);
+mikasa_pal_write_una_l (p, e);
+return (((s & M32) == (p & M32)) ? +1 : 0);
+}
+
+static t_int64 mikasa_pal_insqueq (uint32 defer)
+{
+t_uint64 p = R[16];
+t_uint64 e = R[17];
+t_uint64 s;
+
+if (defer) {
+    if (p & 07)
+        ABORT (EXC_RSVO);
+    p = ReadQ (p);
+    }
+if ((e | p) & 0xF)
+    ABORT (EXC_RSVO);
+s = ReadAccQ (p, cm_macc);
+if (s & 0xF)
+    ABORT (EXC_RSVO);
+ReadAccQ (s + 8, cm_wacc);
+ReadAccQ (e + 8, cm_wacc);
+WriteQ (e, s);
+WriteQ (e + 8, p);
+WriteQ (s + 8, e);
+WriteQ (p, e);
+return ((s == p) ? +1 : 0);
+}
+
+static t_int64 mikasa_pal_remquel (uint32 defer)
+{
+t_uint64 e = SEXT_L_Q (R[16]) & M64;
+t_uint64 s, p;
+
+if (defer) {
+    e = mikasa_pal_read_una_l (e);
+    e = SEXT_L_Q (e) & M64;
+    }
+s = mikasa_pal_read_una_l (e);
+p = mikasa_pal_read_una_l ((e + 4) & M64);
+s = SEXT_L_Q (s) & M64;
+p = SEXT_L_Q (p) & M64;
+if (e == p)
+    return -1;
+(void) mikasa_pal_read_una_l ((s + 4) & M64);
+mikasa_pal_write_una_l (p, s);
+mikasa_pal_write_una_l ((s + 4) & M64, p);
+return ((s == p) ? 0 : +1);
+}
+
+static t_int64 mikasa_pal_remqueq (uint32 defer)
+{
+t_uint64 e = R[16];
+t_uint64 s, p;
+
+if (defer) {
+    if (e & 07)
+        ABORT (EXC_RSVO);
+    e = ReadQ (e);
+    }
+if (e & 0xF)
+    ABORT (EXC_RSVO);
+s = ReadQ (e);
+p = ReadQ (e + 8);
+if ((s | p) & 0xF)
+    ABORT (EXC_RSVO);
+if (e == p)
+    return -1;
+ReadAccQ (s + 8, cm_wacc);
+WriteQ (p, s);
+WriteQ (s + 8, p);
+return ((s == p) ? 0 : +1);
+}
+
+static t_uint64 mikasa_pal_read_una_l (t_uint64 va)
+{
+t_uint64 val;
+
+val = ReadB (va);
+val |= ReadB ((va + 1) & M64) << 8;
+val |= ReadB ((va + 2) & M64) << 16;
+val |= ReadB ((va + 3) & M64) << 24;
+return val & M32;
+}
+
+static void mikasa_pal_write_una_l (t_uint64 va, t_uint64 val)
+{
+WriteB (va, val);
+WriteB ((va + 1) & M64, val >> 8);
+WriteB ((va + 2) & M64, val >> 16);
+WriteB ((va + 3) & M64, val >> 24);
+return;
+}
+
 /* Minimal native VMS PAL dispatcher for bootstrap bring-up. */
 
 #define MPAL_HALT       0x00
@@ -883,13 +1486,41 @@ return SCPE_OK;
 #define MPAL_BPT        0x80
 #define MPAL_BUGCHK     0x81
 #define MPAL_IMB        0x86
-#define MPAL_RD_PS      0x90
-#define MPAL_REI        0x91
+#define MPAL_INSQHIL    0x87
+#define MPAL_INSQTIL    0x88
+#define MPAL_INSQHIQ    0x89
+#define MPAL_INSQTIQ    0x8A
+#define MPAL_INSQUEL    0x8B
+#define MPAL_INSQUEQ    0x8C
+#define MPAL_INSQUELD   0x8D
+#define MPAL_INSQUEQD   0x8E
+#define MPAL_PROBER     0x8F
+#define MPAL_PROBEW     0x90
+#define MPAL_RD_PS      0x91
+#define MPAL_REI        0x92
+#define MPAL_REMQHIL    0x93
+#define MPAL_REMQTIL    0x94
+#define MPAL_REMQHIQ    0x95
+#define MPAL_REMQTIQ    0x96
+#define MPAL_REMQUEL    0x97
+#define MPAL_REMQUEQ    0x98
+#define MPAL_REMQUELD   0x99
+#define MPAL_REMQUEQD   0x9A
 #define MPAL_SWASTEN    0x9B
 #define MPAL_WR_PS_SW   0x9C
 #define MPAL_RSCC       0x9D
 #define MPAL_RD_UNQ     0x9E
 #define MPAL_WR_UNQ     0x9F
+#define MPAL_AMOVRR     0xA0
+#define MPAL_AMOVRM     0xA1
+#define MPAL_INSQHILR   0xA2
+#define MPAL_INSQTILR   0xA3
+#define MPAL_INSQHIQR   0xA4
+#define MPAL_INSQTIQR   0xA5
+#define MPAL_REMQHILR   0xA6
+#define MPAL_REMQTILR   0xA7
+#define MPAL_REMQHIQR   0xA8
+#define MPAL_REMQTIQR   0xA9
 #define MPAL_GENTRAP    0xAA
 #define MPAL_CLRFEN     0xAE
 
@@ -1079,9 +1710,94 @@ switch (fnc) {
     case MPAL_REI:
         return STOP_NSPAL;
 
+    case MPAL_INSQHIL:
+    case MPAL_INSQHILR:
+        R[0] = mikasa_pal_insqhil ();
+        break;
+
+    case MPAL_INSQTIL:
+    case MPAL_INSQTILR:
+        R[0] = mikasa_pal_insqtil ();
+        break;
+
+    case MPAL_INSQHIQ:
+    case MPAL_INSQHIQR:
+        R[0] = mikasa_pal_insqhiq ();
+        break;
+
+    case MPAL_INSQTIQ:
+    case MPAL_INSQTIQR:
+        R[0] = mikasa_pal_insqtiq ();
+        break;
+
+    case MPAL_INSQUEL:
+        R[0] = mikasa_pal_insquel (0);
+        break;
+
+    case MPAL_INSQUEQ:
+        R[0] = mikasa_pal_insqueq (0);
+        break;
+
+    case MPAL_INSQUELD:
+        R[0] = mikasa_pal_insquel (1);
+        break;
+
+    case MPAL_INSQUEQD:
+        R[0] = mikasa_pal_insqueq (1);
+        break;
+
+    case MPAL_PROBER:
+        R[0] = mikasa_pal_probe (PTE_KRE);
+        break;
+
+    case MPAL_PROBEW:
+        R[0] = mikasa_pal_probe (PTE_KRE | PTE_KWE);
+        break;
+
+    case MPAL_REMQHIL:
+    case MPAL_REMQHILR:
+        R[0] = mikasa_pal_remqhil ();
+        break;
+
+    case MPAL_REMQTIL:
+    case MPAL_REMQTILR:
+        R[0] = mikasa_pal_remqtil ();
+        break;
+
+    case MPAL_REMQHIQ:
+    case MPAL_REMQHIQR:
+        R[0] = mikasa_pal_remqhiq ();
+        break;
+
+    case MPAL_REMQTIQ:
+    case MPAL_REMQTIQR:
+        R[0] = mikasa_pal_remqtiq ();
+        break;
+
+    case MPAL_REMQUEL:
+        R[0] = mikasa_pal_remquel (0);
+        break;
+
+    case MPAL_REMQUEQ:
+        R[0] = mikasa_pal_remqueq (0);
+        break;
+
+    case MPAL_REMQUELD:
+        R[0] = mikasa_pal_remquel (1);
+        break;
+
+    case MPAL_REMQUEQD:
+        R[0] = mikasa_pal_remqueq (1);
+        break;
+
     case MPAL_RD_PS:
         R[0] = ((t_uint64) mikasa_pal_ipl << 8) |
             (mikasa_pal_ps & MPAL_PS_SW_MASK);
+        break;
+
+    case MPAL_AMOVRR:
+    case MPAL_AMOVRM:
+        R[0] = 0;
         break;
 
     case MPAL_SWASTEN:

@@ -25,6 +25,8 @@ Implemented:
     `0x10000000`, matching `EXE$K_HWRPB`.
   - Builds bootstrap page tables and preloads EV5 ITB/DTB entries for HWRPB,
     APB, and the bootstrap page-table window.
+  - Handles APB bootstrap TLB misses against the minimal boot page tables.
+  - Handles the VMS queue/probe PAL calls reached by the APB bootstrap path.
   - Exposes CTB/CRB console callback descriptors and generic callback handlers
     for environment variables and DKA-backed open/read/write services.
   - Passes APB flags in `R5`.
@@ -47,21 +49,23 @@ Current verified stop:
 
 ```text
 Loaded OpenVMS Alpha APB from DKA0: LBN 4455271, 1049 blocks, 537088 bytes at 00200000
-
-VMS/APB bugcheck, PC: 2000B2F0 (LDL R25,0(R3))
+%APB-F-MOUNT, failed to mount volume
+HALT instruction, PC: 200037C0
 ```
 
-The APB reaches this after passing its first HWRPB platform checks and after
-using the bootstrap virtual mapping. The current failure is still before CRB
-callbacks: `CALLBACKS`, `GETENVS`, `IOREADS`, and `IOWRITES` remain zero.
+The APB reaches this after passing its first HWRPB platform checks, using the
+bootstrap virtual mapping, taking dynamic TLB misses, and executing VMS
+queue/probe PAL calls. The current failure is still before the implemented CRB
+callback counters move: `CALLBACKS`, `GETENVS`, `IOREADS`, and `IOWRITES`
+remain zero.
 
-The current trace stops with `R0=0x124` (`SS$_INSFMEM`) while allocating or
-mapping bootstrap memory around the `0x40000000` boot page-table window. An
-all-zero HWRPB PMR bitmap makes APB return the earlier `R0=0x14`
-(`SS$_BADPARAM`) because no usable memory pool is initialized, so the PMR
-bitmap is now initialized with one bits for tested pages. The next missing
-piece is therefore still the precise SRM boot memory/page-table context, not
-SCSI I/O yet.
+Earlier stops were `R0=0x124` (`SS$_INSFMEM`) while mapping bootstrap memory
+around the `0x40000000` boot page-table window, and then unsupported PAL calls
+such as `PROBER` and `INSQUEQ`. The active blocker is now the APB mount path.
+Disk 1 is an ODS-2 OpenVMS system disk (`AXPVMSSYS`, `DECFILE11B`, and
+`[SYS0...]` strings are present), so the next work is to determine whether APB
+needs a more exact SRM callback context or has switched to native NCR/Symbios
+53C810 disk I/O.
 
 ## Fisica dump quick start
 
@@ -146,6 +150,14 @@ When disassembling the APB, remember that SIMH `EX -M` takes physical
 addresses. APB virtual `0x200030A0` is physical `0x002030A0`, not
 `0x200030A0`.
 
+APB console output is not yet routed through the SIMH console callback path.
+For the current stop, the useful history extraction is:
+
+```text
+timeout 120 bash -lc "printf 'set cpu history=20000\ndo alpha/mikasa-fermi.ini\nshow cpu history\nexit\n' | BIN/alpha > /tmp/mikasa_boot_history.txt"
+perl -ane 'if ($F[0] eq "0000000020049E5C") { $c = chr(hex($F[1]) & 255); next if defined($last) && $last eq $c; print $c; $last = $c } END { print "\n" }' /tmp/mikasa_boot_history.txt
+```
+
 ## SRM Firmware Images
 
 The downloaded AlphaServer 1000 firmware set is outside this repository:
@@ -175,28 +187,34 @@ debug tracing, the PC cycles inside the ROM decompressor around `0x900301` and
 
 ## Next implementation steps
 
-1. Reconstruct the remaining SRM boot memory/page-table context.
-   Keep checking HWRPB VPTB/processor-slot `PTBR`/`PT_VA`, the MDDT cluster
-   layout, and the APB page-table descriptors around physical `0x00258E24` and
-   `0x002649D0`.
+1. Understand the APB mount failure.
+   Confirm whether the APB is attempting SRM callback I/O or native SCSI I/O.
+   If callbacks are expected, fix the CRB/IOVEC/boot environment context until
+   `CALLBACKS`, `GETENVS`, or `IOREADS` increment. If native SCSI is expected,
+   move directly to Mikasa PCI/CIA/53C810 work.
 
-2. Tighten the remaining HWRPB/SRM fields.
+2. Keep tightening the remaining SRM boot memory/page-table context.
+   HWRPB VPTB/processor-slot `PTBR`/`PT_VA`, the MDDT cluster layout, and APB
+   page-table behavior around `EXE$K_BOOTPT` remain useful checks. Dynamic TLB
+   misses are handled for bring-up, but this is not complete SRM PALcode.
+
+3. Tighten the remaining HWRPB/SRM fields.
    CTB/CRB and callback descriptors exist, but PAL revision fields, DSR data,
    and SWRPB/boot context are still minimal.
 
-3. Add Mikasa platform I/O.
+4. Add Mikasa platform I/O.
    Linux identifies Mikasa PCI interrupt summary/mask registers at ISA ports
    `0x534` and `0x536`, with NCR 810 SCSI on the PCI interrupt summary bit 12.
 
-4. Add a new NCR/Symbios 53C810 frontend.
+5. Add a new NCR/Symbios 53C810 frontend.
    SIMH has a common SCSI backend, but no 53C810 PCI DMA frontend in this tree.
    The implementation must be written cleanly for SIMH licensing; do not copy
    GPL code from AXPbox.
 
-5. Wire the 53C810 frontend to the four DKA images.
+6. Wire the 53C810 frontend to the four DKA images.
    Once APB switches from firmware disk reads to OS disk I/O, the current raw
    loader path is not enough. OpenVMS will need the real SCSI controller model.
 
-6. Add regression tests that do not require redistributing the disk dump.
+7. Add regression tests that do not require redistributing the disk dump.
    A small synthetic OpenVMS-style boot block can verify LBN/count parsing and
    APB placement.
