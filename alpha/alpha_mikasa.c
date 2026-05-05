@@ -106,8 +106,10 @@
 #define MIKASA_APECS_PCI_SIO        0x1C0000000ULL
 #define MIKASA_APECS_PCI_SIO_SIZE   0x02000000
 #define MIKASA_ISA_COM1             0x3F8
+#define MIKASA_ISA_OCP              0x530
 #define MIKASA_ISA_ICU_IMR          0x536
 #define MIKASA_ISA_ICU_PRESENT      0x8000
+#define MIKASA_OCP_READY            0x80
 
 #define MIKASA_UART_LSR_DR          0x01
 #define MIKASA_UART_LSR_THRE        0x20
@@ -118,6 +120,9 @@
 #define MIKASA_UART_MSR_CTS         0x10
 #define MIKASA_UART_MSR_DSR         0x20
 #define MIKASA_UART_MSR_DCD         0x80
+
+#define MIKASA_DBG_IO               0x0001
+#define MIKASA_DBG_UART             0x0002
 
 #define HWRPB_ID                    0x0000004250525748ULL
 #define HWRPB_CHECKSUM_OFF          0x120
@@ -369,6 +374,7 @@ static uint8 mikasa_uart_dll = 0;
 static uint8 mikasa_uart_dlm = 0;
 static uint8 mikasa_uart_rbr = 0;
 static t_bool mikasa_uart_rbr_valid = FALSE;
+static uint8 mikasa_ocp_reg[4] = { 0 };
 static uint32 mikasa_scc_scale = 1;
 
 UNIT mikasa_unit = { UDATA (NULL, 0, 0) };
@@ -376,6 +382,12 @@ UNIT mikasa_unit = { UDATA (NULL, 0, 0) };
 DIB mikasa_dib = {
     MIKASA_APECS_PCI_SIO, MIKASA_APECS_PCI_SIO + MIKASA_APECS_PCI_SIO_SIZE,
     &mikasa_io_rd, &mikasa_io_wr, 0
+    };
+
+DEBTAB mikasa_debug[] = {
+    { "IO", MIKASA_DBG_IO },
+    { "UART", MIKASA_DBG_UART },
+    { NULL, 0 }
     };
 
 REG mikasa_reg[] = {
@@ -422,7 +434,7 @@ DEVICE mikasa_dev = {
     1, 16, 32, 1, 16, 8,
     NULL, NULL, &mikasa_reset,
     NULL, NULL, NULL, &mikasa_dib,
-    DEV_DIB, 0, NULL
+    DEV_DIB|DEV_DEBUG, 0, mikasa_debug
     };
 
 static void mikasa_uart_poll (void)
@@ -498,6 +510,8 @@ switch (reg) {
             mikasa_uart_dll = val;
         else {
             c = sim_tt_outcvt (val, TT_MODE_8B);
+            sim_debug (MIKASA_DBG_UART, &mikasa_dev,
+                "COM1 transmit %02X\n", val);
             if (c >= 0)
                 (void) sim_putchar_s (c);
             }
@@ -534,8 +548,16 @@ uint32 icu = mikasa_irq_mask | MIKASA_ISA_ICU_PRESENT;
 
 if ((port >= MIKASA_ISA_COM1) && (port < (MIKASA_ISA_COM1 + 8)))
     return mikasa_uart_read (port);
+if ((port >= MIKASA_ISA_OCP) && (port < (MIKASA_ISA_OCP + 4))) {
+    uint32 reg = port - MIKASA_ISA_OCP;
+
+    if (reg == 1)
+        return mikasa_ocp_reg[reg] | MIKASA_OCP_READY;
+    return mikasa_ocp_reg[reg];
+    }
 if ((port == MIKASA_ISA_ICU_IMR) || (port == (MIKASA_ISA_ICU_IMR + 1)))
     return (uint8) (icu >> ((port - MIKASA_ISA_ICU_IMR) << 3));
+sim_debug (MIKASA_DBG_IO, &mikasa_dev, "unhandled ISA read %03X\n", port);
 return 0;
 }
 
@@ -545,10 +567,17 @@ if ((port >= MIKASA_ISA_COM1) && (port < (MIKASA_ISA_COM1 + 8))) {
     mikasa_uart_write (port, val);
     return;
     }
+if ((port >= MIKASA_ISA_OCP) && (port < (MIKASA_ISA_OCP + 4))) {
+    mikasa_ocp_reg[port - MIKASA_ISA_OCP] = val;
+    return;
+    }
 if (port == MIKASA_ISA_ICU_IMR)
     mikasa_irq_mask = (mikasa_irq_mask & 0xFF00) | val;
 else if (port == (MIKASA_ISA_ICU_IMR + 1))
     mikasa_irq_mask = (mikasa_irq_mask & 0x00FF) | (((uint32) val) << 8);
+else
+    sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+        "unhandled ISA write %03X=%02X\n", port, val);
 return;
 }
 
@@ -2974,5 +3003,6 @@ mikasa_uart_dll = 0;
 mikasa_uart_dlm = 0;
 mikasa_uart_rbr = 0;
 mikasa_uart_rbr_valid = FALSE;
+memset (mikasa_ocp_reg, 0, sizeof (mikasa_ocp_reg));
 return SCPE_OK;
 }
