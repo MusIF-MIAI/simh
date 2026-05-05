@@ -105,8 +105,16 @@
 #define MIKASA_ROM_WORKSPACE_SIZE   0x01000000
 #define MIKASA_AXPBOX_ROM_MEMSIZE   0x00200000
 #define MIKASA_AXPBOX_ROM_SIZE      (16 + MIKASA_AXPBOX_ROM_MEMSIZE)
+#define MIKASA_EPIC_BASE            0x1A0000000ULL
+#define MIKASA_EPIC_SIZE            0x00001000
+#define MIKASA_APECS_PCI_IACK       0x1B0000000ULL
 #define MIKASA_APECS_PCI_SIO        0x1C0000000ULL
 #define MIKASA_APECS_PCI_SIO_SIZE   0x02000000
+#define MIKASA_APECS_PCI_CONF       0x1E0000000ULL
+#define MIKASA_APECS_PCI_CONF_SIZE  0x02000000
+/* SRM reports the EISA bridge as virtual slot 2; config cycles use IDSEL 7. */
+#define MIKASA_PCI_SLOT_PCEB        7
+#define MIKASA_PCI_CFG_DWORDS       64
 #define MIKASA_ISA_DMA1             0x000
 #define MIKASA_ISA_PIC1             0x020
 #define MIKASA_ISA_CFG_INDEX        0x022
@@ -152,6 +160,9 @@
 
 #define MIKASA_DBG_IO               0x0001
 #define MIKASA_DBG_UART             0x0002
+#define MIKASA_DBG_EISA             0x0004
+#define MIKASA_DBG_RTC              0x0008
+#define MIKASA_DBG_PCI              0x0010
 
 #define HWRPB_ID                    0x0000004250525748ULL
 #define HWRPB_CHECKSUM_OFF          0x120
@@ -423,19 +434,24 @@ static uint8 mikasa_sio_reg[256] = { 0 };
 static uint8 mikasa_nmi_ctrl = 0;
 static uint8 mikasa_eisa_cram_page = 0;
 static uint8 mikasa_eisa_cram[MIKASA_EISA_CRAM_PAGES][MIKASA_EISA_CRAM_SIZE];
+static uint32 mikasa_epic_reg[MIKASA_EPIC_SIZE >> 5] = { 0 };
+static uint32 mikasa_pceb_cfg[MIKASA_PCI_CFG_DWORDS] = { 0 };
 static uint8 mikasa_ocp_reg[4] = { 0 };
 static uint32 mikasa_scc_scale = 1;
 
 UNIT mikasa_unit = { UDATA (NULL, 0, 0) };
 
 DIB mikasa_dib = {
-    MIKASA_APECS_PCI_SIO, MIKASA_APECS_PCI_SIO + MIKASA_APECS_PCI_SIO_SIZE,
+    MIKASA_EPIC_BASE, MIKASA_APECS_PCI_CONF + MIKASA_APECS_PCI_CONF_SIZE,
     &mikasa_io_rd, &mikasa_io_wr, 0
     };
 
 DEBTAB mikasa_debug[] = {
     { "IO", MIKASA_DBG_IO },
     { "UART", MIKASA_DBG_UART },
+    { "EISA", MIKASA_DBG_EISA },
+    { "RTC", MIKASA_DBG_RTC },
+    { "PCI", MIKASA_DBG_PCI },
     { NULL, 0 }
     };
 
@@ -711,6 +727,7 @@ return (uint8) (((val / 10) << 4) | (val % 10));
 static uint8 mikasa_rtc_read_data (void)
 {
 uint8 index = mikasa_rtc_index & 0x7F;
+uint8 val;
 time_t now;
 struct tm *tm;
 
@@ -721,42 +738,57 @@ if (tm == NULL)
 
 switch (index) {
     case 0x00:
-        return mikasa_rtc_encode ((uint32) tm->tm_sec);
+        val = mikasa_rtc_encode ((uint32) tm->tm_sec);
+        break;
 
     case 0x02:
-        return mikasa_rtc_encode ((uint32) tm->tm_min);
+        val = mikasa_rtc_encode ((uint32) tm->tm_min);
+        break;
 
     case 0x04:
-        return mikasa_rtc_encode ((uint32) tm->tm_hour);
+        val = mikasa_rtc_encode ((uint32) tm->tm_hour);
+        break;
 
     case 0x06:
-        return mikasa_rtc_encode ((uint32) (tm->tm_wday + 1));
+        val = mikasa_rtc_encode ((uint32) (tm->tm_wday + 1));
+        break;
 
     case 0x07:
-        return mikasa_rtc_encode ((uint32) tm->tm_mday);
+        val = mikasa_rtc_encode ((uint32) tm->tm_mday);
+        break;
 
     case 0x08:
-        return mikasa_rtc_encode ((uint32) (tm->tm_mon + 1));
+        val = mikasa_rtc_encode ((uint32) (tm->tm_mon + 1));
+        break;
 
     case 0x09:
-        return mikasa_rtc_encode ((uint32) (tm->tm_year % 100));
+        val = mikasa_rtc_encode ((uint32) (tm->tm_year % 100));
+        break;
 
     case MIKASA_RTC_STATUSA:
-        return (mikasa_rtc_reg[index] & 0x7F) | 0x20;
+        val = (mikasa_rtc_reg[index] & 0x7F) | 0x20;
+        break;
 
     case MIKASA_RTC_INTR:
         mikasa_rtc_reg[index] = 0;
-        return 0;
+        val = 0;
+        break;
 
     case MIKASA_RTC_STATUSD:
-        return MIKASA_RTC_POWER_OK;
+        val = MIKASA_RTC_POWER_OK;
+        break;
 
     case MIKASA_RTC_CENTURY:
-        return mikasa_rtc_encode ((uint32) ((tm->tm_year + 1900) / 100));
+        val = mikasa_rtc_encode ((uint32) ((tm->tm_year + 1900) / 100));
+        break;
 
     default:
-        return mikasa_rtc_reg[index];
+        val = mikasa_rtc_reg[index];
+        break;
         }
+sim_debug (MIKASA_DBG_RTC, &mikasa_dev, "RTC read %02X=%02X\n",
+    index, val);
+return val;
 }
 
 static void mikasa_rtc_write_data (uint8 val)
@@ -765,6 +797,8 @@ uint8 index = mikasa_rtc_index & 0x7F;
 
 if ((index != MIKASA_RTC_INTR) && (index != MIKASA_RTC_STATUSD))
     mikasa_rtc_reg[index] = val;
+sim_debug (MIKASA_DBG_RTC, &mikasa_dev, "RTC write %02X=%02X\n",
+    index, val);
 return;
 }
 
@@ -793,13 +827,24 @@ return ((port & 0x0FFF) >= MIKASA_EISA_SLOT_ID) &&
 static uint8 mikasa_eisa_read (uint32 port)
 {
 if ((port >= MIKASA_EISA_CRAM) &&
-    (port < (MIKASA_EISA_CRAM + MIKASA_EISA_CRAM_SIZE)))
-    return mikasa_eisa_cram[mikasa_eisa_cram_page &
+    (port < (MIKASA_EISA_CRAM + MIKASA_EISA_CRAM_SIZE))) {
+    uint8 val = mikasa_eisa_cram[mikasa_eisa_cram_page &
         (MIKASA_EISA_CRAM_PAGES - 1)][port - MIKASA_EISA_CRAM];
-if (port == MIKASA_EISA_CRAM_PAGE_REG)
+    sim_debug (MIKASA_DBG_EISA, &mikasa_dev,
+        "EISA CRAM read page %02X offset %02X=%02X\n",
+        mikasa_eisa_cram_page, port - MIKASA_EISA_CRAM, val);
+    return val;
+    }
+if (port == MIKASA_EISA_CRAM_PAGE_REG) {
+    sim_debug (MIKASA_DBG_EISA, &mikasa_dev,
+        "EISA CRAM page read %02X\n", mikasa_eisa_cram_page);
     return mikasa_eisa_cram_page;
-if (mikasa_eisa_slot_id_port (port))
+    }
+if (mikasa_eisa_slot_id_port (port)) {
+    sim_debug (MIKASA_DBG_EISA, &mikasa_dev,
+        "EISA slot id read %04X=FF\n", port);
     return 0xFF;
+    }
 return 0;
 }
 
@@ -809,15 +854,136 @@ if ((port >= MIKASA_EISA_CRAM) &&
     (port < (MIKASA_EISA_CRAM + MIKASA_EISA_CRAM_SIZE))) {
     mikasa_eisa_cram[mikasa_eisa_cram_page &
         (MIKASA_EISA_CRAM_PAGES - 1)][port - MIKASA_EISA_CRAM] = val;
+    sim_debug (MIKASA_DBG_EISA, &mikasa_dev,
+        "EISA CRAM write page %02X offset %02X=%02X\n",
+        mikasa_eisa_cram_page, port - MIKASA_EISA_CRAM, val);
     return TRUE;
     }
 if (port == MIKASA_EISA_CRAM_PAGE_REG) {
     mikasa_eisa_cram_page = val & (MIKASA_EISA_CRAM_PAGES - 1);
+    sim_debug (MIKASA_DBG_EISA, &mikasa_dev,
+        "EISA CRAM page write %02X\n", mikasa_eisa_cram_page);
     return TRUE;
     }
-if (mikasa_eisa_slot_id_port (port))
+if (mikasa_eisa_slot_id_port (port)) {
+    sim_debug (MIKASA_DBG_EISA, &mikasa_dev,
+        "EISA slot id write %04X=%02X\n", port, val);
     return TRUE;
+    }
 return FALSE;
+}
+
+static t_uint64 mikasa_sparse_pack (uint32 off, uint32 val, uint32 lnt,
+    uint32 mode)
+{
+uint32 port = off >> 5;
+
+if (mode == 1)
+    return ((t_uint64) (val & 0xFFFF)) << (8 * (port & 2));
+if (mode == 3)
+    return val;
+if (lnt == L_BYTE)
+    return val & 0xFF;
+return ((t_uint64) (val & 0xFF)) << (8 * (port & 3));
+}
+
+static t_uint64 mikasa_epic_read (t_uint64 pa, uint32 lnt)
+{
+uint32 off = (uint32) (pa - MIKASA_EPIC_BASE);
+uint32 index = (off & (MIKASA_EPIC_SIZE - 1)) >> 5;
+uint32 val = mikasa_epic_reg[index];
+
+sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "EPIC read %03X=%08X\n",
+    off, val);
+return val;
+}
+
+static void mikasa_epic_write (t_uint64 pa, t_uint64 val, uint32 lnt)
+{
+uint32 off = (uint32) (pa - MIKASA_EPIC_BASE);
+uint32 index = (off & (MIKASA_EPIC_SIZE - 1)) >> 5;
+
+mikasa_epic_reg[index] = (uint32) val;
+sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "EPIC write %03X=%08X\n",
+    off, (uint32) val);
+return;
+}
+
+static t_bool mikasa_pceb_bar_reg (uint32 reg)
+{
+return ((reg >= 0x10) && (reg <= 0x24)) || (reg == 0x30);
+}
+
+static uint32 mikasa_pci_conf_read_l (uint32 cfg)
+{
+uint32 bus = (cfg >> 16) & 0xFF;
+uint32 slot = (cfg >> 11) & 0x1F;
+uint32 func = (cfg >> 8) & 7;
+uint32 reg = cfg & 0xFC;
+uint32 val = 0xFFFFFFFFu;
+
+if ((bus == 0) && (slot == MIKASA_PCI_SLOT_PCEB)) {
+    val = (func == 0) ? mikasa_pceb_cfg[reg >> 2] : 0xFFFFFFFFu;
+    sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+        "PCI config read bus %u slot %u func %u reg %02X=%08X\n",
+        bus, slot, func, reg, val);
+    return val;
+    }
+sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+    "PCI config read bus %u slot %u func %u reg %02X=FFFFFFFF\n",
+    bus, slot, func, reg);
+return val;
+}
+
+static void mikasa_pci_conf_write_l (uint32 cfg, uint32 val)
+{
+uint32 bus = (cfg >> 16) & 0xFF;
+uint32 slot = (cfg >> 11) & 0x1F;
+uint32 func = (cfg >> 8) & 7;
+uint32 reg = cfg & 0xFC;
+
+if ((bus == 0) && (slot == MIKASA_PCI_SLOT_PCEB) && (func == 0)) {
+    if ((reg != 0x00) && (reg != 0x08) && !mikasa_pceb_bar_reg (reg))
+        mikasa_pceb_cfg[reg >> 2] = val;
+    sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+        "PCI config write bus %u slot %u func %u reg %02X=%08X\n",
+        bus, slot, func, reg, val);
+    return;
+    }
+sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+    "PCI config write bus %u slot %u func %u reg %02X=%08X\n",
+    bus, slot, func, reg, val);
+return;
+}
+
+static t_uint64 mikasa_pci_conf_read (t_uint64 pa, uint32 lnt)
+{
+uint32 off = (uint32) (pa - MIKASA_APECS_PCI_CONF);
+uint32 mode = (off >> 3) & 3;
+uint32 cfg = off >> 5;
+uint32 val;
+
+val = mikasa_pci_conf_read_l (cfg & ~3u);
+return mikasa_sparse_pack (off, val >> (8 * (cfg & 3)), lnt, mode);
+}
+
+static void mikasa_pci_conf_write (t_uint64 pa, t_uint64 val, uint32 lnt)
+{
+uint32 off = (uint32) (pa - MIKASA_APECS_PCI_CONF);
+uint32 mode = (off >> 3) & 3;
+uint32 cfg = off >> 5;
+uint32 data;
+
+if (mode == 3)
+    data = (uint32) val;
+else if (mode == 1)
+    data = (uint32) (val >> (8 * (cfg & 2)));
+else if (lnt == L_BYTE)
+    data = (uint32) val;
+else
+    data = (uint32) (val >> (8 * (cfg & 3)));
+mikasa_pci_conf_write_l (cfg & ~3u, data);
+return;
 }
 
 static uint8 mikasa_isa_read (uint32 port)
@@ -998,13 +1164,38 @@ return;
 
 static t_bool mikasa_io_rd (t_uint64 pa, t_uint64 *val, uint32 lnt)
 {
-*val = mikasa_sparse_read (pa, lnt);
+if ((pa >= MIKASA_EPIC_BASE) && (pa < (MIKASA_EPIC_BASE + MIKASA_EPIC_SIZE)))
+    *val = mikasa_epic_read (pa, lnt);
+else if (pa == MIKASA_APECS_PCI_IACK)
+    *val = 0;
+else if ((pa >= MIKASA_APECS_PCI_SIO) &&
+    (pa < (MIKASA_APECS_PCI_SIO + MIKASA_APECS_PCI_SIO_SIZE)))
+    *val = mikasa_sparse_read (pa, lnt);
+else if ((pa >= MIKASA_APECS_PCI_CONF) &&
+    (pa < (MIKASA_APECS_PCI_CONF + MIKASA_APECS_PCI_CONF_SIZE)))
+    *val = mikasa_pci_conf_read (pa, lnt);
+else {
+    sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+        "unhandled APECS read %llX\n", (unsigned long long) pa);
+    *val = M32;
+    }
 return TRUE;
 }
 
 static t_bool mikasa_io_wr (t_uint64 pa, t_uint64 val, uint32 lnt)
 {
-mikasa_sparse_write (pa, val, lnt);
+if ((pa >= MIKASA_EPIC_BASE) && (pa < (MIKASA_EPIC_BASE + MIKASA_EPIC_SIZE)))
+    mikasa_epic_write (pa, val, lnt);
+else if ((pa >= MIKASA_APECS_PCI_SIO) &&
+    (pa < (MIKASA_APECS_PCI_SIO + MIKASA_APECS_PCI_SIO_SIZE)))
+    mikasa_sparse_write (pa, val, lnt);
+else if ((pa >= MIKASA_APECS_PCI_CONF) &&
+    (pa < (MIKASA_APECS_PCI_CONF + MIKASA_APECS_PCI_CONF_SIZE)))
+    mikasa_pci_conf_write (pa, val, lnt);
+else
+    sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+        "unhandled APECS write %llX=%llX\n",
+        (unsigned long long) pa, (unsigned long long) val);
 return TRUE;
 }
 
@@ -3387,7 +3578,13 @@ mikasa_sio_index = 0;
 memset (mikasa_sio_reg, 0, sizeof (mikasa_sio_reg));
 mikasa_nmi_ctrl = 0;
 mikasa_eisa_cram_page = 0;
-memset (mikasa_eisa_cram, 0xFF, sizeof (mikasa_eisa_cram));
+memset (mikasa_eisa_cram, 0, sizeof (mikasa_eisa_cram));
+memset (mikasa_epic_reg, 0, sizeof (mikasa_epic_reg));
+memset (mikasa_pceb_cfg, 0, sizeof (mikasa_pceb_cfg));
+mikasa_pceb_cfg[0x00 >> 2] = 0x04828086u;
+mikasa_pceb_cfg[0x04 >> 2] = 0x02000007u;
+mikasa_pceb_cfg[0x08 >> 2] = 0x06020003u;
+mikasa_pceb_cfg[0x40 >> 2] = 0x80800020u;
 memset (mikasa_ocp_reg, 0, sizeof (mikasa_ocp_reg));
 return SCPE_OK;
 }
