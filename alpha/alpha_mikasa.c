@@ -5721,7 +5721,7 @@ uint32 mode = (uint32) ((off >> 3) & 3);
 uint32 reg;
 uint32 val;
 
-if (mikasa_ncr_bar_reg (addr, 0x14, 0x07FFFFFFu, &reg)) {
+if (mikasa_ncr_bar_reg (addr, 0x14, 0xFFFFFFFFu, &reg)) {
     if (mode == 3)
         return mikasa_ncr_read_l (reg & ~3u);
     if (mode == 1) {
@@ -5733,7 +5733,7 @@ if (mikasa_ncr_bar_reg (addr, 0x14, 0x07FFFFFFu, &reg)) {
         return val;
     return ((t_uint64) val) << (8 * (addr & 3));
     }
-if (mikasa_tulip_bar_reg (addr, 0x14, 0x07FFFFFFu, &reg)) {
+if (mikasa_tulip_bar_reg (addr, 0x14, 0xFFFFFFFFu, &reg)) {
     if (mode == 3)
         return mikasa_tulip_read_l (reg & ~3u);
     if (mode == 1) {
@@ -5762,7 +5762,7 @@ uint32 mode = (uint32) ((off >> 3) & 3);
 uint32 reg;
 uint32 data;
 
-if (mikasa_ncr_bar_reg (addr, 0x14, 0x07FFFFFFu, &reg)) {
+if (mikasa_ncr_bar_reg (addr, 0x14, 0xFFFFFFFFu, &reg)) {
     if (mode == 3)
         mikasa_ncr_write_l (reg & ~3u, (uint32) val);
     else if (mode == 1) {
@@ -5777,7 +5777,7 @@ if (mikasa_ncr_bar_reg (addr, 0x14, 0x07FFFFFFu, &reg)) {
         }
     return;
     }
-if (mikasa_tulip_bar_reg (addr, 0x14, 0x07FFFFFFu, &reg)) {
+if (mikasa_tulip_bar_reg (addr, 0x14, 0xFFFFFFFFu, &reg)) {
     if (mode == 3)
         mikasa_tulip_write_l (reg & ~3u, (uint32) val);
     else if (mode == 1) {

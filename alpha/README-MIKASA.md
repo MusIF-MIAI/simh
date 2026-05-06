@@ -24,6 +24,9 @@ Implemented:
   - EPIC sparse PCI memory accesses now use `HAXR1` for high-address
     extension, and EPIC DMA window registers preserve the documented writable
     fields used by the PCI DMA mapper.
+  - Sparse-memory device BAR decode now compares against the full
+    `HAXR1`-extended PCI address, which lets firmware-assigned `0x81000000`
+    NCR/Tulip BARs reach the emulated register windows.
   - EPIC now models `HAXR0`, `HAXR2`, `PMLT`, the eight TLB tag/data entries,
     `TBIA`, direct PCI DMA windows, and SGMAP DMA windows backed by the
     programmed TBASE scatter/gather table.

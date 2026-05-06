@@ -11,6 +11,8 @@
 - [x] Preserve EPIC DMA window registers and use them for PCI DMA translation.
 - [x] Add EPIC HAXR0/HAXR2/PMLT/TLB/TBIA register behavior and SGMAP-backed
   PCI DMA translation through TBASE.
+- [x] Decode APECS sparse-memory device BARs against the full `HAXR1`-extended
+  PCI address instead of truncating BAR bases to the low sparse-address bits.
 - [x] Mask APECS Comanche/EPIC error/status writes and add write-one-to-clear
   behavior for documented error latches.
 - [x] Mask documented Comanche control, tag-enable, video-frame, bank base,
@@ -454,6 +456,9 @@ the real path works.
   - add the Comanche register block at `0x180000000`;
   - current branch preserves EPIC HAXR0/HAXR1/HAXR2/PMLT, window
     base/mask/TBASE, TLB tag/data, and TBIA state;
+  - current branch decodes sparse-memory device BARs against the full
+    `HAXR1`-extended PCI address, so firmware BARs at `0x81000000` reach the
+    NCR/Tulip register windows instead of becoming false `EPIC.NDEV` accesses;
   - current branch translates direct windows and SGMAP windows through TBASE
     by reading the programmed scatter/gather table and filling the EPIC TLB;
   - current branch masks Comanche/EPIC error registers and handles
