@@ -283,7 +283,10 @@
 #define MIKASA_NCR_REG_GPCNTL       0x47
 #define MIKASA_NCR_REG_STEST0       0x4C
 #define MIKASA_NCR_SCNTL0_ARB       0xC0
+#define MIKASA_NCR_SCNTL0_TRG       0x01
 #define MIKASA_NCR_SCNTL1_ISCON     0x10
+#define MIKASA_NCR_SOCL_ACK         0x40
+#define MIKASA_NCR_SOCL_ATN         0x08
 #define MIKASA_NCR_DSTAT_DFE        0x80
 #define MIKASA_NCR_DSTAT_SIR        0x04
 #define MIKASA_NCR_DSTAT_ABRT       0x10
@@ -349,6 +352,9 @@
 #define MIKASA_NCR_SCR_SET          0x58000000u
 #define MIKASA_NCR_SCR_CLR          0x60000000u
 #define MIKASA_NCR_SCR_CARRY        0x00000400u
+#define MIKASA_NCR_SCR_TARGET       0x00000200u
+#define MIKASA_NCR_SCR_ACK          0x00000040u
+#define MIKASA_NCR_SCR_ATN          0x00000008u
 #define MIKASA_NCR_TC_GROUP_MASK    0xF8000000u
 #define MIKASA_NCR_TC_JUMP          0x80000000u
 #define MIKASA_NCR_TC_CALL          0x88000000u
@@ -2750,6 +2756,40 @@ for (i = 0; i < count; i++) {
 return TRUE;
 }
 
+static void mikasa_ncr_script_set_clear (uint32 op, t_bool set,
+    MIKASA_NCR_SCRIPT_STATE *state)
+{
+uint8 socl = mikasa_ncr_reg[MIKASA_NCR_REG_SOCL];
+uint8 scntl0 = mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL0];
+uint8 mask = 0;
+
+if (op & MIKASA_NCR_SCR_CARRY)
+    state->carry = set;
+if (!state->side_effects)
+    return;
+if (op & MIKASA_NCR_SCR_ACK)
+    mask |= MIKASA_NCR_SOCL_ACK;
+if (op & MIKASA_NCR_SCR_ATN)
+    mask |= MIKASA_NCR_SOCL_ATN;
+if (set)
+    socl |= mask;
+else
+    socl &= ~mask;
+mikasa_ncr_reg[MIKASA_NCR_REG_SOCL] = socl;
+mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] =
+    (mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] &
+    ~(MIKASA_NCR_SOCL_ACK | MIKASA_NCR_SOCL_ATN)) |
+    (socl & (MIKASA_NCR_SOCL_ACK | MIKASA_NCR_SOCL_ATN));
+if (op & MIKASA_NCR_SCR_TARGET) {
+    if (set)
+        scntl0 |= MIKASA_NCR_SCNTL0_TRG;
+    else
+        scntl0 &= ~MIKASA_NCR_SCNTL0_TRG;
+    mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL0] = scntl0;
+    }
+return;
+}
+
 static t_bool mikasa_ncr_script_condition (uint32 op,
     MIKASA_NCR_SCRIPT_STATE *state)
 {
@@ -2804,14 +2844,12 @@ if ((op & MIKASA_NCR_LS_GROUP_MASK) == MIKASA_NCR_LS_GROUP) {
     return TRUE;
     }
 if ((op & 0xFF000000u) == MIKASA_NCR_SCR_SET) {
-    if (op & MIKASA_NCR_SCR_CARRY)
-        state->carry = TRUE;
+    mikasa_ncr_script_set_clear (op, TRUE, state);
     *dsp = next;
     return TRUE;
     }
 if ((op & 0xFF000000u) == MIKASA_NCR_SCR_CLR) {
-    if (op & MIKASA_NCR_SCR_CARRY)
-        state->carry = FALSE;
+    mikasa_ncr_script_set_clear (op, FALSE, state);
     *dsp = next;
     return TRUE;
     }

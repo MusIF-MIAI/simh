@@ -102,6 +102,8 @@ Not implemented yet:
   write-one clearing, while auxiliary script scans suppress `INTFLY` side
   effects. Auxiliary scans also suppress SCRIPTS register-op, load/store, and
   memory-copy writes while preserving local SFBR/carry state for conditions.
+  SCRIPTS `SET`/`CLR` now implement the documented carry, ACK, ATN, and
+  target-mode side effects in `SOCL`, `SBCL`, and `SCNTL0`.
   SCRIPTS execution can now be started through `DCNTL.STD` as well as by
   writing `DSP`.
   CPU writes no longer overwrite read-only NCR status registers, and completed
