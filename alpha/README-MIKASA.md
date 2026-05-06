@@ -134,7 +134,8 @@ Not implemented yet:
   INQUIRY EVPD pages 0x00/0x80/0x83. CDBs now drive explicit DATA IN, DATA
   OUT, or no-data phase selection, and harmless DATA OUT parameter lists are
   consumed instead of leaving stale DMA progress. MODE SENSE replies include a
-  direct-access block descriptor unless the CDB sets DBD.
+  direct-access block descriptor unless the CDB sets DBD, and include common
+  disconnect/reconnect, format-device, and control pages.
 - Full Ethernet, VGA, full NVRAM, and multiprocessor support. A DECchip 21040
   PCI/CSR shell exists so firmware and OS probes see a plausible DEC Ethernet
   device, including basic reset/status/run-state behavior, but packet I/O is

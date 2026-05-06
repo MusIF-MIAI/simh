@@ -3378,6 +3378,23 @@ switch (page_code) {
         buf[8] = 0x0B;                              /* write retry count */
         return 12;
 
+    case 0x02:                                      /* disconnect/reconnect */
+        if (max < 16)
+            return 0;
+        buf[0] = 0x02;
+        buf[1] = 0x0E;
+        return 16;
+
+    case 0x03:                                      /* format device */
+        if (max < 24)
+            return 0;
+        buf[0] = 0x03;
+        buf[1] = 0x16;
+        mikasa_ncr_write_be16 (&buf[10], sectors);
+        mikasa_ncr_write_be16 (&buf[12], MIKASA_DKA_BLOCK_SIZE);
+        mikasa_ncr_write_be16 (&buf[14], 1);
+        return 24;
+
     case 0x04:                                      /* rigid geometry */
         if (max < 24)
             return 0;
@@ -3398,6 +3415,13 @@ switch (page_code) {
         buf[2] = 0x04;                              /* read cache enable */
         return 20;
 
+    case 0x0A:                                      /* control */
+        if (max < 12)
+            return 0;
+        buf[0] = 0x0A;
+        buf[1] = 0x0A;
+        return 12;
+
     default:
         return 0;
         }
@@ -3410,8 +3434,11 @@ uint32 off = 0;
 
 if (page_code == 0x3F) {
     off += mikasa_ncr_mode_page (unit, 0x01, buf + off, max - off);
+    off += mikasa_ncr_mode_page (unit, 0x02, buf + off, max - off);
+    off += mikasa_ncr_mode_page (unit, 0x03, buf + off, max - off);
     off += mikasa_ncr_mode_page (unit, 0x04, buf + off, max - off);
     off += mikasa_ncr_mode_page (unit, 0x08, buf + off, max - off);
+    off += mikasa_ncr_mode_page (unit, 0x0A, buf + off, max - off);
     return off;
     }
 return mikasa_ncr_mode_page (unit, page_code, buf, max);
