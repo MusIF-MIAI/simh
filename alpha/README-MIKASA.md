@@ -115,7 +115,8 @@ Not implemented yet:
   handled data-in, status, and message-in phases. SCRIPTS selection attempts
   now expose the won-arbitration status bit in `SSTAT0`. `DMODE.MAN`
   manual-start mode is honored, so `DSP` writes only auto-start SCRIPTS when
-  manual-start is clear.
+  manual-start is clear; `DCNTL.SSM` single-step mode also requires
+  `DCNTL.STD` instead of auto-starting from `DSP`.
   SCRIPTS execution can now be started through `DCNTL.STD` as well as by
   writing `DSP`.
   CPU writes no longer overwrite read-only NCR status registers, and completed

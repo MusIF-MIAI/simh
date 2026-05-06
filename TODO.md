@@ -57,6 +57,8 @@
   `SSTAT0.WOA`.
 - [x] Honor NCR `DMODE.MAN` manual-start mode so `DSP` writes do not start
   SCRIPTS until `DCNTL.STD` is set.
+- [x] Honor NCR `DCNTL.SSM` restart semantics by requiring `DCNTL.STD` rather
+  than auto-starting from `DSP` writes in single-step mode.
 - [x] Start NCR SCRIPTS execution from `DCNTL.STD`, not only from writes to
   `DSP`, matching the normal 53C810 driver path.
 - [x] Preserve NCR read-only status registers on CPU writes and expose current
@@ -108,6 +110,8 @@
   `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after honoring NCR `DMODE.MAN`; it still reaches
   `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after honoring NCR `DCNTL.SSM` autostart gating;
+  it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -195,6 +199,8 @@ the real path works.
     selection attempts;
   - current branch honors `DMODE.MAN`, requiring `DCNTL.STD` to start SCRIPTS
     when manual-start mode is enabled;
+  - current branch also requires `DCNTL.STD` in `DCNTL.SSM` single-step mode
+    instead of auto-starting from `DSP` writes;
   - current branch starts SCRIPTS from `DCNTL.STD` as well as the firmware-style
     `DSP` high-byte write;
   - current branch preserves read-only NCR status registers and reports the

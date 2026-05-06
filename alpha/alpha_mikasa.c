@@ -298,6 +298,7 @@
 #define MIKASA_NCR_DSTAT_IRQS       0x7Du
 #define MIKASA_NCR_SSTAT0_WOA       0x04
 #define MIKASA_NCR_DMODE_MAN        0x01
+#define MIKASA_NCR_DCNTL_SSM        0x10
 #define MIKASA_NCR_DCNTL_STD        0x04
 #define MIKASA_NCR_ISTAT_SRST       0x40
 #define MIKASA_NCR_ISTAT_SIGP       0x20
@@ -3916,7 +3917,8 @@ else {
     if (reg == (MIKASA_NCR_REG_DSP + 3)) {
     uint32 dsp = mikasa_ncr_reg_l (MIKASA_NCR_REG_DSP);
 
-    if ((mikasa_ncr_reg[MIKASA_NCR_REG_DMODE] & MIKASA_NCR_DMODE_MAN) == 0)
+    if (((mikasa_ncr_reg[MIKASA_NCR_REG_DMODE] & MIKASA_NCR_DMODE_MAN) == 0) &&
+        ((mikasa_ncr_reg[MIKASA_NCR_REG_DCNTL] & MIKASA_NCR_DCNTL_SSM) == 0))
         mikasa_ncr_start_script (dsp);
     }
     }
