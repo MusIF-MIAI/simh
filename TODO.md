@@ -13,6 +13,8 @@
   PCI DMA translation through TBASE.
 - [x] Mask APECS Comanche/EPIC error/status writes and add write-one-to-clear
   behavior for documented error latches.
+- [x] Latch EPIC `NDEV` with PEAR/SEAR addresses for absent PCI sparse/dense
+  memory accesses.
 - [x] Merge byte/word PCI config writes instead of replacing whole dwords.
 - [x] Add Intel 82375EB/PCEB PCI/EISA bridge config shell with write masks.
 - [x] Add ISA DMA/page-register storage, FDC shell, OCP shell, RTC basics, and
@@ -132,6 +134,8 @@
 - [x] Re-run SRM ROM smoke after `READ FORMAT CAPACITIES` and
   `READ DEFECT DATA(12)` support; it still reaches `V5.4-101` and detects
   pka/ewa.
+- [x] Re-run SRM ROM smoke after EPIC absent-PCI-memory `NDEV` latching; it
+  still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -264,6 +268,10 @@ the real path works.
   - current branch masks Comanche/EPIC error registers and handles
     write-one-to-clear error/status bits, but does not yet raise all real
     error causes;
+  - current branch latches EPIC `DCSR.NDEV` plus PEAR/SEAR addresses for
+    absent PCI sparse/dense memory accesses;
+  - SRM smoke after EPIC `NDEV` latching still reaches `V5.4-101` and
+    enumerates `pka`/`ewa`;
   - continue tightening HAE/config-cycle behavior, sparse I/O, sparse memory,
     dense memory, error registers, and DMA corner cases;
   - keep PCI DMA translation tied to the programmed APECS windows rather than

@@ -29,6 +29,8 @@ Implemented:
     programmed TBASE scatter/gather table.
   - Comanche and EPIC status/error register writes are masked to documented
     fields, with write-one-to-clear behavior for error latches.
+  - Absent PCI sparse/dense memory accesses latch EPIC `DCSR.NDEV` with
+    PEAR/SEAR error addresses.
   - ISA legacy DMA controller registers, ISA DMA page registers, and a minimal
     floppy-controller shell are present so standard I/O probes do not fall
     through to unhandled ports.

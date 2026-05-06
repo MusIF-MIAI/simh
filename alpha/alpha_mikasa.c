@@ -1465,6 +1465,23 @@ for (i = 0; i < MIKASA_EPIC_TLB_ENTRIES; i++) {
 return;
 }
 
+static void mikasa_epic_latch_pci_error (uint32 cause, t_uint64 pa)
+{
+uint32 dcsr_index = MIKASA_EPIC_DCSR >> 5;
+uint32 dcsr = mikasa_epic_reg[dcsr_index];
+
+if ((dcsr & MIKASA_EPIC_DCSR_ERR) != 0)
+    cause |= MIKASA_EPIC_DCSR_LOST;
+mikasa_epic_reg[dcsr_index] = dcsr | cause | MIKASA_EPIC_DCSR_PASS2;
+mikasa_epic_reg[MIKASA_EPIC_PEAR >> 5] = (uint32) pa;
+mikasa_epic_reg[MIKASA_EPIC_SEAR >> 5] =
+    ((uint32) pa) & MIKASA_EPIC_SEAR_ERR;
+sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+    "EPIC latch PCI error cause=%08X pa=%llX\n", cause,
+    (unsigned long long) pa);
+return;
+}
+
 static t_uint64 mikasa_epic_read (t_uint64 pa, uint32 lnt)
 {
 uint32 off = (uint32) (pa - MIKASA_EPIC_BASE);
@@ -4516,6 +4533,7 @@ if (mikasa_tulip_bar_reg (addr, 0x14, 0x07FFFFFFu, &reg)) {
 sim_debug (MIKASA_DBG_IO, &mikasa_dev,
     "absent APECS sparse memory read %llX\n",
     (unsigned long long) pa);
+mikasa_epic_latch_pci_error (MIKASA_EPIC_DCSR_NDEV, pa);
 return M32;
 }
 
@@ -4562,6 +4580,7 @@ if (mikasa_tulip_bar_reg (addr, 0x14, 0x07FFFFFFu, &reg)) {
 sim_debug (MIKASA_DBG_IO, &mikasa_dev,
     "unhandled APECS sparse memory write %llX=%llX\n",
     (unsigned long long) pa, (unsigned long long) val);
+mikasa_epic_latch_pci_error (MIKASA_EPIC_DCSR_NDEV, pa);
 return;
 }
 
@@ -4577,6 +4596,7 @@ if (mikasa_tulip_bar_reg (addr, 0x14, 0xFFFFFFFFu, &reg))
 sim_debug (MIKASA_DBG_IO, &mikasa_dev,
     "absent APECS dense memory read %llX\n",
     (unsigned long long) pa);
+mikasa_epic_latch_pci_error (MIKASA_EPIC_DCSR_NDEV, pa);
 return M32;
 }
 
@@ -4597,6 +4617,7 @@ if (mikasa_tulip_bar_reg (addr, 0x14, 0xFFFFFFFFu, &reg)) {
 sim_debug (MIKASA_DBG_IO, &mikasa_dev,
     "unhandled APECS dense memory write %llX=%llX\n",
     (unsigned long long) pa, (unsigned long long) val);
+mikasa_epic_latch_pci_error (MIKASA_EPIC_DCSR_NDEV, pa);
 return;
 }
 
