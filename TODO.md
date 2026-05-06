@@ -73,6 +73,8 @@
   SCRIPTS until `DCNTL.STD` is set.
 - [x] Honor NCR `DCNTL.SSM` restart semantics by requiring `DCNTL.STD` rather
   than auto-starting from `DSP` writes in single-step mode.
+- [x] Execute one visible SCRIPTS instruction under NCR `DCNTL.SSM` and raise
+  `DSTAT.SSI`, using current `SFBR` as the initial data-compare state.
 - [x] Start NCR SCRIPTS execution from `DCNTL.STD`, not only from writes to
   `DSP`, matching the normal 53C810 driver path.
 - [x] Preserve NCR read-only status registers on CPU writes and expose current
@@ -159,6 +161,8 @@
   it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after making auxiliary NCR scans silent for
   fetch-progress registers; it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after adding NCR `DCNTL.SSM` single-step execution;
+  it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 

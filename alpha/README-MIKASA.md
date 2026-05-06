@@ -131,7 +131,8 @@ Not implemented yet:
   `DMODE.MAN`
   manual-start mode is honored, so `DSP` writes only auto-start SCRIPTS when
   manual-start is clear; `DCNTL.SSM` single-step mode also requires
-  `DCNTL.STD` instead of auto-starting from `DSP`.
+  `DCNTL.STD` instead of auto-starting from `DSP`, and a single-step start now
+  executes one visible SCRIPTS instruction before raising `DSTAT.SSI`.
   SCRIPTS execution can now be started through `DCNTL.STD` as well as by
   writing `DSP`.
   CPU writes no longer overwrite read-only NCR status registers, and completed

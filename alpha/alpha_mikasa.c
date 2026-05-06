@@ -309,6 +309,7 @@
 #define MIKASA_NCR_SOCL_ATN         0x08
 #define MIKASA_NCR_DSTAT_DFE        0x80
 #define MIKASA_NCR_DSTAT_SIR        0x04
+#define MIKASA_NCR_DSTAT_SSI        0x08
 #define MIKASA_NCR_DSTAT_ABRT       0x10
 #define MIKASA_NCR_DSTAT_IRQS       0x7Du
 #define MIKASA_NCR_SSTAT0_WOA       0x04
@@ -3110,6 +3111,7 @@ memset (scan, 0, sizeof (*scan));
 mikasa_ncr_dma_list_init (&scan->moves);
 memset (&state, 0, sizeof (state));
 state.phase = phase;
+state.sfbr = mikasa_ncr_reg[MIKASA_NCR_REG_SFBR];
 state.side_effects = side_effects;
 for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
     uint32 op;
@@ -4042,6 +4044,66 @@ else {
 return TRUE;
 }
 
+static t_bool mikasa_ncr_step_script (uint32 dsp)
+{
+uint32 stack[MIKASA_NCR_SCRIPT_STACK];
+MIKASA_NCR_SCRIPT_STATE state;
+uint32 sp = 0;
+uint32 op;
+uint32 arg;
+uint32 next;
+uint32 group;
+uint32 dsps;
+
+memset (stack, 0, sizeof (stack));
+memset (&state, 0, sizeof (state));
+state.phase = MIKASA_NCR_SCRIPT_NO_PHASE;
+state.sfbr = mikasa_ncr_reg[MIKASA_NCR_REG_SFBR];
+state.side_effects = TRUE;
+if (!mikasa_ncr_fetch_script (dsp, &op, &arg, TRUE))
+    return FALSE;
+next = mikasa_ncr_next_script_addr (dsp, op);
+if ((op & MIKASA_NCR_TC_GROUP_MASK) == MIKASA_NCR_SCR_SEL_ABS) {
+    uint32 dsa = mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA);
+    uint32 sel = (op >> 16) & 0x0Fu;
+    uint32 target;
+    t_bool table = FALSE;
+
+    if (op & 0x02000000u) {
+        uint32 table_addr = (dsa + mikasa_ncr_sext24 (op)) & ~3u;
+
+        if (!mikasa_pci_dma_read_long (table_addr, &sel))
+            return FALSE;
+        table = TRUE;
+        }
+    mikasa_ncr_select_latches (op, table ? sel : (sel << 16), table);
+    target = table ? ((sel >> 16) & 0x0Fu) : (sel & 0x0Fu);
+    if ((target < MIKASA_DKA_UNITS) &&
+        ((dka_unit[target].flags & UNIT_ATT) != 0))
+        mikasa_ncr_set_connected (TRUE);
+    else
+        mikasa_ncr_set_sip (0, MIKASA_NCR_SIST1_STO);
+    mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DSP, next);
+    mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SSI,
+        mikasa_ncr_reg_l (MIKASA_NCR_REG_DSPS));
+    return TRUE;
+    }
+group = op & MIKASA_NCR_TC_GROUP_MASK;
+if ((group == MIKASA_NCR_TC_INT) &&
+    ((op & MIKASA_NCR_TC_INTFLY) == 0) &&
+    mikasa_ncr_script_condition (op, &state)) {
+    mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SIR | MIKASA_NCR_DSTAT_SSI, arg);
+    return TRUE;
+    }
+if (!mikasa_ncr_advance_script (&dsp, op, arg, next, stack, &sp, &state))
+    mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DSP, next);
+else
+    mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DSP, dsp);
+dsps = mikasa_ncr_reg_l (MIKASA_NCR_REG_DSPS);
+mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SSI, dsps);
+return TRUE;
+}
+
 static void mikasa_ncr_start_script (uint32 dsp)
 {
 if (mikasa_ncr_transaction.status_pending) {
@@ -4058,7 +4120,11 @@ if (mikasa_ncr_transaction.status_pending) {
     }
 else {
     mikasa_ncr_trace_script (dsp);
-    if (!mikasa_ncr_run_script (dsp))
+    if (mikasa_ncr_reg[MIKASA_NCR_REG_DCNTL] & MIKASA_NCR_DCNTL_SSM) {
+        if (!mikasa_ncr_step_script (dsp))
+            mikasa_ncr_set_connected (FALSE);
+        }
+    else if (!mikasa_ncr_run_script (dsp))
         mikasa_ncr_set_connected (FALSE);
     }
 return;
