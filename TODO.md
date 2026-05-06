@@ -1,3 +1,59 @@
+# AlphaServer 1000 Bring-Up Checklist
+
+## Done
+
+- [x] Create and push the `alphaserver-1000` branch to `MusIF-MIAI/simh`.
+- [x] Add the `MIKASA-4/266` CPU profile and 1 GB memory support.
+- [x] Add Mikasa SRM LFU/payload ROM loading and `BOOT CPU` firmware entry.
+- [x] Reach the real Mikasa SRM V5.4-101 banner from `mksrmrom.payload.bin`.
+- [x] Add Comanche and EPIC APECS register shells.
+- [x] Add APECS sparse I/O, sparse memory, dense memory, and PCI config paths.
+- [x] Preserve EPIC DMA window registers and use them for PCI DMA translation.
+- [x] Merge byte/word PCI config writes instead of replacing whole dwords.
+- [x] Add Intel 82375EB/PCEB PCI/EISA bridge config shell with write masks.
+- [x] Add ISA DMA/page-register storage, FDC shell, OCP shell, RTC basics, and
+  EISA CRAM/absent-slot behavior.
+- [x] Add 8259 PIC init, mask/pending/in-service, EOI, auto-EOI, cascade IACK,
+  and ELCR storage.
+- [x] Route COM1 receive interrupts through the SRM-programmed PIC path.
+- [x] Add NCR/Symbios 53C810 PCI config, I/O BAR, memory BAR, register shell,
+  interrupt status, abort, reset, and select-timeout behavior.
+- [x] Add NCR SCRIPTS scanning for select, table/direct/indirect moves,
+  register ops, load/store, memory copy, and basic conditional flow.
+- [x] Add common SCSI-2 disk responses, per-target REQUEST SENSE, MODE SENSE
+  pages, read/write paths, write-protect handling, and harmless disk no-ops.
+- [x] Add DECchip 21040/Tulip PCI/CSR shell.
+- [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
+  committed code block.
+
+## Partial / In Progress
+
+- [ ] Replace the NCR SCRIPTS scanner with a real executor for conditional
+  control flow, phase mismatch, disconnect/reselect, scatter/gather chaining,
+  and full memory/register side effects.
+- [ ] Wire the NCR disk path to SIMH `sim_scsi` where it fits, rather than the
+  current local SCSI command handling.
+- [ ] Complete APECS/DECchip 21071 behavior beyond the current register shells,
+  especially error registers, TBIA/HAE details, and DMA corner cases.
+- [ ] Validate ICU/PIC level-vs-edge semantics against OpenVMS and FreeBSD
+  drivers.
+- [ ] Finish MC146818 RTC/NVRAM storage and real AlphaServer 1000 console
+  environment defaults.
+- [ ] Improve OCP/Halt/Ctrl-P behavior enough for SRM console transitions.
+- [ ] Decide whether VGA/Cirrus probing is required for the real AS1000 path.
+- [ ] Implement real DECchip 21040 packet I/O and Tulip descriptor processing.
+- [ ] Re-run SRM boot/probe smoke tests after the current hardware batch.
+- [ ] Continue the direct-APB `SYSBOOT.EXE;2` lookup investigation under
+  `[SYS0.SYSEXE]` and `[SYS0.SYSCOMMON.SYSEXE]`.
+
+## Not Started / Deferred
+
+- [ ] Full VGA implementation.
+- [ ] Full floppy data path.
+- [ ] Multiprocessor support.
+- [ ] Redistributable regression tests that do not require the recovered disk
+  dump or proprietary SRM image.
+
 # AlphaServer 1000 Hardware Bring-Up TODO
 
 This file tracks the next Mikasa work before more boot-chasing.  Until the
