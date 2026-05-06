@@ -101,7 +101,8 @@ Not implemented yet:
   `READ(12)`, `WRITE(12)`, `REPORT LUNS`, and `READ CAPACITY(16)`.
 - Full Ethernet, VGA, full NVRAM, and multiprocessor support. A DECchip 21040
   PCI/CSR shell exists so firmware and OS probes see a plausible DEC Ethernet
-  device, but packet I/O is not implemented yet.
+  device, including basic reset/status/run-state behavior, but packet I/O is
+  not implemented yet.
 - A complete SRM-compatible firmware execution environment. The real SRM image
   now reaches the SRM banner and receives serial input, but it does not reach
   an SRM prompt yet.
@@ -362,9 +363,9 @@ debug tracing, the PC cycles inside the ROM decompressor around `0x900301` and
    direct and SGMAP PCI DMA window translation, PCI configuration cycles, the
    raw-IDSEL `7` Intel 82375EB PCI/EISA bridge, the raw-IDSEL `6` NCR 53C810
    PCI configuration/register window, ISA DMA/page-register storage, an FDC
-   shell, a raw-IDSEL `11` DECchip 21040 PCI/CSR shell, ELCR/PIC
-   initialization and auto-EOI handling, and a minimal 8259 PIC/COM1 receive
-   interrupt path.
+   shell, a raw-IDSEL `11` DECchip 21040 PCI/CSR shell with basic
+   reset/status/run-state handling, ELCR/PIC initialization and auto-EOI
+   handling, and a minimal 8259 PIC/COM1 receive interrupt path.
 
 6. Continue the NCR/Symbios 53C810 frontend.
    SIMH has a common SCSI backend, but no complete 53C810 PCI DMA frontend in

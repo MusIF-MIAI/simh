@@ -220,6 +220,25 @@
 #define MIKASA_TULIP_REG_SIZE       0x80
 #define MIKASA_TULIP_BAR_SIZE       0x80
 #define MIKASA_TULIP_BAR_MASK       0xFFFFFF80u
+#define MIKASA_TULIP_CSR_BUSMODE    0x00
+#define MIKASA_TULIP_CSR_TXPOLL     0x08
+#define MIKASA_TULIP_CSR_RXPOLL     0x10
+#define MIKASA_TULIP_CSR_RXLIST     0x18
+#define MIKASA_TULIP_CSR_TXLIST     0x20
+#define MIKASA_TULIP_CSR_STATUS     0x28
+#define MIKASA_TULIP_CSR_CMD        0x30
+#define MIKASA_TULIP_CSR_INTR       0x38
+#define MIKASA_TULIP_CSR_SIA_STATUS 0x60
+#define MIKASA_TULIP_BUSMODE_SWR    0x00000001u
+#define MIKASA_TULIP_STS_TXS_MASK   0x00700000u
+#define MIKASA_TULIP_STS_TXS_STOP   0x00000000u
+#define MIKASA_TULIP_STS_TXS_SUSP   0x00600000u
+#define MIKASA_TULIP_STS_RXS_MASK   0x000E0000u
+#define MIKASA_TULIP_STS_RXS_STOP   0x00000000u
+#define MIKASA_TULIP_STS_RXS_SUSP   0x00080000u
+#define MIKASA_TULIP_STS_W1C        0x0001FFFFu
+#define MIKASA_TULIP_CMD_TXRUN      0x00002000u
+#define MIKASA_TULIP_CMD_RXRUN      0x00000002u
 #define MIKASA_NCR_REG_SIZE         0x100
 #define MIKASA_NCR_BAR_SIZE         0x100
 #define MIKASA_NCR_BAR_MASK         0xFFFFFF00u
@@ -1639,6 +1658,41 @@ return ((uint32) mikasa_tulip_read_b (reg)) |
     (((uint32) mikasa_tulip_read_b (reg + 3)) << 24);
 }
 
+static void mikasa_tulip_set_l (uint32 reg, uint32 val)
+{
+reg = reg & (MIKASA_TULIP_REG_SIZE - 1);
+mikasa_tulip_reg[reg] = (uint8) val;
+mikasa_tulip_reg[(reg + 1) & (MIKASA_TULIP_REG_SIZE - 1)] =
+    (uint8) (val >> 8);
+mikasa_tulip_reg[(reg + 2) & (MIKASA_TULIP_REG_SIZE - 1)] =
+    (uint8) (val >> 16);
+mikasa_tulip_reg[(reg + 3) & (MIKASA_TULIP_REG_SIZE - 1)] =
+    (uint8) (val >> 24);
+return;
+}
+
+static void mikasa_tulip_update_state (void)
+{
+uint32 cmd = mikasa_tulip_read_l (MIKASA_TULIP_CSR_CMD);
+uint32 status = mikasa_tulip_read_l (MIKASA_TULIP_CSR_STATUS);
+
+status = status & ~(MIKASA_TULIP_STS_TXS_MASK | MIKASA_TULIP_STS_RXS_MASK);
+status |= (cmd & MIKASA_TULIP_CMD_TXRUN) ? MIKASA_TULIP_STS_TXS_SUSP :
+    MIKASA_TULIP_STS_TXS_STOP;
+status |= (cmd & MIKASA_TULIP_CMD_RXRUN) ? MIKASA_TULIP_STS_RXS_SUSP :
+    MIKASA_TULIP_STS_RXS_STOP;
+mikasa_tulip_set_l (MIKASA_TULIP_CSR_STATUS, status);
+return;
+}
+
+static void mikasa_tulip_reset_regs (void)
+{
+memset (mikasa_tulip_reg, 0, sizeof (mikasa_tulip_reg));
+mikasa_tulip_set_l (MIKASA_TULIP_CSR_STATUS,
+    MIKASA_TULIP_STS_TXS_STOP | MIKASA_TULIP_STS_RXS_STOP);
+return;
+}
+
 static t_uint64 mikasa_tulip_read_len (uint32 reg, uint32 lnt)
 {
 if (lnt == L_BYTE)
@@ -1660,20 +1714,56 @@ return;
 
 static void mikasa_tulip_write_l (uint32 reg, uint32 val)
 {
-mikasa_tulip_write_b (reg, (uint8) val);
-mikasa_tulip_write_b (reg + 1, (uint8) (val >> 8));
-mikasa_tulip_write_b (reg + 2, (uint8) (val >> 16));
-mikasa_tulip_write_b (reg + 3, (uint8) (val >> 24));
+reg = reg & (MIKASA_TULIP_REG_SIZE - 1);
+sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "TULIP write %02X=%08X\n",
+    reg, val);
+switch (reg) {
+    case MIKASA_TULIP_CSR_BUSMODE:
+        if (val & MIKASA_TULIP_BUSMODE_SWR) {
+            mikasa_tulip_reset_regs ();
+            return;
+            }
+        mikasa_tulip_set_l (reg, val);
+        break;
+
+    case MIKASA_TULIP_CSR_STATUS:
+        mikasa_tulip_set_l (reg, mikasa_tulip_read_l (reg) &
+            ~(val & MIKASA_TULIP_STS_W1C));
+        break;
+
+    case MIKASA_TULIP_CSR_CMD:
+        mikasa_tulip_set_l (reg, val);
+        mikasa_tulip_update_state ();
+        break;
+
+    case MIKASA_TULIP_CSR_TXPOLL:
+    case MIKASA_TULIP_CSR_RXPOLL:
+        break;
+
+    default:
+        mikasa_tulip_set_l (reg, val);
+        break;
+        }
 return;
 }
 
 static void mikasa_tulip_write_len (uint32 reg, t_uint64 val, uint32 lnt)
 {
-if (lnt == L_BYTE)
-    mikasa_tulip_write_b (reg, (uint8) val);
+if (lnt == L_BYTE) {
+    uint32 base = reg & ~3u;
+    uint32 shift = 8 * (reg & 3u);
+    uint32 data = (mikasa_tulip_read_l (base) & ~(0xFFu << shift)) |
+        ((((uint32) val) & 0xFFu) << shift);
+
+    mikasa_tulip_write_l (base, data);
+    }
 else if (lnt == L_WORD) {
-    mikasa_tulip_write_b (reg, (uint8) val);
-    mikasa_tulip_write_b (reg + 1, (uint8) (val >> 8));
+    uint32 base = reg & ~3u;
+    uint32 shift = 8 * (reg & 2u);
+    uint32 data = (mikasa_tulip_read_l (base) & ~(0xFFFFu << shift)) |
+        ((((uint32) val) & 0xFFFFu) << shift);
+
+    mikasa_tulip_write_l (base, data);
     }
 else
     mikasa_tulip_write_l (reg, (uint32) val);
@@ -6493,7 +6583,7 @@ mikasa_tulip_cfg[0x04 >> 2] = 0x02800001u;
 mikasa_tulip_cfg[0x08 >> 2] = 0x02000002u;
 mikasa_tulip_cfg[0x10 >> 2] = 0x00000001u;
 mikasa_tulip_cfg[0x3C >> 2] = 0x00000100u;
-memset (mikasa_tulip_reg, 0, sizeof (mikasa_tulip_reg));
+mikasa_tulip_reset_regs ();
 memset (mikasa_pceb_cfg, 0, sizeof (mikasa_pceb_cfg));
 mikasa_pceb_cfg[0x00 >> 2] = 0x04828086u;
 mikasa_pceb_cfg[0x04 >> 2] = 0x02000007u;

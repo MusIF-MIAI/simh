@@ -39,6 +39,8 @@
 - [x] Add common extended SCSI disk probes: `READ(12)`, `WRITE(12)`,
   `REPORT LUNS`, and `READ CAPACITY(16)`.
 - [x] Add DECchip 21040/Tulip PCI/CSR shell.
+- [x] Add DECchip 21040 software reset, CSR5 write-one-to-clear status,
+  CSR6 run-state reporting, and byte/word CSR write merging.
 - [x] Re-run SRM ROM smoke after the current APECS/NCR hardware batch; it
   still reaches the Mikasa `V5.4-101` banner and sees pka/ewa.
 - [x] Re-run SRM ROM smoke after the NCR progress/status and extended SCSI
@@ -152,7 +154,8 @@ the real path works.
 
 - Add PCI config-shell devices that the AlphaServer 1000 firmware may expect:
   - current branch exposes a DECchip 21040 Ethernet PCI/CSR shell at raw IDSEL
-    `11`; packet I/O and real Tulip descriptor processing are still deferred;
+    `11`, including software reset, status W1C, and CSR6 run-state reporting;
+    packet I/O and real Tulip descriptor processing are still deferred;
   - VGA/Cirrus shell only if firmware probes require it;
   - floppy/FDC shell only enough for `DVA0` probing.
 - Defer full Ethernet, VGA, and floppy data paths until SRM reaches a prompt
