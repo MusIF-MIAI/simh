@@ -115,13 +115,18 @@ Not implemented yet:
   SCRIPTS `SELECT` now latches the destination ID, table-indirect `SXFER` and
   `SCNTL3` values, and select-with-ATN state into the visible controller
   registers. `WAIT DISCONNECT` now clears connected state as a legal bus-free
-  transition, while `WAIT RESELECT` stops script scanning until real reselect
-  event support is added. `MESSAGE OUT` buffers are now consumed before command
-  execution and ATN is cleared after the message-out handshake. `CTEST3` now
-  preserves the 53C810 revision nibble and handles FIFO clear/flush writes
-  against the local FIFO-empty model. `SFBR` is updated with the first byte of
-  handled data-in, status, and message-in phases. SCRIPTS selection attempts
-  now expose the won-arbitration status bit in `SSTAT0`. `DMODE.MAN`
+  transition, sets `SSTAT2.LDSC`, and clears `SCNTL2.SDU`. `WAIT RESELECT`
+  stops script scanning until real reselect event support is added, but now
+  honors `ISTAT.SIGP` by branching to the instruction's alternate address.
+  `TEMP` is updated for SCRIPTS `CALL`/`RETURN`, host ID defaults are exposed
+  through `SCID`/`RESPID`, and SCRIPTS register writes use the same writable
+  masks for visible controller registers. `MESSAGE OUT` buffers are now
+  consumed before command execution and ATN is cleared after the message-out
+  handshake. `CTEST3` now preserves the 53C810 revision nibble and handles FIFO
+  clear/flush writes against the local FIFO-empty model. `SFBR` is updated with
+  the first byte of handled data-in, status, and message-in phases. SCRIPTS
+  selection attempts now expose the won-arbitration status bit in `SSTAT0`.
+  `DMODE.MAN`
   manual-start mode is honored, so `DSP` writes only auto-start SCRIPTS when
   manual-start is clear; `DCNTL.SSM` single-step mode also requires
   `DCNTL.STD` instead of auto-starting from `DSP`.

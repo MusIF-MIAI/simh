@@ -54,6 +54,10 @@
   and select-with-ATN state into visible 53C810 registers.
 - [x] Model visible NCR SCRIPTS wait-state behavior for legal disconnect and
   no-event wait-reselect paths.
+- [x] Model additional visible 53C810 register semantics used by real drivers:
+  `SCNTL2.SDU`, `SSTAT2.LDSC`, host `SCID`/`RESPID`, selector `SSID`,
+  `TEMP` for SCRIPTS `CALL`/`RETURN`, `WAIT RESELECT` `SIGP` branching, and
+  masked SCRIPTS writes to writable controller registers.
 - [x] Consume NCR `MESSAGE OUT` moves before command execution and clear ATN
   after the message-out handshake.
 - [x] Model NCR `CTEST3` revision/writable bits and DMA FIFO clear/flush
@@ -148,6 +152,8 @@
   still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after adding explicit pending NCR transaction
   state; it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after adding visible 53C810 register semantics;
+  it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
