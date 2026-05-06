@@ -3103,6 +3103,57 @@ mikasa_ncr_clear_sense (unit);
 return mikasa_ncr_write_scsi_data (data, buf, len);
 }
 
+static t_bool mikasa_ncr_scsi_inquiry_vpd (uint32 unit, const uint8 *cdb,
+    const MIKASA_NCR_DMA_LIST *data, uint8 *status)
+{
+uint8 buf[256];
+uint32 len;
+uint32 page = cdb[2];
+uint32 alloc = cdb[4];
+const char *id;
+char serial[16];
+
+memset (buf, 0, sizeof (buf));
+buf[1] = (uint8) page;
+(void) snprintf (serial, sizeof (serial), "MIKASA-DKA%u", unit * 100);
+switch (page) {
+    case 0x00:                                      /* supported pages */
+        buf[3] = 3;
+        buf[4] = 0x00;
+        buf[5] = 0x80;
+        buf[6] = 0x83;
+        len = 7;
+        break;
+
+    case 0x80:                                      /* unit serial */
+        len = (uint32) strlen (serial);
+        buf[3] = (uint8) len;
+        memcpy (&buf[4], serial, len);
+        len = len + 4;
+        break;
+
+    case 0x83:                                      /* device identification */
+        id = serial;
+        len = (uint32) strlen (id);
+        buf[2] = 0;
+        buf[3] = (uint8) (len + 4);
+        buf[4] = 0x02;                              /* ASCII designator */
+        buf[5] = 0x01;                              /* vendor specific */
+        buf[7] = (uint8) len;
+        memcpy (&buf[8], id, len);
+        len = len + 8;
+        break;
+
+    default:
+        mikasa_ncr_set_sense (unit, 0x05, 0x24, 0x00);
+        *status = 2;
+        return TRUE;
+        }
+len = mikasa_ncr_min3 (data->bytes, alloc, len);
+mikasa_ncr_clear_sense (unit);
+return mikasa_ncr_write_scsi_data (data, buf, len);
+}
+
 static t_bool mikasa_ncr_scsi_cmd (uint32 unit, const uint8 *cdb,
     const MIKASA_NCR_DMA_LIST *data, uint8 *status)
 {
@@ -3150,19 +3201,8 @@ switch (cdb[0]) {
         return mikasa_ncr_scsi_write (unit, lbn, blocks, data, status);
 
     case 0x12:                                              /* INQUIRY */
-        if (cdb[1] & 1) {
-            if (cdb[2] != 0) {
-                mikasa_ncr_set_sense (unit, 0x05, 0x24, 0x00);
-                *status = 2;
-                return TRUE;
-                }
-            buf[1] = 0;
-            buf[3] = 1;
-            buf[4] = 0;
-            len = mikasa_ncr_min3 (data->bytes, cdb[4], sizeof (buf));
-            mikasa_ncr_clear_sense (unit);
-            return mikasa_ncr_write_scsi_data (data, buf, len);
-            }
+        if (cdb[1] & 1)
+            return mikasa_ncr_scsi_inquiry_vpd (unit, cdb, data, status);
         buf[2] = 2;
         buf[3] = 2;
         buf[4] = 31;
