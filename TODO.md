@@ -9,6 +9,8 @@
 - [x] Add Comanche and EPIC APECS register shells.
 - [x] Add APECS sparse I/O, sparse memory, dense memory, and PCI config paths.
 - [x] Preserve EPIC DMA window registers and use them for PCI DMA translation.
+- [x] Add EPIC HAXR0/HAXR2/PMLT/TLB/TBIA register behavior and SGMAP-backed
+  PCI DMA translation through TBASE.
 - [x] Merge byte/word PCI config writes instead of replacing whole dwords.
 - [x] Add Intel 82375EB/PCEB PCI/EISA bridge config shell with write masks.
 - [x] Add ISA DMA/page-register storage, FDC shell, OCP shell, RTC basics, and
@@ -36,7 +38,8 @@
 - [ ] Wire the NCR disk path to SIMH `sim_scsi` where it fits, rather than the
   current local SCSI command handling.
 - [ ] Complete APECS/DECchip 21071 behavior beyond the current register shells,
-  especially error registers, TBIA/HAE details, and DMA corner cases.
+  especially error registers, remaining HAE/config details, and DMA corner
+  cases.
 - [ ] Validate ICU/PIC level-vs-edge semantics against OpenVMS and FreeBSD
   drivers.
 - [ ] Identify the real AlphaServer 1000 NVRAM layout and encode SRM console
@@ -87,8 +90,12 @@ the real path works.
 - Complete the APECS/DECchip 21071 base enough for firmware and operating
   systems:
   - add the Comanche register block at `0x180000000`;
-  - tighten EPIC window registers, HAE, TBIA, base/mask/TBASE, sparse I/O,
-    sparse memory, dense memory, and config-cycle behavior;
+  - current branch preserves EPIC HAXR0/HAXR1/HAXR2/PMLT, window
+    base/mask/TBASE, TLB tag/data, and TBIA state;
+  - current branch translates direct windows and SGMAP windows through TBASE
+    by reading the programmed scatter/gather table and filling the EPIC TLB;
+  - continue tightening HAE/config-cycle behavior, sparse I/O, sparse memory,
+    dense memory, error registers, and DMA corner cases;
   - keep PCI DMA translation tied to the programmed APECS windows rather than
     hard-coded boot assumptions.
 - Tighten interrupt routing:

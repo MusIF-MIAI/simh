@@ -151,8 +151,25 @@
 #define MIKASA_EPIC_PCI_MASK_1      0x140
 #define MIKASA_EPIC_PCI_MASK_2      0x160
 #define MIKASA_EPIC_PCI_MASK_MASK   0xFFF00000u
+#define MIKASA_EPIC_HAXR0           0x180
 #define MIKASA_EPIC_HAXR1           0x1A0
 #define MIKASA_EPIC_HAXR1_EADDR     0xF8000000u
+#define MIKASA_EPIC_HAXR2           0x1C0
+#define MIKASA_EPIC_HAXR2_CONF_TYPE 0x00000003u
+#define MIKASA_EPIC_HAXR2_EADDR     0xFF000000u
+#define MIKASA_EPIC_PMLT            0x1E0
+#define MIKASA_EPIC_PMLT_PMLC       0x000000FFu
+#define MIKASA_EPIC_TLB_TAG_0       0x200
+#define MIKASA_EPIC_TLB_DATA_0      0x300
+#define MIKASA_EPIC_TLB_ENTRIES     8
+#define MIKASA_EPIC_TLB_TAG_EVAL    0x00001000u
+#define MIKASA_EPIC_TLB_TAG_PAGE    0xFFFFE000u
+#define MIKASA_EPIC_TLB_TAG_MASK    (MIKASA_EPIC_TLB_TAG_EVAL | \
+                                      MIKASA_EPIC_TLB_TAG_PAGE)
+#define MIKASA_EPIC_TLB_DATA_PAGE   0x001FFFFEu
+#define MIKASA_EPIC_TBIA            0x400
+#define MIKASA_EPIC_SGMAP_EVAL      0x0000000000000001ULL
+#define MIKASA_EPIC_SGMAP_PFN       0x00000000001FFFFEULL
 #define MIKASA_EPIC_DCSR_PASS2      0x80000000u
 /* On-board devices use raw APECS IDSEL slots; SRM prints virtual slots. */
 #define MIKASA_PCI_SLOT_SCSI        6
@@ -557,6 +574,7 @@ static void mikasa_write_phys_long (t_uint64 pa, t_uint64 dat);
 static void mikasa_write_phys_byte (t_uint64 pa, uint8 dat);
 static uint8 mikasa_read_phys_byte (t_uint64 pa);
 static uint32 mikasa_read_phys_long (t_uint64 pa);
+static t_uint64 mikasa_read_phys_quad (t_uint64 pa);
 static void mikasa_irq_update (void);
 static void mikasa_pic_set_irq (uint32 irq, t_bool state);
 static uint8 mikasa_pic_iack (void);
@@ -1294,6 +1312,17 @@ if (lnt == L_BYTE)
 return ((t_uint64) (val & 0xFF)) << (8 * (port & 3));
 }
 
+static void mikasa_epic_tbia (void)
+{
+uint32 i;
+
+for (i = 0; i < MIKASA_EPIC_TLB_ENTRIES; i++) {
+    mikasa_epic_reg[(MIKASA_EPIC_TLB_TAG_0 >> 5) + i] = 0;
+    mikasa_epic_reg[(MIKASA_EPIC_TLB_DATA_0 >> 5) + i] = 0;
+    }
+return;
+}
+
 static t_uint64 mikasa_epic_read (t_uint64 pa, uint32 lnt)
 {
 uint32 off = (uint32) (pa - MIKASA_EPIC_BASE);
@@ -1329,10 +1358,35 @@ switch (reg) {
         data = data & MIKASA_EPIC_PCI_MASK_MASK;
         break;
 
+    case MIKASA_EPIC_HAXR0:
+        break;
+
     case MIKASA_EPIC_HAXR1:
         data = data & MIKASA_EPIC_HAXR1_EADDR;
         break;
+
+    case MIKASA_EPIC_HAXR2:
+        data = data & (MIKASA_EPIC_HAXR2_CONF_TYPE |
+            MIKASA_EPIC_HAXR2_EADDR);
+        break;
+
+    case MIKASA_EPIC_PMLT:
+        data = data & MIKASA_EPIC_PMLT_PMLC;
+        break;
+
+    case MIKASA_EPIC_TBIA:
+        mikasa_epic_tbia ();
+        data = 0;
+        break;
         }
+if ((reg >= MIKASA_EPIC_TLB_TAG_0) &&
+    (reg < (MIKASA_EPIC_TLB_TAG_0 +
+    (MIKASA_EPIC_TLB_ENTRIES << 5))))
+    data = data & MIKASA_EPIC_TLB_TAG_MASK;
+else if ((reg >= MIKASA_EPIC_TLB_DATA_0) &&
+    (reg < (MIKASA_EPIC_TLB_DATA_0 +
+    (MIKASA_EPIC_TLB_ENTRIES << 5))))
+    data = data & MIKASA_EPIC_TLB_DATA_PAGE;
 mikasa_epic_reg[index] = data;
 sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "EPIC write %03X=%08X\n",
     off, data);
@@ -4320,8 +4374,53 @@ if ((count >= 5) && (values[4] < MIKASA_DKA_UNITS))
 return -1;
 }
 
-static t_bool mikasa_pci_dma_window_pa (uint32 window, uint32 addr,
+static t_bool mikasa_pci_dma_sg_pa (uint32 window, uint32 addr, uint32 base,
     t_uint64 *pa)
+{
+uint32 tbase_off = (window == 0) ? MIKASA_EPIC_TBASE_1 :
+    MIKASA_EPIC_TBASE_2;
+uint32 page = addr & MIKASA_EPIC_TLB_TAG_PAGE;
+uint32 page_off = addr & (MIKASA_PAGE_SIZE - 1);
+uint32 index = (addr - base) >> VA_N_OFF;
+uint32 i;
+t_uint64 tbase;
+t_uint64 entry_pa;
+t_uint64 entry;
+
+/* APECS SGMAP and TLB data entries store Alpha PFN << 1. */
+for (i = 0; i < MIKASA_EPIC_TLB_ENTRIES; i++) {
+    uint32 tag = mikasa_epic_reg[(MIKASA_EPIC_TLB_TAG_0 >> 5) + i];
+
+    if (((tag & MIKASA_EPIC_TLB_TAG_EVAL) != 0) &&
+        ((tag & MIKASA_EPIC_TLB_TAG_PAGE) == page)) {
+        uint32 data = mikasa_epic_reg[(MIKASA_EPIC_TLB_DATA_0 >> 5) + i];
+
+        *pa = (((t_uint64) (data & MIKASA_EPIC_TLB_DATA_PAGE)) << 12) |
+            page_off;
+        return ADDR_IS_MEM (*pa);
+        }
+    }
+tbase = ((t_uint64) (mikasa_epic_reg[tbase_off >> 5] &
+    MIKASA_EPIC_TBASE_MASK)) << MIKASA_EPIC_TBASE_SHIFT;
+entry_pa = tbase + (((t_uint64) index) << 3);
+if (!ADDR_IS_MEM (entry_pa + 7))
+    return FALSE;
+entry = mikasa_read_phys_quad (entry_pa);
+if ((entry & MIKASA_EPIC_SGMAP_EVAL) == 0)
+    return FALSE;
+*pa = ((entry & MIKASA_EPIC_SGMAP_PFN) << 12) | page_off;
+if (!ADDR_IS_MEM (*pa))
+    return FALSE;
+i = index & (MIKASA_EPIC_TLB_ENTRIES - 1);
+mikasa_epic_reg[(MIKASA_EPIC_TLB_TAG_0 >> 5) + i] =
+    (page & MIKASA_EPIC_TLB_TAG_PAGE) | MIKASA_EPIC_TLB_TAG_EVAL;
+mikasa_epic_reg[(MIKASA_EPIC_TLB_DATA_0 >> 5) + i] =
+    (uint32) (entry & MIKASA_EPIC_TLB_DATA_PAGE);
+return TRUE;
+}
+
+static t_bool mikasa_pci_dma_window_pa (uint32 window, uint32 addr,
+    t_uint64 *pa, t_bool *matched)
 {
 uint32 base_off = (window == 0) ? MIKASA_EPIC_PCI_BASE_1 :
     MIKASA_EPIC_PCI_BASE_2;
@@ -4337,13 +4436,14 @@ t_uint64 target_base;
 
 if ((base_reg & MIKASA_EPIC_PCI_BASE_WENB) == 0)
     return FALSE;
-if (base_reg & MIKASA_EPIC_PCI_BASE_SGEN)
-    return FALSE;
 base = base_reg & MIKASA_EPIC_PCI_BASE_MASK;
 mask = mikasa_epic_reg[mask_off >> 5] & MIKASA_EPIC_PCI_MASK_MASK;
 size = ((t_uint64) mask) + 0x00100000ULL;
 if (((t_uint64) addr < base) || ((t_uint64) addr >= (((t_uint64) base) + size)))
     return FALSE;
+*matched = TRUE;
+if (base_reg & MIKASA_EPIC_PCI_BASE_SGEN)
+    return mikasa_pci_dma_sg_pa (window, addr, base, pa);
 target_base = ((t_uint64) (mikasa_epic_reg[tbase_off >> 5] &
     MIKASA_EPIC_TBASE_MASK)) << MIKASA_EPIC_TBASE_SHIFT;
 *pa = target_base + ((t_uint64) addr - base);
@@ -4352,10 +4452,16 @@ return ADDR_IS_MEM (*pa);
 
 static t_bool mikasa_pci_dma_addr_to_pa (uint32 addr, t_uint64 *pa)
 {
-if (mikasa_pci_dma_window_pa (0, addr, pa))
+t_bool matched = FALSE;
+
+if (mikasa_pci_dma_window_pa (0, addr, pa, &matched))
     return TRUE;
-if (mikasa_pci_dma_window_pa (1, addr, pa))
+if (matched)
+    return FALSE;
+if (mikasa_pci_dma_window_pa (1, addr, pa, &matched))
     return TRUE;
+if (matched)
+    return FALSE;
 if (ADDR_IS_MEM (addr)) {
     *pa = addr;
     return TRUE;
@@ -4480,6 +4586,11 @@ static uint32 mikasa_read_phys_long (t_uint64 pa)
 if (pa & 4)
     return (uint32) ((M[pa >> 3] >> 32) & M32);
 return (uint32) (M[pa >> 3] & M32);
+}
+
+static t_uint64 mikasa_read_phys_quad (t_uint64 pa)
+{
+return M[pa >> 3];
 }
 
 static void mikasa_write_phys_byte (t_uint64 pa, uint8 dat)

@@ -24,6 +24,9 @@ Implemented:
   - EPIC sparse PCI memory accesses now use `HAXR1` for high-address
     extension, and EPIC DMA window registers preserve the documented writable
     fields used by the PCI DMA mapper.
+  - EPIC now models `HAXR0`, `HAXR2`, `PMLT`, the eight TLB tag/data entries,
+    `TBIA`, direct PCI DMA windows, and SGMAP DMA windows backed by the
+    programmed TBASE scatter/gather table.
   - ISA legacy DMA controller registers, ISA DMA page registers, and a minimal
     floppy-controller shell are present so standard I/O probes do not fall
     through to unhandled ports.
@@ -78,7 +81,9 @@ Implemented:
 Not implemented yet:
 
 - Complete real Mikasa 21071 PCI host bridge behavior. The current Comanche
-  and EPIC models are register shells, not a full chipset implementation.
+  and EPIC models cover the register and DMA paths reached so far, but error
+  reporting, remaining HAE/config details, and PCI corner cases are still
+  incomplete.
 - Full NCR/Symbios 53C810 SCRIPTS/DMA execution. The current frontend handles
   simple script walking, `SEL_ABS`/`SEL_TBL`, table-indirect command/data/status
   moves, controller interrupt status, common SCSI-2 disk commands, and per-target
@@ -342,7 +347,8 @@ debug tracing, the PC cycles inside the ROM decompressor around `0x900301` and
 
 5. Add more Mikasa platform I/O.
    The current model implements APECS sparse ISA I/O, Comanche/EPIC register
-   storage, HAXR1 sparse-memory addressing, PCI configuration cycles, the
+   storage, HAXR1 sparse-memory addressing, EPIC HAXR0/HAXR2/PMLT/TLB/TBIA,
+   direct and SGMAP PCI DMA window translation, PCI configuration cycles, the
    raw-IDSEL `7` Intel 82375EB PCI/EISA bridge, the raw-IDSEL `6` NCR 53C810
    PCI configuration/register window, ISA DMA/page-register storage, an FDC
    shell, a raw-IDSEL `11` DECchip 21040 PCI/CSR shell, ELCR/PIC
