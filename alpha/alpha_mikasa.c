@@ -3425,20 +3425,32 @@ UNIT *uptr = &dka_unit[unit];
 uint32 page_code = cdb[2] & 0x3F;
 uint32 alloc = ten ? mikasa_ncr_alloc_len10 (cdb) : cdb[4];
 uint32 header = ten ? 8 : 4;
+uint32 desc = (cdb[1] & 0x08) ? 0 : 8;
 uint32 pages;
+uint32 page_off = header + desc;
 uint32 total;
 uint32 len;
+uint32 blocks;
 
 memset (buf, 0, sizeof (buf));
 if (uptr->flags & UNIT_RO)
     buf[ten ? 3 : 2] = 0x80;
-pages = mikasa_ncr_mode_pages (unit, page_code, buf + header,
-    sizeof (buf) - header);
+if (desc != 0) {
+    blocks = (uptr->capac > 0xFFFFFFu) ? 0xFFFFFFu : (uint32) uptr->capac;
+    if (ten)
+        mikasa_ncr_write_be16 (&buf[6], desc);
+    else
+        buf[3] = (uint8) desc;
+    mikasa_ncr_write_be24 (&buf[header + 1], blocks);
+    mikasa_ncr_write_be24 (&buf[header + 5], MIKASA_DKA_BLOCK_SIZE);
+    }
+pages = mikasa_ncr_mode_pages (unit, page_code, buf + page_off,
+    sizeof (buf) - page_off);
 if ((pages == 0) && (page_code != 0x00)) {
     mikasa_ncr_set_sense (unit, 0x05, 0x24, 0x00);
     return FALSE;
     }
-total = header + pages;
+total = page_off + pages;
 if (ten)
     mikasa_ncr_write_be16 (buf, total - 2);
 else

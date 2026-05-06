@@ -71,6 +71,7 @@
   latched `DSTAT`/`SIST` status.
 - [x] Add common SCSI-2 disk responses, per-target REQUEST SENSE, MODE SENSE
   pages, read/write paths, write-protect handling, and harmless disk no-ops.
+- [x] Include SCSI MODE SENSE block descriptors unless the CDB sets DBD.
 - [x] Add common extended SCSI disk probes: `READ(12)`, `WRITE(12)`,
   `REPORT LUNS`, and `READ CAPACITY(16)`.
 - [x] Add INQUIRY EVPD pages 0x00, 0x80, and 0x83 for supported-page,
@@ -212,6 +213,10 @@ the real path works.
     STATUS/MESSAGE pending for the next script restart;
   - current branch returns common SCSI-2 disk responses, write-protect check
     conditions, and per-target REQUEST SENSE state;
+  - current branch includes MODE SENSE block descriptors unless disabled by
+    the CDB, which better matches older direct-access disk drivers;
+  - SRM smoke after MODE SENSE descriptors still reaches `V5.4-101` and
+    enumerates `pka`/`ewa`;
   - current branch returns basic INQUIRY EVPD supported-page, unit-serial, and
     device-identification data for generic SCSI probes;
   - current branch classifies CDB data phases explicitly and consumes
