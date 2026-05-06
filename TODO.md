@@ -45,6 +45,9 @@
   expose/clear `ISTAT.INTF`.
 - [x] Keep NCR `INTFLY` side effects out of auxiliary script scans so debug
   searches do not reassert `ISTAT.INTF`.
+- [x] Keep auxiliary NCR script scans from clobbering visible `DBC`, `DSP`, and
+  `DSPS` fetch-progress registers while they are only searching for MOVE or
+  `INT` instructions.
 - [x] Suppress auxiliary NCR scan side effects for SCRIPTS register ops,
   load/store, and memory-copy instructions while preserving local SFBR/carry
   state needed for conditions.
@@ -154,6 +157,8 @@
   state; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after adding visible 53C810 register semantics;
   it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after making auxiliary NCR scans silent for
+  fetch-progress registers; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 

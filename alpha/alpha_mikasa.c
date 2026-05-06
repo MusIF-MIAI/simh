@@ -2701,16 +2701,24 @@ val = val & 0x00FFFFFFu;
 return (val & 0x00800000u) ? (val | 0xFF000000u) : val;
 }
 
-static t_bool mikasa_ncr_read_script (uint32 dsp, uint32 *op, uint32 *arg)
+static t_bool mikasa_ncr_fetch_script (uint32 dsp, uint32 *op, uint32 *arg,
+    t_bool visible)
 {
 if (!mikasa_pci_dma_read_long (dsp, op) ||
     !mikasa_pci_dma_read_long (dsp + 4, arg))
     return FALSE;
+if (!visible)
+    return TRUE;
 mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DBC, *op);
 mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DSPS, *arg);
 mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DSP,
     mikasa_ncr_next_script_addr (dsp, *op));
 return TRUE;
+}
+
+static t_bool mikasa_ncr_read_script (uint32 dsp, uint32 *op, uint32 *arg)
+{
+return mikasa_ncr_fetch_script (dsp, op, arg, TRUE);
 }
 
 static uint32 mikasa_ncr_next_script_addr (uint32 dsp, uint32 op)
@@ -3109,7 +3117,7 @@ for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
     uint32 next;
     uint32 group;
 
-    if (!mikasa_ncr_read_script (dsp, &op, &arg))
+    if (!mikasa_ncr_fetch_script (dsp, &op, &arg, side_effects))
         return FALSE;
     if ((op & MIKASA_NCR_TC_GROUP_MASK) == MIKASA_NCR_SCR_SEL_ABS) {
         uint32 sel = (op >> 16) & 0x0Fu;
