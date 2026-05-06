@@ -224,10 +224,15 @@
 #define MIKASA_NCR_BAR_SIZE         0x100
 #define MIKASA_NCR_BAR_MASK         0xFFFFFF00u
 #define MIKASA_NCR_REG_SCNTL0       0x00
+#define MIKASA_NCR_REG_SFBR         0x08
+#define MIKASA_NCR_REG_SOCL         0x09
+#define MIKASA_NCR_REG_SBCL         0x0B
 #define MIKASA_NCR_REG_DSTAT        0x0C
+#define MIKASA_NCR_REG_SSTAT0       0x0D
+#define MIKASA_NCR_REG_SSTAT1       0x0E
+#define MIKASA_NCR_REG_SSTAT2       0x0F
 #define MIKASA_NCR_REG_DSA          0x10
 #define MIKASA_NCR_REG_ISTAT        0x14
-#define MIKASA_NCR_REG_SFBR         0x08
 #define MIKASA_NCR_REG_DBC          0x24
 #define MIKASA_NCR_REG_DNAD         0x28
 #define MIKASA_NCR_REG_DSP          0x2C
@@ -2107,7 +2112,15 @@ static void mikasa_ncr_finish_move (uint32 op, uint32 addr, uint32 count,
     uint32 done)
 {
 uint32 resid = (done < count) ? count - done : 0;
+uint8 phase = (uint8) ((op & MIKASA_NCR_BM_PHASE_MASK) >>
+    MIKASA_NCR_BM_PHASE_SHIFT);
 
+mikasa_ncr_reg[MIKASA_NCR_REG_SOCL] =
+    (mikasa_ncr_reg[MIKASA_NCR_REG_SOCL] & ~7u) | phase;
+mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] =
+    (mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] & ~7u) | phase;
+mikasa_ncr_reg[MIKASA_NCR_REG_SSTAT1] =
+    (mikasa_ncr_reg[MIKASA_NCR_REG_SSTAT1] & ~7u) | phase;
 mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DBC,
     (op & 0xFF000000u) | (resid & MIKASA_NCR_BM_COUNT_MASK));
 mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DNAD, addr + done);
@@ -3187,6 +3200,13 @@ if (reg == MIKASA_NCR_REG_ISTAT) {
     else if ((val & MIKASA_NCR_ISTAT_SIGP) == 0)
         mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &= ~MIKASA_NCR_ISTAT_SIGP;
     }
+else if ((reg == MIKASA_NCR_REG_DSTAT) ||
+    (reg == MIKASA_NCR_REG_SSTAT0) ||
+    (reg == MIKASA_NCR_REG_SSTAT1) ||
+    (reg == MIKASA_NCR_REG_SSTAT2) ||
+    (reg == MIKASA_NCR_REG_SIST0) ||
+    (reg == MIKASA_NCR_REG_SIST1))
+    return;
 else {
     if (reg == MIKASA_NCR_REG_DIEN)
         val = val & MIKASA_NCR_DSTAT_IRQS;

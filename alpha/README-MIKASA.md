@@ -95,6 +95,8 @@ Not implemented yet:
   status bits remain latched until read.
   Handled SCRIPTS fetches and data MOVE transfers now update visible
   `DBC`, `DNAD`, `DSP`, and `DSPS` progress registers.
+  CPU writes no longer overwrite read-only NCR status registers, and completed
+  MOVE phases are reflected in `SOCL`, `SBCL`, and `SSTAT1`.
 - Full Ethernet, VGA, full NVRAM, and multiprocessor support. A DECchip 21040
   PCI/CSR shell exists so firmware and OS probes see a plausible DEC Ethernet
   device, but packet I/O is not implemented yet.
