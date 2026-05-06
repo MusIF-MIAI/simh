@@ -3170,6 +3170,19 @@ if (!mikasa_ncr_status_dsps_valid)
 return;
 }
 
+static t_bool mikasa_ncr_do_msg_out (uint32 dsp, uint32 dsa)
+{
+MIKASA_NCR_DMA_LIST msg;
+
+if (!mikasa_ncr_collect_moves (dsp, dsa, MIKASA_NCR_PHASE_MSG_OUT, &msg))
+    return TRUE;
+if (!mikasa_ncr_discard_scsi_data (&msg))
+    return FALSE;
+mikasa_ncr_reg[MIKASA_NCR_REG_SOCL] &= ~MIKASA_NCR_SOCL_ATN;
+mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] &= ~MIKASA_NCR_SOCL_ATN;
+return TRUE;
+}
+
 static t_bool mikasa_ncr_cmd_data_phase (const uint8 *cdb, uint32 *phase)
 {
 switch (cdb[0]) {
@@ -3703,6 +3716,10 @@ if ((target >= MIKASA_DKA_UNITS) || ((dka_unit[target].flags & UNIT_ATT) == 0)) 
     return TRUE;
     }
 mikasa_ncr_set_connected (TRUE);
+if (!mikasa_ncr_do_msg_out (dsp, dsa)) {
+    mikasa_ncr_set_connected (FALSE);
+    return FALSE;
+    }
 if (!mikasa_ncr_find_table_move (dsp, MIKASA_NCR_PHASE_CMD, &cmd_off))
     cmd_off = 0x0C;
 if (!mikasa_ncr_table_entry (dsa, cmd_off, &cmd_count, &cmd_addr) ||

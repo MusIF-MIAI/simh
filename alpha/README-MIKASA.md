@@ -108,7 +108,8 @@ Not implemented yet:
   `SCNTL3` values, and select-with-ATN state into the visible controller
   registers. `WAIT DISCONNECT` now clears connected state as a legal bus-free
   transition, while `WAIT RESELECT` stops script scanning until real reselect
-  event support is added.
+  event support is added. `MESSAGE OUT` buffers are now consumed before command
+  execution and ATN is cleared after the message-out handshake.
   SCRIPTS execution can now be started through `DCNTL.STD` as well as by
   writing `DSP`.
   CPU writes no longer overwrite read-only NCR status registers, and completed
