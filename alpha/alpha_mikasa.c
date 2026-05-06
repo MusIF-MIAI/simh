@@ -200,6 +200,14 @@
 #define MIKASA_NCR_DSPS_DAT_IN      9
 #define MIKASA_NCR_TRACE_INSNS      64
 #define MIKASA_NCR_TRACE_LIMIT      8
+#define MIKASA_NCR_BM_TYPE_MASK     0xC0000000u
+#define MIKASA_NCR_BM_TYPE          0x00000000u
+#define MIKASA_NCR_BM_TABLE         0x10000000u
+#define MIKASA_NCR_BM_PHASE_MASK    0x07000000u
+#define MIKASA_NCR_BM_PHASE_SHIFT   24
+#define MIKASA_NCR_BM_COUNT_MASK    0x00FFFFFFu
+#define MIKASA_NCR_PHASE_STS        3
+#define MIKASA_NCR_PHASE_MSG_IN     7
 #define MIKASA_ISA_DMA1             0x000
 #define MIKASA_ISA_PIC1             0x020
 #define MIKASA_ISA_CFG_INDEX        0x022
@@ -1641,26 +1649,44 @@ uint32 m = (a < b) ? a : b;
 return (m < c) ? m : c;
 }
 
+static t_bool mikasa_ncr_find_direct_move (uint32 dsp, uint32 phase,
+    uint32 *count, uint32 *addr)
+{
+uint32 off;
+
+for (off = 0; off < 0x400; off += 8) {
+    uint32 op;
+    uint32 arg;
+
+    if (!mikasa_pci_dma_read_long (dsp + off, &op) ||
+        !mikasa_pci_dma_read_long (dsp + off + 4, &arg))
+        return FALSE;
+    if (((op & MIKASA_NCR_BM_TYPE_MASK) == MIKASA_NCR_BM_TYPE) &&
+        ((op & MIKASA_NCR_BM_TABLE) == 0) &&
+        (((op & MIKASA_NCR_BM_PHASE_MASK) >>
+          MIKASA_NCR_BM_PHASE_SHIFT) == phase) &&
+        ((op & MIKASA_NCR_BM_COUNT_MASK) != 0)) {
+        *count = op & MIKASA_NCR_BM_COUNT_MASK;
+        *addr = arg;
+        return TRUE;
+        }
+    if ((op & MIKASA_NCR_BM_TYPE_MASK) == 0xC0000000u)
+        off += 4;
+    }
+return FALSE;
+}
+
 static void mikasa_ncr_write_status_msg (uint32 dsp, uint32 dsa,
     uint8 status)
 {
 uint32 count;
 uint32 addr;
-uint32 off;
 
 if (mikasa_ncr_table_entry (dsa, 0x24, &count, &addr) && (count != 0))
     (void) mikasa_pci_dma_write_byte (addr, status);
-for (off = 0; off < 0x200; off += 8) {
-    uint32 op;
-
-    if (!mikasa_pci_dma_read_long (dsp + off, &op))
-        break;
-    if (op == 0x0F000001u) {
-        if (mikasa_pci_dma_read_long (dsp + off + 4, &addr))
-            (void) mikasa_pci_dma_write_byte (addr, 0);
-        break;
-        }
-    }
+if (mikasa_ncr_find_direct_move (dsp, MIKASA_NCR_PHASE_MSG_IN, &count, &addr) &&
+    (count != 0))
+    (void) mikasa_pci_dma_write_byte (addr, 0);
 return;
 }
 
