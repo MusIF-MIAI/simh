@@ -2066,6 +2066,8 @@ else if ((reg == MIKASA_NCR_REG_SIST0) || (reg == MIKASA_NCR_REG_SIST1)) {
         }
     mikasa_ncr_update_irq ();
     }
+else if (reg == MIKASA_NCR_REG_DFIFO)
+    val = mikasa_ncr_reg[MIKASA_NCR_REG_DBC] & 0x7F;
 else if (reg == MIKASA_NCR_REG_CTEST2) {
     val = (uint8) ((val & ~MIKASA_NCR_CTEST2_SIGP) |
         ((mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] & MIKASA_NCR_ISTAT_SIGP) ?

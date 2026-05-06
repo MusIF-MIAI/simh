@@ -87,6 +87,8 @@
   condition.
 - [x] Model NCR `CTEST3` revision/writable bits and DMA FIFO clear/flush
   effects with the local FIFO-empty state.
+- [x] Report NCR `DFIFO.BO[6:0]` consistently with the local FIFO-empty model
+  by mirroring the low seven bits of `DBC`.
 - [x] Update NCR `SFBR` with the first byte of handled input phases including
   data-in, status, and message-in transfers.
 - [x] Reflect first-byte SCSI bus data in low-level NCR latches: input phases
@@ -219,6 +221,8 @@
   `DSTAT.IID`; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after tightening `DCNTL.PFF` and `STIME1.GEN`;
   it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after making `DFIFO.BO[6:0]` match the empty-FIFO
+  model; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -309,6 +313,8 @@ the real path works.
     clears ATN after that handshake;
   - current branch preserves the `CTEST3` revision nibble and handles DMA FIFO
     clear/flush writes consistently with the FIFO-empty model;
+  - current branch reports `DFIFO.BO[6:0]` as the low seven bits of `DBC`, so
+    documented FIFO residual calculations see an empty FIFO;
   - current branch updates `SFBR` from handled data-in, status, and message-in
     phases so SCRIPTS tests see the first received byte;
   - current branch exposes the won-arbitration status bit after SCRIPTS

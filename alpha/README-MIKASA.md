@@ -140,7 +140,9 @@ Not implemented yet:
   execution: `IDENTIFY` records the LUN, queue tags are retained, extended
   messages are skipped cleanly, and ATN is cleared after the handshake.
   `CTEST3` now preserves the 53C810 revision nibble and handles FIFO
-  clear/flush writes against the local FIFO-empty model. `SFBR`, `SIDL`, and
+  clear/flush writes against the local FIFO-empty model. `DFIFO.BO[6:0]`
+  mirrors the low seven bits of `DBC`, so documented FIFO residual
+  calculations report an empty FIFO. `SFBR`, `SIDL`, and
   `SBDL` are updated with the first byte of handled input phases, while
   command/data/message output phases update `SODL`/`SBDL`. SCRIPTS selection
   attempts now expose the won-arbitration status bit in `SSTAT0`.
