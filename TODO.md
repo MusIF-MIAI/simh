@@ -26,6 +26,8 @@
   interrupt status, abort, reset, and select-timeout behavior.
 - [x] Add NCR SCRIPTS scanning for select, table/direct/indirect moves,
   register ops, load/store, memory copy, and basic conditional flow.
+- [x] Collect multiple NCR data-phase MOVE entries and transfer SCSI payloads
+  across scatter/gather DMA segment lists.
 - [x] Add common SCSI-2 disk responses, per-target REQUEST SENSE, MODE SENSE
   pages, read/write paths, write-protect handling, and harmless disk no-ops.
 - [x] Add DECchip 21040/Tulip PCI/CSR shell.
@@ -82,9 +84,11 @@ the real path works.
   - current branch follows simple unconditional script flow and decodes
     `SEL_ABS`, `SEL_TBL`, and table-indirect command/data/status/message moves;
   - continue replacing the scanner with actual conditional SCRIPTS execution,
-    scatter/gather chaining, phase mismatch handling, and memory moves;
+    phase mismatch handling, and memory moves;
   - current branch models the main `DSP`, `DSPS`, `DSTAT`, `SIST0`, `SIST1`,
     `ISTAT`, SIR/DIP/SIP, abort, and select-timeout paths used so far;
+  - current branch collects multiple data-phase MOVE entries and reads/writes
+    SCSI payloads across scatter/gather segment lists;
   - current branch returns common SCSI-2 disk responses, write-protect check
     conditions, and per-target REQUEST SENSE state;
   - use SIMH `sim_scsi` as the backing SCSI command/device layer where it fits;

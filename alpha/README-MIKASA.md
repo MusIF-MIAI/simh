@@ -89,7 +89,8 @@ Not implemented yet:
 - Full NCR/Symbios 53C810 SCRIPTS/DMA execution. The current frontend handles
   simple script walking, `SEL_ABS`/`SEL_TBL`, table-indirect command/data/status
   moves, controller interrupt status, common SCSI-2 disk commands, and per-target
-  REQUEST SENSE state, but it is not a complete SCRIPTS processor.
+  REQUEST SENSE state. Data payloads can now span multiple data-phase MOVE
+  segments, but the frontend is still not a complete SCRIPTS processor.
 - Full Ethernet, VGA, full NVRAM, and multiprocessor support. A DECchip 21040
   PCI/CSR shell exists so firmware and OS probes see a plausible DEC Ethernet
   device, but packet I/O is not implemented yet.
@@ -361,8 +362,8 @@ debug tracing, the PC cycles inside the ROM decompressor around `0x900301` and
    SIMH has a common SCSI backend, but no complete 53C810 PCI DMA frontend in
    this tree. The implementation must be written cleanly for SIMH licensing; do
    not copy GPL code from AXPbox. The immediate missing pieces are conditional
-   SCRIPTS execution, scatter/gather chaining, phase-mismatch paths, and wiring
-   the transfer layer to SIMH `sim_scsi` where practical.
+   SCRIPTS execution, phase-mismatch paths, and wiring the transfer layer to
+   SIMH `sim_scsi` where practical.
 
 7. Wire the 53C810 frontend to the four DKA images.
    Once APB switches from firmware disk reads to OS disk I/O, the current raw
