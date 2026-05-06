@@ -125,7 +125,10 @@ Not implemented yet:
   address and `CTEST2` mirrors/clears the visible `SIGP` bit on read. `TEMP`
   is updated for SCRIPTS `CALL`/`RETURN`, host ID defaults are exposed through
   `SCID`/`RESPID`, and SCRIPTS register writes use the same writable masks for
-  visible controller registers. `MESSAGE OUT` buffers are now consumed before
+  visible controller registers. Additional driver-probed registers now use
+  writable masks (`CTEST2/5`, `DMODE`, `DCNTL`, `MACNTL`, `STIME1`,
+  `STEST1/2/3`, and `SIEN1`), and `DCNTL.IRQD` suppresses IRQ output without
+  clearing latched status. `MESSAGE OUT` buffers are now consumed before
   command execution and ATN is cleared after the message-out handshake.
   `CTEST3` now preserves the 53C810 revision nibble and handles FIFO
   clear/flush writes against the local FIFO-empty model. `SFBR` is updated with

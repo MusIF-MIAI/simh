@@ -67,6 +67,9 @@
   `SCNTL2.SDU`, `SSTAT2.LDSC`, host `SCID`/`RESPID`, selector `SSID`,
   `TEMP` for SCRIPTS `CALL`/`RETURN`, `WAIT RESELECT` `SIGP` branching, and
   masked SCRIPTS writes to writable controller registers.
+- [x] Add writable masks for more NCR driver-probed registers (`CTEST2/5`,
+  `DMODE`, `DCNTL`, `MACNTL`, `STIME1`, `STEST1/2/3`, and `SIEN1`) and honor
+  `DCNTL.IRQD` by suppressing IRQ output without clearing latched status.
 - [x] Consume NCR `MESSAGE OUT` moves before command execution and clear ATN
   after the message-out handshake.
 - [x] Model NCR `CTEST3` revision/writable bits and DMA FIFO clear/flush
@@ -174,6 +177,8 @@
 - [x] Re-run SRM ROM smoke after latching NCR `DSTAT` causes and surfacing
   script failures as `DSTAT.BF`; it still reaches `V5.4-101` and detects
   pka/ewa.
+- [x] Re-run SRM ROM smoke after adding more NCR writable register masks and
+  `DCNTL.IRQD`; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 

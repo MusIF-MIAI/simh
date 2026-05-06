@@ -289,11 +289,19 @@
 #define MIKASA_NCR_REG_CTEST3       0x1B
 #define MIKASA_NCR_REG_TEMP         0x1C
 #define MIKASA_NCR_REG_DFIFO        0x20
+#define MIKASA_NCR_REG_CTEST4       0x21
+#define MIKASA_NCR_REG_CTEST5       0x22
+#define MIKASA_NCR_REG_CTEST6       0x23
 #define MIKASA_NCR_REG_SCRATCHA     0x34
 #define MIKASA_NCR_REG_MACNTL       0x46
 #define MIKASA_NCR_REG_GPCNTL       0x47
+#define MIKASA_NCR_REG_STIME0       0x48
+#define MIKASA_NCR_REG_STIME1       0x49
 #define MIKASA_NCR_REG_RESPID       0x4A
 #define MIKASA_NCR_REG_STEST0       0x4C
+#define MIKASA_NCR_REG_STEST1       0x4D
+#define MIKASA_NCR_REG_STEST2       0x4E
+#define MIKASA_NCR_REG_STEST3       0x4F
 #define MIKASA_NCR_SCNTL0_ARB       0xC0
 #define MIKASA_NCR_SCNTL0_TRG       0x01
 #define MIKASA_NCR_SCNTL0_WRITABLE  0xFB
@@ -315,8 +323,11 @@
 #define MIKASA_NCR_DSTAT_IRQS       0x7Du
 #define MIKASA_NCR_SSTAT0_WOA       0x04
 #define MIKASA_NCR_DMODE_MAN        0x01
+#define MIKASA_NCR_DMODE_WRITABLE   0xCF
 #define MIKASA_NCR_DCNTL_SSM        0x10
 #define MIKASA_NCR_DCNTL_STD        0x04
+#define MIKASA_NCR_DCNTL_IRQD       0x02
+#define MIKASA_NCR_DCNTL_WRITABLE   0xFB
 #define MIKASA_NCR_ISTAT_SRST       0x40
 #define MIKASA_NCR_ISTAT_SIGP       0x20
 #define MIKASA_NCR_ISTAT_ABRT       0x80
@@ -336,13 +347,20 @@
 #define MIKASA_NCR_SIST1_STO        0x04
 #define MIKASA_NCR_SSTAT2_LDSC      0x02
 #define MIKASA_NCR_CTEST1_FMT       0xF0
+#define MIKASA_NCR_CTEST2_WRITABLE  0x08
 #define MIKASA_NCR_CTEST2_SIGP      0x40
 #define MIKASA_NCR_CTEST2_DACK      0x01
 #define MIKASA_NCR_CTEST3_REV       0x10
 #define MIKASA_NCR_CTEST3_FLF       0x08
 #define MIKASA_NCR_CTEST3_CLF       0x04
 #define MIKASA_NCR_CTEST3_WRITABLE  0x0B
+#define MIKASA_NCR_CTEST5_WRITABLE  0x3F
 #define MIKASA_NCR_MACNTL_810       0x40
+#define MIKASA_NCR_MACNTL_WRITABLE  0x0F
+#define MIKASA_NCR_STIME1_WRITABLE  0x7F
+#define MIKASA_NCR_STEST1_WRITABLE  0xCC
+#define MIKASA_NCR_STEST2_WRITABLE  0xBF
+#define MIKASA_NCR_STEST3_WRITABLE  0xFF
 #define MIKASA_NCR_IRQ              12
 #define MIKASA_NCR_INTBIT           (1u << MIKASA_NCR_IRQ)
 #define MIKASA_RTC_IRQ              8
@@ -2321,6 +2339,10 @@ t_bool scsi_irq = (mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &
 t_bool fly_irq = (mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &
     MIKASA_NCR_ISTAT_INTF) != 0;
 
+if (mikasa_ncr_reg[MIKASA_NCR_REG_DCNTL] & MIKASA_NCR_DCNTL_IRQD) {
+    mikasa_ncr_clear_irq ();
+    return;
+    }
 if (dma_irq || scsi_irq || fly_irq)
     mikasa_ncr_assert_irq ();
 else
@@ -2829,10 +2851,28 @@ if (reg == MIKASA_NCR_REG_CTEST3) {
         MIKASA_NCR_CTEST3_REV | (val & MIKASA_NCR_CTEST3_WRITABLE);
     return;
     }
+if (reg == MIKASA_NCR_REG_CTEST2)
+    val = val & MIKASA_NCR_CTEST2_WRITABLE;
+if (reg == MIKASA_NCR_REG_CTEST5)
+    val = val & MIKASA_NCR_CTEST5_WRITABLE;
+if (reg == MIKASA_NCR_REG_DMODE)
+    val = val & MIKASA_NCR_DMODE_WRITABLE;
 if (reg == MIKASA_NCR_REG_DIEN)
     val = val & MIKASA_NCR_DSTAT_IRQS;
+if (reg == MIKASA_NCR_REG_DCNTL)
+    val = val & MIKASA_NCR_DCNTL_WRITABLE;
 if (reg == MIKASA_NCR_REG_SIEN1)
-    val = val & 0x07;
+    val = val & 0x17;
+if (reg == MIKASA_NCR_REG_MACNTL)
+    val = val & MIKASA_NCR_MACNTL_WRITABLE;
+if (reg == MIKASA_NCR_REG_STIME1)
+    val = val & MIKASA_NCR_STIME1_WRITABLE;
+if (reg == MIKASA_NCR_REG_STEST1)
+    val = val & MIKASA_NCR_STEST1_WRITABLE;
+if (reg == MIKASA_NCR_REG_STEST2)
+    val = val & MIKASA_NCR_STEST2_WRITABLE;
+if (reg == MIKASA_NCR_REG_STEST3)
+    val = val & MIKASA_NCR_STEST3_WRITABLE;
 mikasa_ncr_reg[reg] = val;
 if (reg == MIKASA_NCR_REG_SOCL)
     mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] =
@@ -4273,10 +4313,28 @@ else {
         val = val & MIKASA_NCR_GPREG_WRITABLE;
     if (reg == MIKASA_NCR_REG_CTEST3)
         mikasa_ncr_write_ctest3 (val);
+    else if (reg == MIKASA_NCR_REG_CTEST2)
+        val = val & MIKASA_NCR_CTEST2_WRITABLE;
+    else if (reg == MIKASA_NCR_REG_CTEST5)
+        val = val & MIKASA_NCR_CTEST5_WRITABLE;
+    else if (reg == MIKASA_NCR_REG_DMODE)
+        val = val & MIKASA_NCR_DMODE_WRITABLE;
     else if (reg == MIKASA_NCR_REG_DIEN)
         val = val & MIKASA_NCR_DSTAT_IRQS;
+    else if (reg == MIKASA_NCR_REG_DCNTL)
+        val = val & MIKASA_NCR_DCNTL_WRITABLE;
     if (reg == MIKASA_NCR_REG_SIEN1)
-        val = val & 0x07;
+        val = val & 0x17;
+    if (reg == MIKASA_NCR_REG_MACNTL)
+        val = val & MIKASA_NCR_MACNTL_WRITABLE;
+    if (reg == MIKASA_NCR_REG_STIME1)
+        val = val & MIKASA_NCR_STIME1_WRITABLE;
+    if (reg == MIKASA_NCR_REG_STEST1)
+        val = val & MIKASA_NCR_STEST1_WRITABLE;
+    if (reg == MIKASA_NCR_REG_STEST2)
+        val = val & MIKASA_NCR_STEST2_WRITABLE;
+    if (reg == MIKASA_NCR_REG_STEST3)
+        val = val & MIKASA_NCR_STEST3_WRITABLE;
     if (reg != MIKASA_NCR_REG_CTEST3)
         mikasa_ncr_reg[reg] = val;
     if (reg == MIKASA_NCR_REG_SOCL)
