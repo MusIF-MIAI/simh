@@ -101,7 +101,9 @@ Not implemented yet:
   update visible `DBC`, `DNAD`, `DSP`, and `DSPS` progress registers.
   SCRIPTS `INT` completion interrupts now prefer the real second-word value
   from the script in `DSPS`, falling back to synthetic phase markers only when
-  the current frontend cannot find a matching script interrupt.
+  the current frontend cannot find a matching script interrupt. `DSTAT` causes
+  are preserved until the CPU reads the status register, and unhandled
+  fetch/DMA script paths raise `DSTAT.BF` instead of failing silently.
   `INTFLY` is treated as non-halting and sets `ISTAT.INTF`, with CPU
   write-one clearing, while auxiliary script scans suppress `INTFLY` side
   effects and no longer clobber visible `DBC`/`DSP`/`DSPS` fetch-progress

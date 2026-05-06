@@ -41,6 +41,9 @@
   `DBC`, `DNAD`, and current phase status, not only data moves.
 - [x] Prefer real NCR SCRIPTS `INT` second-word values for `DSPS` completion
   interrupts, with synthetic values only as fallback.
+- [x] Preserve already-latched NCR `DSTAT` causes until the CPU reads `DSTAT`,
+  and raise `DSTAT.BF` for script fetch/DMA paths the frontend cannot execute
+  instead of failing silently.
 - [x] Treat NCR SCRIPTS `INTFLY` as a non-halting interrupt-on-the-fly path and
   expose/clear `ISTAT.INTF`.
 - [x] Keep NCR `INTFLY` side effects out of auxiliary script scans so debug
@@ -168,6 +171,9 @@
   it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after preserving NCR `WAIT RESELECT`/`SIGP` wait
   state; it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after latching NCR `DSTAT` causes and surfacing
+  script failures as `DSTAT.BF`; it still reaches `V5.4-101` and detects
+  pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 

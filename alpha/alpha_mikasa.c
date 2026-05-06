@@ -308,6 +308,7 @@
 #define MIKASA_NCR_SOCL_ACK         0x40
 #define MIKASA_NCR_SOCL_ATN         0x08
 #define MIKASA_NCR_DSTAT_DFE        0x80
+#define MIKASA_NCR_DSTAT_BF         0x20
 #define MIKASA_NCR_DSTAT_SIR        0x04
 #define MIKASA_NCR_DSTAT_SSI        0x08
 #define MIKASA_NCR_DSTAT_ABRT       0x10
@@ -2331,7 +2332,7 @@ static void mikasa_ncr_set_dip (uint8 dstat, uint32 dsps)
 {
 mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DSPS, dsps);
 mikasa_ncr_reg[MIKASA_NCR_REG_DSTAT] =
-    (mikasa_ncr_reg[MIKASA_NCR_REG_DSTAT] & MIKASA_NCR_DSTAT_DFE) |
+    (mikasa_ncr_reg[MIKASA_NCR_REG_DSTAT] & MIKASA_NCR_DSTAT_IRQS) |
     MIKASA_NCR_DSTAT_DFE | dstat;
 mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] |= MIKASA_NCR_ISTAT_DIP;
 mikasa_ncr_update_irq ();
@@ -4155,11 +4156,17 @@ if (mikasa_ncr_transaction.status_pending) {
 else {
     mikasa_ncr_trace_script (dsp);
     if (mikasa_ncr_reg[MIKASA_NCR_REG_DCNTL] & MIKASA_NCR_DCNTL_SSM) {
-        if (!mikasa_ncr_step_script (dsp))
+        if (!mikasa_ncr_step_script (dsp)) {
             mikasa_ncr_set_connected (FALSE);
+            if (!mikasa_ncr_wait_reselect)
+                mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_BF, dsp);
+            }
         }
-    else if (!mikasa_ncr_run_script (dsp))
+    else if (!mikasa_ncr_run_script (dsp)) {
         mikasa_ncr_set_connected (FALSE);
+        if (!mikasa_ncr_wait_reselect)
+            mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_BF, dsp);
+        }
     }
 return;
 }
