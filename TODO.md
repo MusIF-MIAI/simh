@@ -30,6 +30,8 @@
   across scatter/gather DMA segment lists.
 - [x] Update NCR `DBC`, `DNAD`, `DSP`, and `DSPS` as handled SCRIPTS fetches
   and data MOVE transfers progress.
+- [x] Reflect NCR `COMMAND`, `STATUS`, and `MESSAGE IN` move completion in
+  `DBC`, `DNAD`, and current phase status, not only data moves.
 - [x] Prefer real NCR SCRIPTS `INT` second-word values for `DSPS` completion
   interrupts, with synthetic values only as fallback.
 - [x] Treat NCR SCRIPTS `INTFLY` as a non-halting interrupt-on-the-fly path and
@@ -116,7 +118,8 @@ the real path works.
   - current branch collects multiple data-phase MOVE entries and reads/writes
     SCSI payloads across scatter/gather segment lists;
   - current branch updates visible SCRIPTS/DMA progress registers for handled
-    instruction fetches and completed MOVE segments;
+    instruction fetches and completed command/data/status/message MOVE
+    segments;
   - current branch uses SCRIPTS `INT` instruction arguments for `DSPS`
     completion values when they can be found, rather than always returning
     synthetic phase markers;

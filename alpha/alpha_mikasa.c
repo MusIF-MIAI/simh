@@ -3025,16 +3025,24 @@ uint32 msg_off;
 
 if (!mikasa_ncr_find_table_move (dsp, MIKASA_NCR_PHASE_STS, &sts_off))
     sts_off = 0x24;
-if (mikasa_ncr_table_entry (dsa, sts_off, &count, &addr) && (count != 0))
+if (mikasa_ncr_table_entry (dsa, sts_off, &count, &addr) && (count != 0)) {
     (void) mikasa_pci_dma_write_byte (addr, status);
+    mikasa_ncr_finish_move (mikasa_ncr_move_op_for_phase (
+        MIKASA_NCR_PHASE_STS), addr, count, 1);
+    }
 if (mikasa_ncr_find_table_move (dsp, MIKASA_NCR_PHASE_MSG_IN, &msg_off) &&
     mikasa_ncr_table_entry (dsa, msg_off, &count, &addr) && (count != 0)) {
     (void) mikasa_pci_dma_write_byte (addr, 0);
+    mikasa_ncr_finish_move (mikasa_ncr_move_op_for_phase (
+        MIKASA_NCR_PHASE_MSG_IN), addr, count, 1);
     return;
     }
 if (mikasa_ncr_find_direct_move (dsp, MIKASA_NCR_PHASE_MSG_IN, &count, &addr) &&
-    (count != 0))
+    (count != 0)) {
     (void) mikasa_pci_dma_write_byte (addr, 0);
+    mikasa_ncr_finish_move (mikasa_ncr_move_op_for_phase (
+        MIKASA_NCR_PHASE_MSG_IN), addr, count, 1);
+    }
 return;
 }
 
@@ -3461,6 +3469,7 @@ static t_bool mikasa_ncr_run_script (uint32 dsp)
 {
 uint32 dsa = mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA);
 uint32 cmd_count;
+uint32 cmd_move_count;
 uint32 cmd_addr;
 uint32 cmd_off;
 uint32 data_off;
@@ -3487,11 +3496,14 @@ if (!mikasa_ncr_find_table_move (dsp, MIKASA_NCR_PHASE_CMD, &cmd_off))
 if (!mikasa_ncr_table_entry (dsa, cmd_off, &cmd_count, &cmd_addr) ||
     (cmd_count == 0))
     return FALSE;
+cmd_move_count = cmd_count;
 if (cmd_count > sizeof (cdb))
     cmd_count = sizeof (cdb);
 memset (cdb, 0, sizeof (cdb));
 if (!mikasa_ncr_read_dma_buf (cmd_addr, cdb, cmd_count))
     return FALSE;
+mikasa_ncr_finish_move (mikasa_ncr_move_op_for_phase (MIKASA_NCR_PHASE_CMD),
+    cmd_addr, cmd_move_count, cmd_count);
 data_out = mikasa_ncr_data_out_cmd (cdb);
 data_phase = data_out ? MIKASA_NCR_PHASE_DAT_OUT : MIKASA_NCR_PHASE_DAT_IN;
 if (!mikasa_ncr_collect_moves (dsp, dsa, data_phase, &data)) {

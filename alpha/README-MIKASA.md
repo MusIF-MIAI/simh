@@ -93,8 +93,8 @@ Not implemented yet:
   segments, but the frontend is still not a complete SCRIPTS processor.
   `DIEN`, `SIEN0`, and `SIEN1` now mask IRQ assertion while `DSTAT`/`SIST`
   status bits remain latched until read.
-  Handled SCRIPTS fetches and data MOVE transfers now update visible
-  `DBC`, `DNAD`, `DSP`, and `DSPS` progress registers.
+  Handled SCRIPTS fetches and command/data/status/message MOVE transfers now
+  update visible `DBC`, `DNAD`, `DSP`, and `DSPS` progress registers.
   SCRIPTS `INT` completion interrupts now prefer the real second-word value
   from the script in `DSPS`, falling back to synthetic phase markers only when
   the current frontend cannot find a matching script interrupt.
