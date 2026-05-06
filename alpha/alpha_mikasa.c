@@ -181,7 +181,10 @@
 #define MIKASA_NCR_SCNTL0_ARB       0xC0
 #define MIKASA_NCR_DSTAT_DFE        0x80
 #define MIKASA_NCR_DSTAT_SIR        0x04
+#define MIKASA_NCR_DSTAT_ABRT       0x10
 #define MIKASA_NCR_ISTAT_SRST       0x40
+#define MIKASA_NCR_ISTAT_SIGP       0x20
+#define MIKASA_NCR_ISTAT_ABRT       0x80
 #define MIKASA_NCR_ISTAT_SIP        0x02
 #define MIKASA_NCR_ISTAT_DIP        0x01
 #define MIKASA_NCR_SIST1_STO        0x04
@@ -1936,15 +1939,34 @@ mikasa_ncr_reg[MIKASA_NCR_REG_STEST0] = 0x03;
 return;
 }
 
+static void mikasa_ncr_abort_script (void)
+{
+mikasa_ncr_status_phase = FALSE;
+mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &= ~MIKASA_NCR_ISTAT_ABRT;
+mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_ABRT, 0);
+return;
+}
+
 static void mikasa_ncr_write_b (uint32 reg, uint8 val)
 {
 reg = reg & (MIKASA_NCR_REG_SIZE - 1);
 sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "NCR write %02X=%02X\n",
     reg, val);
-mikasa_ncr_reg[reg] = val;
-if ((reg == MIKASA_NCR_REG_ISTAT) && (val & MIKASA_NCR_ISTAT_SRST))
-    mikasa_ncr_init_regs ();
-else if (reg == (MIKASA_NCR_REG_DSP + 3)) {
+if (reg == MIKASA_NCR_REG_ISTAT) {
+    mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] =
+        (mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &
+         (MIKASA_NCR_ISTAT_SIP | MIKASA_NCR_ISTAT_DIP)) |
+        (val & MIKASA_NCR_ISTAT_SIGP);
+    if (val & MIKASA_NCR_ISTAT_SRST)
+        mikasa_ncr_init_regs ();
+    else if (val & MIKASA_NCR_ISTAT_ABRT)
+        mikasa_ncr_abort_script ();
+    else if ((val & MIKASA_NCR_ISTAT_SIGP) == 0)
+        mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &= ~MIKASA_NCR_ISTAT_SIGP;
+    }
+else {
+    mikasa_ncr_reg[reg] = val;
+    if (reg == (MIKASA_NCR_REG_DSP + 3)) {
     uint32 dsp = mikasa_ncr_reg_l (MIKASA_NCR_REG_DSP);
 
     if (mikasa_ncr_status_phase) {
@@ -1957,6 +1979,7 @@ else if (reg == (MIKASA_NCR_REG_DSP + 3)) {
         mikasa_ncr_trace_script (dsp);
         (void) mikasa_ncr_run_script (dsp);
         }
+    }
     }
 return;
 }
