@@ -57,6 +57,9 @@ Implemented:
     path. SRM enables COM1 `IER=0x0B`, unmasks PIC IRQ4, the APECS PCI IACK
     cycle returns vector `0x04`, and the firmware reads the UART receive
     buffer.
+  - The 8259 pair now honors ELCR edge-vs-level triggering: reserved ELCR bits
+    read as zero, edge IRQs latch only on rising edges, level IRQs track the
+    asserted input line, and active level IRQs can reassert after EOI.
   - `DEP MIKASA SCCSCALE <n>` can be used as a debug accelerator for SRM
     delay loops. The default is `1`, which preserves the normal PAL `RSCC`
     counter behavior.

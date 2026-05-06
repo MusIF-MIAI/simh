@@ -22,7 +22,10 @@
 - [x] Add optional file-backed 128-byte RTC/NVRAM image support with default
   RTC values and alarm/update/periodic interrupt state.
 - [x] Add 8259 PIC init, mask/pending/in-service, EOI, auto-EOI, cascade IACK,
-  and ELCR storage.
+  and ELCR edge/level-trigger storage.
+- [x] Honor 8259 ELCR edge-vs-level behavior: edge IRQs latch only on rising
+  edges, level IRQs track asserted inputs, and level IRQs can reassert after
+  EOI while the line remains active.
 - [x] Route COM1 receive interrupts through the SRM-programmed PIC path.
 - [x] Add NCR/Symbios 53C810 PCI config, I/O BAR, memory BAR, register shell,
   interrupt status, abort, reset, and select-timeout behavior.
@@ -270,6 +273,8 @@
 - [x] Re-run SRM ROM smoke after initial `sim_scsi` wiring; all four ODS2
   dumps attach without size errors, and SRM still reaches `V5.4-101` and
   detects pka/ewa.
+- [x] Re-run SRM ROM smoke after PIC/ELCR edge-vs-level handling; it still
+  reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -287,8 +292,9 @@
 - [ ] Complete APECS/DECchip 21071 behavior beyond the current register shells,
   especially actually raising error causes, remaining HAE/config details, and
   DMA corner cases.
-- [ ] Validate ICU/PIC level-vs-edge semantics against OpenVMS and FreeBSD
-  drivers.
+- [ ] Validate ICU/PIC interrupt behavior against OpenVMS and FreeBSD drivers
+  once OS boot reaches live interrupt use. The 8259 ELCR edge-vs-level model
+  is now implemented, but still needs validation under the target OS.
 - [ ] Identify the real AlphaServer 1000 NVRAM layout and encode SRM console
   defaults such as console mode, auto_action, boot device, and boot flags.
 - [ ] Improve OCP/Halt/Ctrl-P behavior enough for SRM console transitions.
@@ -462,9 +468,13 @@ the real path works.
   - SRM smoke after the NCR PCI interrupt-line update still reaches
     `V5.4-101` and enumerates `pka`/`ewa`;
   - keep COM1 IRQ4 through the 8259/PIC IACK path;
-  - current branch handles PIC init sequencing, ICW4 auto-EOI, ELCR storage,
-    mask/pending/in-service state, EOI, and cascade IACK paths;
-  - continue checking level/edge semantics against OpenVMS and FreeBSD drivers.
+  - current branch handles PIC init sequencing, ICW4 auto-EOI, ELCR
+    edge/level-trigger state, mask/pending/in-service state, EOI, and cascade
+    IACK paths;
+  - current branch masks ELCR reserved bits to AT-compatible writable lines,
+    latches edge IRQs on rising edges only, tracks level IRQ inputs, and
+    reasserts active level IRQs after EOI;
+  - continue validating interrupt behavior against OpenVMS and FreeBSD drivers.
 
 ## P1 Firmware Platform Devices
 
