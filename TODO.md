@@ -72,6 +72,9 @@
   MOVE phase through `SOCL`, `SBCL`, and `SSTAT1`.
 - [x] Track NCR connected state in `SCNTL1.ISCON`/`ISTAT.CON` across select,
   command, data, status/message, timeout, reset, and abort paths.
+- [x] Preserve pending NCR status/message completion in an explicit
+  transaction state with target, `DSP`, `DSA`, data phase, status byte, and
+  saved completion `DSPS`, instead of loose globals.
 - [x] Latch NCR `SIST0.MIA` phase mismatch when a pending DATA phase is skipped
   by the target in favor of STATUS.
 - [x] Honor NCR `DIEN`, `SIEN0`, and `SIEN1` interrupt masks while preserving
@@ -143,6 +146,8 @@
   DKA0 and reaches the known `PC: 200039E0` halt.
 - [x] Re-run SRM ROM smoke after unifying auxiliary NCR SCRIPTS scans; it
   still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after adding explicit pending NCR transaction
+  state; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 

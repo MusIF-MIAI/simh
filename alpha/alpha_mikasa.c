@@ -581,6 +581,18 @@ typedef struct {
     uint32 any_int_dsps;
     } MIKASA_NCR_SCRIPT_SCAN;
 
+typedef struct {
+    t_bool active;
+    t_bool status_pending;
+    uint32 dsp;
+    uint32 dsa;
+    uint32 target;
+    uint32 data_phase;
+    uint8 status;
+    t_bool status_dsps_valid;
+    uint32 status_dsps;
+    } MIKASA_NCR_TRANSACTION;
+
 uint32 mikasa_irq_mask = 0;
 uint32 mikasa_irq_summary = 0;
 t_uint64 mikasa_hwrpb_pa = MIKASA_HWRPB_PA;
@@ -821,10 +833,7 @@ static uint32 mikasa_tulip_srom_out_bits = 0;
 static uint32 mikasa_ncr_script_trace_count = 0;
 static uint32 mikasa_icu_int_req_bits = 0;
 static uint32 mikasa_pic_int_req_bits = 0;
-static t_bool mikasa_ncr_status_phase = FALSE;
-static uint8 mikasa_ncr_status_byte = 0;
-static t_bool mikasa_ncr_status_dsps_valid = FALSE;
-static uint32 mikasa_ncr_status_dsps = MIKASA_NCR_DSPS_OK;
+static MIKASA_NCR_TRANSACTION mikasa_ncr_transaction = { 0 };
 static uint8 mikasa_ncr_sense_key[MIKASA_DKA_UNITS] = { 0 };
 static uint8 mikasa_ncr_sense_asc[MIKASA_DKA_UNITS] = { 0 };
 static uint8 mikasa_ncr_sense_ascq[MIKASA_DKA_UNITS] = { 0 };
@@ -3177,14 +3186,39 @@ if (mikasa_ncr_find_phase_int (dsp, MIKASA_NCR_SCRIPT_NO_PHASE, FALSE, dsps))
 return FALSE;
 }
 
-static void mikasa_ncr_defer_status_phase (uint32 dsp, uint8 status)
+static void mikasa_ncr_clear_transaction (void)
 {
-mikasa_ncr_status_phase = TRUE;
-mikasa_ncr_status_byte = status;
-mikasa_ncr_status_dsps_valid =
-    mikasa_ncr_find_status_int_dsps (dsp, &mikasa_ncr_status_dsps);
-if (!mikasa_ncr_status_dsps_valid)
-    mikasa_ncr_status_dsps = MIKASA_NCR_DSPS_OK;
+memset (&mikasa_ncr_transaction, 0, sizeof (mikasa_ncr_transaction));
+mikasa_ncr_transaction.status_dsps = MIKASA_NCR_DSPS_OK;
+return;
+}
+
+static void mikasa_ncr_begin_transaction (uint32 dsp, uint32 dsa,
+    uint32 target)
+{
+mikasa_ncr_clear_transaction ();
+mikasa_ncr_transaction.active = TRUE;
+mikasa_ncr_transaction.dsp = dsp;
+mikasa_ncr_transaction.dsa = dsa;
+mikasa_ncr_transaction.target = target;
+return;
+}
+
+static void mikasa_ncr_defer_status_phase (uint32 dsp, uint32 dsa,
+    uint32 target, uint32 data_phase, uint8 status)
+{
+mikasa_ncr_transaction.active = TRUE;
+mikasa_ncr_transaction.status_pending = TRUE;
+mikasa_ncr_transaction.dsp = dsp;
+mikasa_ncr_transaction.dsa = dsa;
+mikasa_ncr_transaction.target = target;
+mikasa_ncr_transaction.data_phase = data_phase;
+mikasa_ncr_transaction.status = status;
+mikasa_ncr_transaction.status_dsps_valid =
+    mikasa_ncr_find_status_int_dsps (dsp,
+        &mikasa_ncr_transaction.status_dsps);
+if (!mikasa_ncr_transaction.status_dsps_valid)
+    mikasa_ncr_transaction.status_dsps = MIKASA_NCR_DSPS_OK;
 return;
 }
 
@@ -3827,18 +3861,22 @@ t_bool has_data;
 uint8 cdb[16];
 uint8 status;
 
-if (!mikasa_ncr_find_select (dsp, dsa, &target))
+if (!mikasa_ncr_find_select (dsp, dsa, &target)) {
+    mikasa_ncr_clear_transaction ();
     return FALSE;
+    }
 if ((target >= MIKASA_DKA_UNITS) || ((dka_unit[target].flags & UNIT_ATT) == 0)) {
     sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
         "NCR target %u select timeout\n", target);
-    mikasa_ncr_status_phase = FALSE;
+    mikasa_ncr_clear_transaction ();
     mikasa_ncr_set_connected (FALSE);
     mikasa_ncr_set_sip (0, MIKASA_NCR_SIST1_STO);
     return TRUE;
     }
+mikasa_ncr_begin_transaction (dsp, dsa, target);
 mikasa_ncr_set_connected (TRUE);
 if (!mikasa_ncr_do_msg_out (dsp, dsa)) {
+    mikasa_ncr_clear_transaction ();
     mikasa_ncr_set_connected (FALSE);
     return FALSE;
     }
@@ -3846,6 +3884,7 @@ if (!mikasa_ncr_find_table_move (dsp, MIKASA_NCR_PHASE_CMD, &cmd_off))
     cmd_off = 0x0C;
 if (!mikasa_ncr_table_entry (dsa, cmd_off, &cmd_count, &cmd_addr) ||
     (cmd_count == 0)) {
+    mikasa_ncr_clear_transaction ();
     mikasa_ncr_set_connected (FALSE);
     return FALSE;
     }
@@ -3854,6 +3893,7 @@ if (cmd_count > sizeof (cdb))
     cmd_count = sizeof (cdb);
 memset (cdb, 0, sizeof (cdb));
 if (!mikasa_ncr_read_dma_buf (cmd_addr, cdb, cmd_count)) {
+    mikasa_ncr_clear_transaction ();
     mikasa_ncr_set_connected (FALSE);
     return FALSE;
     }
@@ -3885,7 +3925,7 @@ if (!mikasa_ncr_scsi_cmd (target, cdb, &data, &status)) {
     (void) mikasa_ncr_write_dma_list_zero (&data);
     }
 if (data.bytes != 0) {
-    mikasa_ncr_defer_status_phase (dsp, status);
+    mikasa_ncr_defer_status_phase (dsp, dsa, target, data_phase, status);
     if (!mikasa_ncr_last_move_phase (data_phase)) {
         mikasa_ncr_phase_mismatch (&data, data_phase,
             MIKASA_NCR_PHASE_STS);
@@ -3895,25 +3935,29 @@ if (data.bytes != 0) {
     mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SIR, data_dsps);
     }
 else {
-    mikasa_ncr_status_phase = FALSE;
+    uint32 status_dsps = mikasa_ncr_status_int_dsps (dsp);
+
     mikasa_ncr_write_status_msg (dsp, dsa, status);
     mikasa_ncr_set_connected (FALSE);
-    mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SIR,
-        mikasa_ncr_status_int_dsps (dsp));
+    mikasa_ncr_clear_transaction ();
+    mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SIR, status_dsps);
     }
 return TRUE;
 }
 
 static void mikasa_ncr_start_script (uint32 dsp)
 {
-if (mikasa_ncr_status_phase) {
-    mikasa_ncr_status_phase = FALSE;
-    mikasa_ncr_write_status_msg (dsp, mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA),
-        mikasa_ncr_status_byte);
+if (mikasa_ncr_transaction.status_pending) {
+    uint32 dsa = mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA);
+    uint32 status_dsps = mikasa_ncr_transaction.status_dsps_valid ?
+        mikasa_ncr_transaction.status_dsps : mikasa_ncr_status_int_dsps (dsp);
+
+    if (dsa == 0)
+        dsa = mikasa_ncr_transaction.dsa;
+    mikasa_ncr_write_status_msg (dsp, dsa, mikasa_ncr_transaction.status);
     mikasa_ncr_set_connected (FALSE);
-    mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SIR,
-        mikasa_ncr_status_dsps_valid ?
-        mikasa_ncr_status_dsps : mikasa_ncr_status_int_dsps (dsp));
+    mikasa_ncr_clear_transaction ();
+    mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SIR, status_dsps);
     }
 else {
     mikasa_ncr_trace_script (dsp);
@@ -3926,9 +3970,7 @@ return;
 static void mikasa_ncr_init_regs (void)
 {
 memset (mikasa_ncr_reg, 0, sizeof (mikasa_ncr_reg));
-mikasa_ncr_status_phase = FALSE;
-mikasa_ncr_status_dsps_valid = FALSE;
-mikasa_ncr_status_dsps = MIKASA_NCR_DSPS_OK;
+mikasa_ncr_clear_transaction ();
 mikasa_ncr_clear_irq ();
 mikasa_ncr_set_connected (FALSE);
 mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL0] = MIKASA_NCR_SCNTL0_ARB;
@@ -3944,7 +3986,7 @@ return;
 
 static void mikasa_ncr_abort_script (void)
 {
-mikasa_ncr_status_phase = FALSE;
+mikasa_ncr_clear_transaction ();
 mikasa_ncr_set_connected (FALSE);
 mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &= ~MIKASA_NCR_ISTAT_ABRT;
 mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_ABRT, 0);

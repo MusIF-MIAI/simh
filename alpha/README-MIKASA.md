@@ -131,10 +131,12 @@ Not implemented yet:
   MOVE phases are reflected in `SOCL`, `SBCL`, and `SSTAT1`. The high-level
   NCR path also exposes connected state through `SCNTL1.ISCON` and `ISTAT.CON`
   from successful select through status/message completion, and clears it on
-  timeout, reset, and abort. When a command has a pending DATA phase but the
-  target moves directly to STATUS, `SIST0.MIA` is latched with the expected and
-  sampled phases visible through the SCSI phase registers, and STATUS/MESSAGE
-  remain pending for the next script restart.
+  timeout, reset, and abort. Pending status/message completion is retained in
+  an explicit NCR transaction state with target, `DSP`, `DSA`, data phase,
+  status byte, and saved completion `DSPS`. When a command has a pending DATA
+  phase but the target moves directly to STATUS, `SIST0.MIA` is latched with
+  the expected and sampled phases visible through the SCSI phase registers,
+  and STATUS/MESSAGE remain pending for the next script restart.
   The local SCSI disk path also handles extended probe/read commands such as
   `READ(12)`, `WRITE(12)`, `REPORT LUNS`, `READ CAPACITY(16)`, and basic
   INQUIRY EVPD pages 0x00/0x80/0x83. It reports formatted 512-byte media for
