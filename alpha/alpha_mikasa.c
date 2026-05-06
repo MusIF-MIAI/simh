@@ -212,6 +212,7 @@
 #define MIKASA_NCR_SCRIPT_STACK     8
 #define MIKASA_NCR_BM_TYPE_MASK     0xC0000000u
 #define MIKASA_NCR_BM_TYPE          0x00000000u
+#define MIKASA_NCR_BM_INDIRECT      0x20000000u
 #define MIKASA_NCR_BM_TABLE         0x10000000u
 #define MIKASA_NCR_BM_PHASE_MASK    0x07000000u
 #define MIKASA_NCR_BM_PHASE_SHIFT   24
@@ -2199,7 +2200,12 @@ for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
           MIKASA_NCR_BM_PHASE_SHIFT) == phase) &&
         ((op & MIKASA_NCR_BM_COUNT_MASK) != 0)) {
         *count = op & MIKASA_NCR_BM_COUNT_MASK;
-        *addr = arg;
+        if (op & MIKASA_NCR_BM_INDIRECT) {
+            if (!mikasa_pci_dma_read_long (arg, addr))
+                return FALSE;
+            }
+        else
+            *addr = arg;
         return TRUE;
         }
     next = mikasa_ncr_next_script_addr (dsp, op);
