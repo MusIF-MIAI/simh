@@ -3042,7 +3042,7 @@ static t_bool mikasa_ncr_write_scsi_data (const MIKASA_NCR_DMA_LIST *list,
 if (!mikasa_ncr_write_dma_list (list, buf, len))
     return FALSE;
 if (len != 0)
-    mikasa_ncr_set_sfbr (buf[0]);
+    mikasa_ncr_set_sfbr (buf[len - 1]);
 mikasa_ncr_finish_dma_list (list, len);
 return TRUE;
 }
@@ -3135,6 +3135,9 @@ uint32 i;
 for (i = 0; i < list->count; i++)
     if (!mikasa_ncr_write_dma_zero (list->seg[i].addr, list->seg[i].count))
         return FALSE;
+if (list->bytes != 0)
+    mikasa_ncr_set_sfbr (0);
+mikasa_ncr_finish_dma_list (list, list->bytes);
 return TRUE;
 }
 
@@ -3791,10 +3794,20 @@ for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
             return TRUE;
         }
     if (((op & MIKASA_NCR_BM_TYPE_MASK) == MIKASA_NCR_BM_TYPE) &&
-        (mikasa_ncr_op_phase (op) == phase)) {
+        (phase != MIKASA_NCR_SCRIPT_NO_PHASE)) {
+        uint32 op_phase = mikasa_ncr_op_phase (op);
         uint32 count;
         uint32 addr;
 
+        if (seen_move && (op_phase != phase))
+            return TRUE;
+        if (op_phase != phase) {
+            next = mikasa_ncr_next_script_addr (dsp, op);
+            if (!mikasa_ncr_advance_script (&dsp, op, arg, next, stack,
+                &sp, &state))
+                return TRUE;
+            continue;
+            }
         if (!mikasa_ncr_resolve_move (dsa, op, arg, &count, &addr))
             return FALSE;
         seen_move = TRUE;
@@ -4018,14 +4031,15 @@ while (off < len) {
     }
 if (!mikasa_ncr_discard_scsi_data (&msg))
     return FALSE;
-sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
-    "NCR MESSAGE OUT lun=%u%s%s%u\n", mikasa_ncr_transaction.lun,
-    mikasa_ncr_transaction.tag_valid ? " tag=" : "",
-    mikasa_ncr_transaction.tag_valid ?
-        ((mikasa_ncr_transaction.tag_msg == 0x20) ? "simple:" :
-        (mikasa_ncr_transaction.tag_msg == 0x21) ? "head:" : "ordered:") :
-        "",
-    mikasa_ncr_transaction.tag_valid ? mikasa_ncr_transaction.tag : 0);
+if (mikasa_ncr_transaction.tag_valid)
+    sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+        "NCR MESSAGE OUT lun=%u tag=%s%u\n", mikasa_ncr_transaction.lun,
+        (mikasa_ncr_transaction.tag_msg == 0x20) ? "simple:" :
+        (mikasa_ncr_transaction.tag_msg == 0x21) ? "head:" : "ordered:",
+        mikasa_ncr_transaction.tag);
+else
+    sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+        "NCR MESSAGE OUT lun=%u\n", mikasa_ncr_transaction.lun);
 mikasa_ncr_reg[MIKASA_NCR_REG_SOCL] &= ~MIKASA_NCR_SOCL_ATN;
 mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] &= ~MIKASA_NCR_SOCL_ATN;
 return TRUE;
@@ -4128,7 +4142,6 @@ uint8 buf[MIKASA_IO_BUFSIZE];
 UNIT *uptr = &dka_unit[unit];
 t_uint64 bytes_left = ((t_uint64) blocks) * MIKASA_DKA_BLOCK_SIZE;
 uint32 done = 0;
-t_bool sfbr_set = FALSE;
 
 if (bytes_left > data->bytes)
     bytes_left = data->bytes;
@@ -4148,10 +4161,8 @@ while (bytes_left != 0) {
 
     if (sim_fread (buf, 1, chunk, uptr->fileref) != chunk)
         return FALSE;
-    if (!sfbr_set && (chunk != 0)) {
-        mikasa_ncr_set_sfbr (buf[0]);
-        sfbr_set = TRUE;
-        }
+    if (chunk != 0)
+        mikasa_ncr_set_sfbr (buf[chunk - 1]);
     if (!mikasa_ncr_write_dma_list_offset (data, done, buf, chunk))
         return FALSE;
     done = done + chunk;

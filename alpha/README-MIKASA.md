@@ -171,8 +171,9 @@ Not implemented yet:
   clear/flush writes against the local FIFO-empty model. `DFIFO.BO[6:0]`
   mirrors the low seven bits of `DBC`, so documented FIFO residual
   calculations report an empty FIFO. `SFBR`, `SIDL`, and
-  `SBDL` are updated with the first byte of handled input phases, while
-  command/data/message output phases update `SODL`/`SBDL`. Host and SCRIPTS
+  `SBDL` are updated from handled input phases, with DATA IN leaving the last
+  transferred byte visible, while command/data/message output phases update
+  `SODL`/`SBDL`. Host and SCRIPTS
   writes preserve read-only `SSID`, `SBCL`, `SIDL`, and `SBDL`; writes to
   `SODL` update the output and bus data latches. `SCNTL3`, `SCID`, `SDID`,
   `GPREG`, `GPCNTL`, and `STEST3` writes are masked to documented 53C810

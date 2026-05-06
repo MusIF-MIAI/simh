@@ -120,10 +120,10 @@
   effects with the local FIFO-empty state.
 - [x] Report NCR `DFIFO.BO[6:0]` consistently with the local FIFO-empty model
   by mirroring the low seven bits of `DBC`.
-- [x] Update NCR `SFBR` with the first byte of handled input phases including
-  data-in, status, and message-in transfers.
-- [x] Reflect first-byte SCSI bus data in low-level NCR latches: input phases
-  update `SIDL`/`SBDL`, and output phases update `SODL`/`SBDL`.
+- [x] Update NCR `SFBR` with the transferred byte for handled status/message
+  phases and the last byte of handled data-in transfers.
+- [x] Reflect SCSI bus data in low-level NCR latches: input phases update
+  `SIDL`/`SBDL`, and output phases update `SODL`/`SBDL`.
 - [x] Preserve read-only NCR low-level bus/latch registers (`SSID`, `SBCL`,
   `SIDL`, and `SBDL`) on host/SCRIPTS writes, while routing `SODL` writes to
   the output/bus data latches.
@@ -190,6 +190,14 @@
 - [x] Return a valid standard INQUIRY "no logical unit present" response for
   non-zero LUNs instead of treating every non-zero LUN INQUIRY as check
   condition.
+- [x] Limit phase-specific auxiliary NCR SCRIPTS scans to the current phase
+  run, so `MESSAGE OUT`/DATA discovery no longer wanders into later dispatcher
+  paths after the target has advanced to another phase.
+- [x] Complete fallback NCR zero-filled DATA IN transfers through
+  `DBC`/`DNAD`/`SFBR`, instead of writing memory without updating DMA
+  progress state.
+- [x] Make NCR `MESSAGE OUT` debug output unambiguous by printing queue-tag
+  text only when a tag is actually present.
 - [x] Add DECchip 21040/Tulip PCI/CSR shell.
 - [x] Add DECchip 21040 software reset, CSR5 write-one-to-clear status,
   CSR6 run-state reporting, and byte/word CSR write merging.
@@ -303,6 +311,10 @@
   detected, and the old post-status `DSTAT.BF`/`DSPS=0x401427F0` failure is
   gone. The remaining blocker is repeated SCSI `INQUIRY` discovery loops with
   no `READ CAPACITY` yet.
+- [x] Re-run SRM ROM smoke after the NCR phase-scan/SFBR/zero-fill debug
+  cleanup; SRM still reaches `V5.4-101`, pka/ewa are detected, and the log no
+  longer prints false queue tags in `MESSAGE OUT`. The remaining blocker is
+  still repeated SCSI `INQUIRY` discovery loops with no `READ CAPACITY` yet.
 - [x] Re-run SRM ROM smoke after PIC/ELCR edge-vs-level handling; it still
   reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
@@ -422,8 +434,10 @@ the real path works.
     clear/flush writes consistently with the FIFO-empty model;
   - current branch reports `DFIFO.BO[6:0]` as the low seven bits of `DBC`, so
     documented FIFO residual calculations see an empty FIFO;
-  - current branch updates `SFBR` from handled data-in, status, and message-in
-    phases so SCRIPTS tests see the first received byte;
+  - current branch updates `SFBR` from handled status/message phases and from
+    the last byte transferred by handled data-in phases;
+  - current auxiliary phase scans stop at the end of the current phase run
+    instead of crossing into later dispatcher paths for another SCSI phase;
   - current branch preserves read-only low-level bus/latch registers (`SSID`,
     `SBCL`, `SIDL`, and `SBDL`) on host/SCRIPTS writes, while `SODL` writes
     update the output and bus data latches;
