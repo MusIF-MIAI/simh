@@ -228,8 +228,21 @@
 #define MIKASA_TULIP_CSR_STATUS     0x28
 #define MIKASA_TULIP_CSR_CMD        0x30
 #define MIKASA_TULIP_CSR_INTR       0x38
+#define MIKASA_TULIP_CSR_SIO        0x48
 #define MIKASA_TULIP_CSR_SIA_STATUS 0x60
+#define MIKASA_TULIP_CSR_SIA_CONN   0x68
+#define MIKASA_TULIP_CSR_SIA_TXRX   0x70
+#define MIKASA_TULIP_CSR_SIA_GEN    0x78
 #define MIKASA_TULIP_BUSMODE_SWR    0x00000001u
+#define MIKASA_TULIP_SIO_EE_CS      0x00000001u
+#define MIKASA_TULIP_SIO_EE_CLK     0x00000002u
+#define MIKASA_TULIP_SIO_EE_DATAIN  0x00000004u
+#define MIKASA_TULIP_SIO_EE_DATAOUT 0x00000008u
+#define MIKASA_TULIP_SIO_EESEL      0x00000800u
+#define MIKASA_TULIP_SIO_ROM_READ   0x00004000u
+#define MIKASA_TULIP_SROM_BYTES     128
+#define MIKASA_TULIP_SROM_READ      6
+#define MIKASA_TULIP_SROM_ADDR_BITS 6
 #define MIKASA_TULIP_STS_TXS_MASK   0x00700000u
 #define MIKASA_TULIP_STS_TXS_STOP   0x00000000u
 #define MIKASA_TULIP_STS_TXS_SUSP   0x00600000u
@@ -749,6 +762,11 @@ static uint32 mikasa_ncr_cfg[MIKASA_PCI_CFG_DWORDS] = { 0 };
 static uint8 mikasa_ncr_reg[MIKASA_NCR_REG_SIZE] = { 0 };
 static uint32 mikasa_tulip_cfg[MIKASA_PCI_CFG_DWORDS] = { 0 };
 static uint8 mikasa_tulip_reg[MIKASA_TULIP_REG_SIZE] = { 0 };
+static uint8 mikasa_tulip_srom[MIKASA_TULIP_SROM_BYTES] = { 0 };
+static uint32 mikasa_tulip_srom_shift = 0;
+static uint32 mikasa_tulip_srom_bits = 0;
+static uint32 mikasa_tulip_srom_out = 0;
+static uint32 mikasa_tulip_srom_out_bits = 0;
 static uint32 mikasa_ncr_script_trace_count = 0;
 static uint32 mikasa_icu_int_req_bits = 0;
 static uint32 mikasa_pic_int_req_bits = 0;
@@ -1675,6 +1693,86 @@ mikasa_tulip_reg[(reg + 3) & (MIKASA_TULIP_REG_SIZE - 1)] =
 return;
 }
 
+static void mikasa_tulip_srom_reset_state (void)
+{
+mikasa_tulip_srom_shift = 0;
+mikasa_tulip_srom_bits = 0;
+mikasa_tulip_srom_out = 0;
+mikasa_tulip_srom_out_bits = 0;
+return;
+}
+
+static void mikasa_tulip_init_srom (void)
+{
+static const uint8 mac[6] = { 0x08, 0x00, 0x2B, 0x00, 0x00, 0x01 };
+
+memset (mikasa_tulip_srom, 0xFF, sizeof (mikasa_tulip_srom));
+memcpy (&mikasa_tulip_srom[20], mac, sizeof (mac));
+mikasa_tulip_srom_reset_state ();
+return;
+}
+
+static uint16 mikasa_tulip_srom_word (uint32 addr)
+{
+uint32 off = (addr << 1) & (MIKASA_TULIP_SROM_BYTES - 1);
+
+return ((uint16) mikasa_tulip_srom[off]) |
+    (((uint16) mikasa_tulip_srom[(off + 1) &
+    (MIKASA_TULIP_SROM_BYTES - 1)]) << 8);
+}
+
+static void mikasa_tulip_write_sio (uint32 val)
+{
+uint32 old = mikasa_tulip_read_l (MIKASA_TULIP_CSR_SIO);
+uint32 sio = (val & ~MIKASA_TULIP_SIO_EE_DATAOUT) |
+    (old & MIKASA_TULIP_SIO_EE_DATAOUT);
+t_bool enabled = ((sio & (MIKASA_TULIP_SIO_EESEL |
+    MIKASA_TULIP_SIO_ROM_READ | MIKASA_TULIP_SIO_EE_CS)) ==
+    (MIKASA_TULIP_SIO_EESEL | MIKASA_TULIP_SIO_ROM_READ |
+    MIKASA_TULIP_SIO_EE_CS));
+
+if (!enabled) {
+    mikasa_tulip_srom_reset_state ();
+    mikasa_tulip_set_l (MIKASA_TULIP_CSR_SIO,
+        sio & ~MIKASA_TULIP_SIO_EE_DATAOUT);
+    return;
+    }
+if (((old & MIKASA_TULIP_SIO_EE_CLK) == 0) &&
+    ((sio & MIKASA_TULIP_SIO_EE_CLK) != 0)) {
+    if (mikasa_tulip_srom_out_bits != 0) {
+        uint32 bit = (mikasa_tulip_srom_out >>
+            (mikasa_tulip_srom_out_bits - 1)) & 1u;
+
+        if (bit)
+            sio |= MIKASA_TULIP_SIO_EE_DATAOUT;
+        else
+            sio &= ~MIKASA_TULIP_SIO_EE_DATAOUT;
+        mikasa_tulip_srom_out_bits--;
+        }
+    else {
+        mikasa_tulip_srom_shift =
+            (mikasa_tulip_srom_shift << 1) |
+            ((sio & MIKASA_TULIP_SIO_EE_DATAIN) ? 1u : 0);
+        mikasa_tulip_srom_bits++;
+        if (mikasa_tulip_srom_bits ==
+            (3 + MIKASA_TULIP_SROM_ADDR_BITS)) {
+            uint32 opcode = (mikasa_tulip_srom_shift >>
+                MIKASA_TULIP_SROM_ADDR_BITS) & 7u;
+            uint32 addr = mikasa_tulip_srom_shift &
+                ((1u << MIKASA_TULIP_SROM_ADDR_BITS) - 1);
+
+            mikasa_tulip_srom_out = (opcode == MIKASA_TULIP_SROM_READ) ?
+                mikasa_tulip_srom_word (addr) : 0xFFFFu;
+            mikasa_tulip_srom_out_bits = 16;
+            mikasa_tulip_srom_shift = 0;
+            mikasa_tulip_srom_bits = 0;
+            }
+        }
+    }
+mikasa_tulip_set_l (MIKASA_TULIP_CSR_SIO, sio);
+return;
+}
+
 static void mikasa_tulip_update_state (void)
 {
 uint32 cmd = mikasa_tulip_read_l (MIKASA_TULIP_CSR_CMD);
@@ -1692,6 +1790,7 @@ return;
 static void mikasa_tulip_reset_regs (void)
 {
 memset (mikasa_tulip_reg, 0, sizeof (mikasa_tulip_reg));
+mikasa_tulip_srom_reset_state ();
 mikasa_tulip_set_l (MIKASA_TULIP_CSR_STATUS,
     MIKASA_TULIP_STS_TXS_STOP | MIKASA_TULIP_STS_RXS_STOP);
 return;
@@ -1738,6 +1837,10 @@ switch (reg) {
     case MIKASA_TULIP_CSR_CMD:
         mikasa_tulip_set_l (reg, val);
         mikasa_tulip_update_state ();
+        break;
+
+    case MIKASA_TULIP_CSR_SIO:
+        mikasa_tulip_write_sio (val);
         break;
 
     case MIKASA_TULIP_CSR_TXPOLL:
@@ -1790,7 +1893,7 @@ uint32 reg;
 
 if (!mikasa_tulip_bar_reg (port, 0x10, 0xFFFFFFFFu, &reg))
     return FALSE;
-mikasa_tulip_write_b (reg, val);
+mikasa_tulip_write_len (reg, val, L_BYTE);
 return TRUE;
 }
 
@@ -4046,10 +4149,10 @@ if (mikasa_tulip_bar_reg (addr, 0x14, 0x07FFFFFFu, &reg)) {
         mikasa_tulip_write_len (reg & ~1u, data, L_WORD);
         }
     else if (lnt == L_BYTE)
-        mikasa_tulip_write_b (reg, (uint8) val);
+        mikasa_tulip_write_len (reg, val, L_BYTE);
     else {
         data = (uint32) (val >> (8 * (addr & 3)));
-        mikasa_tulip_write_b (reg, (uint8) data);
+        mikasa_tulip_write_len (reg, data, L_BYTE);
         }
     return;
     }
@@ -6719,6 +6822,7 @@ mikasa_tulip_cfg[0x04 >> 2] = 0x02800001u;
 mikasa_tulip_cfg[0x08 >> 2] = 0x02000002u;
 mikasa_tulip_cfg[0x10 >> 2] = 0x00000001u;
 mikasa_tulip_cfg[0x3C >> 2] = 0x00000100u;
+mikasa_tulip_init_srom ();
 mikasa_tulip_reset_regs ();
 memset (mikasa_pceb_cfg, 0, sizeof (mikasa_pceb_cfg));
 mikasa_pceb_cfg[0x00 >> 2] = 0x04828086u;
