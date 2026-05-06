@@ -92,6 +92,8 @@
   `DSTAT.SSI`, using current `SFBR` as the initial data-compare state.
 - [x] Start NCR SCRIPTS execution from `DCNTL.STD`, not only from writes to
   `DSP`, matching the normal 53C810 driver path.
+- [x] Model low-level NCR `SCNTL0.START` manual selection and `SCNTL1.RST`
+  SCSI bus reset side effects.
 - [x] Preserve NCR read-only status registers on CPU writes and expose current
   MOVE phase through `SOCL`, `SBCL`, and `SSTAT1`.
 - [x] Track NCR connected state in `SCNTL1.ISCON`/`ISTAT.CON` across select,
@@ -194,6 +196,8 @@
   still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after adding more SCSI disk probe and 16-byte CDB
   coverage; it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after adding low-level NCR `SCNTL0.START` and
+  `SCNTL1.RST`; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -287,6 +291,8 @@ the real path works.
     instead of auto-starting from `DSP` writes;
   - current branch starts SCRIPTS from `DCNTL.STD` as well as the firmware-style
     `DSP` high-byte write;
+  - current branch models low-level `SCNTL0.START` manual selection and
+    `SCNTL1.RST` SCSI bus reset side effects;
   - current branch preserves read-only NCR status registers and reports the
     active MOVE phase in the SCSI bus/status phase bits;
   - current branch tracks connected state in `SCNTL1.ISCON` and `ISTAT.CON`

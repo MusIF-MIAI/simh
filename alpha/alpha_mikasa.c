@@ -308,9 +308,12 @@
 #define MIKASA_NCR_REG_SBDL         0x58
 #define MIKASA_NCR_REG_SCRATCHB     0x5C
 #define MIKASA_NCR_SCNTL0_ARB       0xC0
+#define MIKASA_NCR_SCNTL0_START     0x20
+#define MIKASA_NCR_SCNTL0_WATN      0x10
 #define MIKASA_NCR_SCNTL0_TRG       0x01
 #define MIKASA_NCR_SCNTL0_WRITABLE  0xFB
 #define MIKASA_NCR_SCNTL1_ISCON     0x10
+#define MIKASA_NCR_SCNTL1_RST       0x08
 #define MIKASA_NCR_SCNTL2_SDU       0x80
 #define MIKASA_NCR_SCNTL2_W1C       0x09
 #define MIKASA_NCR_SCNTL2_WRITABLE  0xF2
@@ -327,6 +330,7 @@
 #define MIKASA_NCR_DSTAT_ABRT       0x10
 #define MIKASA_NCR_DSTAT_IRQS       0x7Du
 #define MIKASA_NCR_SSTAT0_WOA       0x04
+#define MIKASA_NCR_SSTAT0_RST       0x02
 #define MIKASA_NCR_DMODE_MAN        0x01
 #define MIKASA_NCR_DMODE_WRITABLE   0xCF
 #define MIKASA_NCR_DCNTL_SSM        0x10
@@ -787,6 +791,8 @@ static uint8 mikasa_pic_iack (void);
 static uint32 mikasa_ncr_sext24 (uint32 val);
 static uint32 mikasa_ncr_next_script_addr (uint32 dsp, uint32 op);
 static void mikasa_ncr_update_irq (void);
+static void mikasa_ncr_clear_transaction (void);
+static void mikasa_ncr_clear_wait_reselect (void);
 static void mikasa_ncr_set_wait_reselect (uint32 dsp, uint32 jump);
 static t_bool mikasa_apb_iobox_read (uint32 unit, t_uint64 lbn,
     t_uint64 addr);
@@ -2477,6 +2483,69 @@ else {
 return;
 }
 
+static void mikasa_ncr_write_scntl0 (uint8 val)
+{
+uint8 old = mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL0];
+uint8 newval = val & MIKASA_NCR_SCNTL0_WRITABLE;
+
+mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL0] = newval;
+if ((newval & MIKASA_NCR_SCNTL0_START) &&
+    ((old & MIKASA_NCR_SCNTL0_START) == 0)) {
+    uint32 target = mikasa_ncr_reg[MIKASA_NCR_REG_SDID] &
+        MIKASA_NCR_SDID_WRITABLE;
+
+    mikasa_ncr_reg[MIKASA_NCR_REG_SSID] =
+        MIKASA_NCR_SSID_VAL | (uint8) target;
+    mikasa_ncr_reg[MIKASA_NCR_REG_SSTAT0] |= MIKASA_NCR_SSTAT0_WOA;
+    if (newval & MIKASA_NCR_SCNTL0_WATN) {
+        mikasa_ncr_reg[MIKASA_NCR_REG_SOCL] |= MIKASA_NCR_SOCL_ATN;
+        mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] |= MIKASA_NCR_SOCL_ATN;
+        }
+    else {
+        mikasa_ncr_reg[MIKASA_NCR_REG_SOCL] &= ~MIKASA_NCR_SOCL_ATN;
+        mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] &= ~MIKASA_NCR_SOCL_ATN;
+        }
+    mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL0] &= ~MIKASA_NCR_SCNTL0_START;
+    if ((target < MIKASA_DKA_UNITS) &&
+        ((dka_unit[target].flags & UNIT_ATT) != 0)) {
+        mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL2] |= MIKASA_NCR_SCNTL2_SDU;
+        mikasa_ncr_set_connected (TRUE);
+        mikasa_ncr_set_sip (MIKASA_NCR_SIST0_CMP, 0);
+        }
+    else {
+        mikasa_ncr_set_connected (FALSE);
+        mikasa_ncr_set_sip (0, MIKASA_NCR_SIST1_STO);
+        }
+    }
+return;
+}
+
+static void mikasa_ncr_write_scntl1 (uint8 val)
+{
+uint8 old = mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL1];
+uint8 newval = (val & ~MIKASA_NCR_SCNTL1_ISCON) |
+    (old & MIKASA_NCR_SCNTL1_ISCON);
+
+if ((newval & MIKASA_NCR_SCNTL1_RST) &&
+    ((old & MIKASA_NCR_SCNTL1_RST) == 0)) {
+    mikasa_ncr_clear_transaction ();
+    mikasa_ncr_clear_wait_reselect ();
+    newval &= ~MIKASA_NCR_SCNTL1_ISCON;
+    mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &= ~MIKASA_NCR_ISTAT_CON;
+    mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] = 0;
+    mikasa_ncr_reg[MIKASA_NCR_REG_SIDL] = 0;
+    mikasa_ncr_reg[MIKASA_NCR_REG_SODL] = 0;
+    mikasa_ncr_reg[MIKASA_NCR_REG_SBDL] = 0;
+    mikasa_ncr_reg[MIKASA_NCR_REG_SSTAT0] |= MIKASA_NCR_SSTAT0_RST;
+    mikasa_ncr_set_sip (MIKASA_NCR_SIST0_RST, 0);
+    }
+else if (((newval & MIKASA_NCR_SCNTL1_RST) == 0) &&
+    (old & MIKASA_NCR_SCNTL1_RST))
+    mikasa_ncr_reg[MIKASA_NCR_REG_SSTAT0] &= ~MIKASA_NCR_SSTAT0_RST;
+mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL1] = newval;
+return;
+}
+
 static void mikasa_ncr_finish_move (uint32 op, uint32 addr, uint32 count,
     uint32 done)
 {
@@ -2856,11 +2925,14 @@ if ((reg == MIKASA_NCR_REG_DSTAT) ||
     (reg == MIKASA_NCR_REG_SIST0) ||
     (reg == MIKASA_NCR_REG_SIST1))
     return;
-if (reg == MIKASA_NCR_REG_SCNTL0)
-    val = val & MIKASA_NCR_SCNTL0_WRITABLE;
-if (reg == MIKASA_NCR_REG_SCNTL1)
-    val = (val & ~MIKASA_NCR_SCNTL1_ISCON) |
-        (old & MIKASA_NCR_SCNTL1_ISCON);
+if (reg == MIKASA_NCR_REG_SCNTL0) {
+    mikasa_ncr_write_scntl0 (val);
+    return;
+    }
+if (reg == MIKASA_NCR_REG_SCNTL1) {
+    mikasa_ncr_write_scntl1 (val);
+    return;
+    }
 if (reg == MIKASA_NCR_REG_SCNTL2)
     val = (old & MIKASA_NCR_SCNTL2_W1C &
         ~(val & MIKASA_NCR_SCNTL2_W1C)) |
@@ -4448,11 +4520,14 @@ else if ((reg == MIKASA_NCR_REG_DSTAT) ||
 else {
     uint8 old = mikasa_ncr_reg[reg];
 
-    if (reg == MIKASA_NCR_REG_SCNTL0)
-        val = val & MIKASA_NCR_SCNTL0_WRITABLE;
-    if (reg == MIKASA_NCR_REG_SCNTL1)
-        val = (val & ~MIKASA_NCR_SCNTL1_ISCON) |
-            (mikasa_ncr_reg[reg] & MIKASA_NCR_SCNTL1_ISCON);
+    if (reg == MIKASA_NCR_REG_SCNTL0) {
+        mikasa_ncr_write_scntl0 (val);
+        return;
+        }
+    if (reg == MIKASA_NCR_REG_SCNTL1) {
+        mikasa_ncr_write_scntl1 (val);
+        return;
+        }
     if (reg == MIKASA_NCR_REG_SCNTL2)
         val = (old & MIKASA_NCR_SCNTL2_W1C &
             ~(val & MIKASA_NCR_SCNTL2_W1C)) |

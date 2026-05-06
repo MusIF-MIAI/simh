@@ -142,7 +142,9 @@ Not implemented yet:
   `DCNTL.STD` instead of auto-starting from `DSP`, and a single-step start now
   executes one visible SCRIPTS instruction before raising `DSTAT.SSI`.
   SCRIPTS execution can now be started through `DCNTL.STD` as well as by
-  writing `DSP`.
+  writing `DSP`. Low-level `SCNTL0.START` manual selection and `SCNTL1.RST`
+  SCSI bus reset side effects are modeled for drivers that use programmed I/O
+  control paths.
   CPU writes no longer overwrite read-only NCR status registers, and completed
   MOVE phases are reflected in `SOCL`, `SBCL`, and `SSTAT1`. The high-level
   NCR path also exposes connected state through `SCNTL1.ISCON` and `ISTAT.CON`
