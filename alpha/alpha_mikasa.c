@@ -566,6 +566,21 @@ typedef struct {
     uint32 bytes;
     } MIKASA_NCR_DMA_LIST;
 
+typedef struct {
+    MIKASA_NCR_DMA_LIST moves;
+    t_bool selected;
+    uint32 target;
+    t_bool direct_valid;
+    uint32 direct_count;
+    uint32 direct_addr;
+    t_bool table_valid;
+    uint32 table_off;
+    t_bool phase_int_valid;
+    uint32 phase_int_dsps;
+    t_bool any_int_valid;
+    uint32 any_int_dsps;
+    } MIKASA_NCR_SCRIPT_SCAN;
+
 uint32 mikasa_irq_mask = 0;
 uint32 mikasa_irq_summary = 0;
 t_uint64 mikasa_hwrpb_pa = MIKASA_HWRPB_PA;
@@ -2976,188 +2991,156 @@ else {
 return;
 }
 
-static t_bool mikasa_ncr_find_select (uint32 dsp, uint32 dsa, uint32 *target)
+static t_bool mikasa_ncr_scan_script (uint32 dsp, uint32 dsa, uint32 phase,
+    t_bool side_effects, t_bool stop_on_select, MIKASA_NCR_SCRIPT_SCAN *scan)
 {
 uint32 stack[MIKASA_NCR_SCRIPT_STACK];
 MIKASA_NCR_SCRIPT_STATE state;
 uint32 sp = 0;
 uint32 i;
+t_bool seen_move = FALSE;
 
+memset (scan, 0, sizeof (*scan));
+mikasa_ncr_dma_list_init (&scan->moves);
 memset (&state, 0, sizeof (state));
-state.phase = MIKASA_NCR_SCRIPT_NO_PHASE;
-state.side_effects = TRUE;
+state.phase = phase;
+state.side_effects = side_effects;
 for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
     uint32 op;
     uint32 arg;
     uint32 next;
+    uint32 group;
 
     if (!mikasa_ncr_read_script (dsp, &op, &arg))
         return FALSE;
     if ((op & MIKASA_NCR_TC_GROUP_MASK) == MIKASA_NCR_SCR_SEL_ABS) {
+        uint32 sel = (op >> 16) & 0x0Fu;
+        t_bool table = FALSE;
+
         if (op & 0x02000000u) {
-            uint32 sel;
-            uint32 table = (dsa + mikasa_ncr_sext24 (op)) & ~3u;
+            uint32 table_addr = (dsa + mikasa_ncr_sext24 (op)) & ~3u;
 
-            if (!mikasa_pci_dma_read_long (table, &sel))
+            if (!mikasa_pci_dma_read_long (table_addr, &sel))
                 return FALSE;
-            mikasa_ncr_select_latches (op, sel, TRUE);
-            *target = (sel >> 16) & 0x0Fu;
+            table = TRUE;
+            }
+        if (side_effects)
+            mikasa_ncr_select_latches (op, table ? sel : (sel << 16),
+                table);
+        scan->target = table ? ((sel >> 16) & 0x0Fu) : (sel & 0x0Fu);
+        scan->selected = TRUE;
+        if (stop_on_select)
             return TRUE;
-            }
-        *target = (op >> 16) & 0x0Fu;
-        mikasa_ncr_select_latches (op, *target << 16, FALSE);
-        return TRUE;
         }
-    next = mikasa_ncr_next_script_addr (dsp, op);
-    if (!mikasa_ncr_advance_script (&dsp, op, arg, next, stack, &sp,
-        &state))
-        return FALSE;
-    }
-return FALSE;
-}
-
-static t_bool mikasa_ncr_find_direct_move (uint32 dsp, uint32 phase,
-    uint32 *count, uint32 *addr)
-{
-uint32 stack[MIKASA_NCR_SCRIPT_STACK];
-MIKASA_NCR_SCRIPT_STATE state;
-uint32 sp = 0;
-uint32 i;
-
-memset (&state, 0, sizeof (state));
-state.phase = phase;
-for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
-    uint32 op;
-    uint32 arg;
-    uint32 next;
-
-    if (!mikasa_ncr_read_script (dsp, &op, &arg))
-        return FALSE;
     if (((op & MIKASA_NCR_BM_TYPE_MASK) == MIKASA_NCR_BM_TYPE) &&
-        ((op & MIKASA_NCR_BM_TABLE) == 0) &&
-        (((op & MIKASA_NCR_BM_PHASE_MASK) >>
-          MIKASA_NCR_BM_PHASE_SHIFT) == phase) &&
-        ((op & MIKASA_NCR_BM_COUNT_MASK) != 0)) {
-        *count = op & MIKASA_NCR_BM_COUNT_MASK;
-        if (op & MIKASA_NCR_BM_INDIRECT) {
-            if (!mikasa_pci_dma_read_long (arg, addr))
-                return FALSE;
-            }
-        else
-            *addr = arg;
-        return TRUE;
-        }
-    next = mikasa_ncr_next_script_addr (dsp, op);
-    if (!mikasa_ncr_advance_script (&dsp, op, arg, next, stack, &sp,
-        &state))
-        return FALSE;
-    }
-return FALSE;
-}
-
-static t_bool mikasa_ncr_find_table_move (uint32 dsp, uint32 phase,
-    uint32 *table_off)
-{
-uint32 stack[MIKASA_NCR_SCRIPT_STACK];
-MIKASA_NCR_SCRIPT_STATE state;
-uint32 sp = 0;
-uint32 i;
-
-memset (&state, 0, sizeof (state));
-state.phase = phase;
-for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
-    uint32 op;
-    uint32 arg;
-    uint32 next;
-
-    if (!mikasa_ncr_read_script (dsp, &op, &arg))
-        return FALSE;
-    if (((op & MIKASA_NCR_BM_TYPE_MASK) == MIKASA_NCR_BM_TYPE) &&
-        ((op & MIKASA_NCR_BM_TABLE) != 0) &&
-        (((op & MIKASA_NCR_BM_PHASE_MASK) >>
-          MIKASA_NCR_BM_PHASE_SHIFT) == phase)) {
-        *table_off = mikasa_ncr_sext24 (arg);
-        return TRUE;
-        }
-    next = mikasa_ncr_next_script_addr (dsp, op);
-    if (!mikasa_ncr_advance_script (&dsp, op, arg, next, stack, &sp,
-        &state))
-        return FALSE;
-    }
-return FALSE;
-}
-
-static t_bool mikasa_ncr_collect_moves (uint32 dsp, uint32 dsa, uint32 phase,
-    MIKASA_NCR_DMA_LIST *list)
-{
-uint32 stack[MIKASA_NCR_SCRIPT_STACK];
-MIKASA_NCR_SCRIPT_STATE state;
-uint32 sp = 0;
-uint32 i;
-
-mikasa_ncr_dma_list_init (list);
-memset (&state, 0, sizeof (state));
-state.phase = phase;
-for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
-    uint32 op;
-    uint32 arg;
-    uint32 next;
-
-    if (!mikasa_ncr_read_script (dsp, &op, &arg))
-        return FALSE;
-    if (((op & MIKASA_NCR_BM_TYPE_MASK) == MIKASA_NCR_BM_TYPE) &&
-        (((op & MIKASA_NCR_BM_PHASE_MASK) >>
-          MIKASA_NCR_BM_PHASE_SHIFT) == phase)) {
+        (mikasa_ncr_op_phase (op) == phase)) {
         uint32 count;
         uint32 addr;
 
         if (!mikasa_ncr_resolve_move (dsa, op, arg, &count, &addr))
             return FALSE;
-        if (!mikasa_ncr_dma_list_append (list, count, addr, op))
+        seen_move = TRUE;
+        if (op & MIKASA_NCR_BM_TABLE) {
+            if (!scan->table_valid) {
+                scan->table_valid = TRUE;
+                scan->table_off = mikasa_ncr_sext24 (arg);
+                }
+            }
+        else if (!scan->direct_valid) {
+            scan->direct_valid = TRUE;
+            scan->direct_count = count;
+            scan->direct_addr = addr;
+            }
+        if (!mikasa_ncr_dma_list_append (&scan->moves, count, addr, op))
             return FALSE;
+        }
+    group = op & MIKASA_NCR_TC_GROUP_MASK;
+    if ((group == MIKASA_NCR_TC_INT) &&
+        ((op & MIKASA_NCR_TC_INTFLY) == 0) &&
+        mikasa_ncr_script_condition (op, &state)) {
+        if (seen_move && !scan->phase_int_valid) {
+            scan->phase_int_valid = TRUE;
+            scan->phase_int_dsps = arg;
+            }
+        if (!scan->any_int_valid) {
+            scan->any_int_valid = TRUE;
+            scan->any_int_dsps = arg;
+            }
+        return TRUE;
         }
     next = mikasa_ncr_next_script_addr (dsp, op);
     if (!mikasa_ncr_advance_script (&dsp, op, arg, next, stack, &sp,
         &state))
-        return list->count != 0;
+        return TRUE;
     }
+return TRUE;
+}
+
+static t_bool mikasa_ncr_find_select (uint32 dsp, uint32 dsa, uint32 *target)
+{
+MIKASA_NCR_SCRIPT_SCAN scan;
+
+if (!mikasa_ncr_scan_script (dsp, dsa, MIKASA_NCR_SCRIPT_NO_PHASE, TRUE,
+    TRUE, &scan) || !scan.selected)
+    return FALSE;
+*target = scan.target;
+return TRUE;
+}
+
+static t_bool mikasa_ncr_find_direct_move (uint32 dsp, uint32 phase,
+    uint32 *count, uint32 *addr)
+{
+MIKASA_NCR_SCRIPT_SCAN scan;
+
+if (!mikasa_ncr_scan_script (dsp, mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA),
+    phase, FALSE, FALSE, &scan) || !scan.direct_valid)
+    return FALSE;
+*count = scan.direct_count;
+*addr = scan.direct_addr;
+return TRUE;
+}
+
+static t_bool mikasa_ncr_find_table_move (uint32 dsp, uint32 phase,
+    uint32 *table_off)
+{
+MIKASA_NCR_SCRIPT_SCAN scan;
+
+if (!mikasa_ncr_scan_script (dsp, mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA),
+    phase, FALSE, FALSE, &scan) || !scan.table_valid)
+    return FALSE;
+*table_off = scan.table_off;
+return TRUE;
+}
+
+static t_bool mikasa_ncr_collect_moves (uint32 dsp, uint32 dsa, uint32 phase,
+    MIKASA_NCR_DMA_LIST *list)
+{
+MIKASA_NCR_SCRIPT_SCAN scan;
+
+if (!mikasa_ncr_scan_script (dsp, dsa, phase, FALSE, FALSE, &scan))
+    return FALSE;
+*list = scan.moves;
 return list->count != 0;
 }
 
 static t_bool mikasa_ncr_find_phase_int (uint32 dsp, uint32 phase,
     t_bool require_move, uint32 *dsps)
 {
-uint32 stack[MIKASA_NCR_SCRIPT_STACK];
-MIKASA_NCR_SCRIPT_STATE state;
-uint32 sp = 0;
-uint32 i;
-t_bool seen = require_move ? FALSE : TRUE;
+MIKASA_NCR_SCRIPT_SCAN scan;
 
-memset (&state, 0, sizeof (state));
-state.phase = phase;
-for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
-    uint32 op;
-    uint32 arg;
-    uint32 next;
-
-    if (!mikasa_ncr_read_script (dsp, &op, &arg))
+if (!mikasa_ncr_scan_script (dsp, mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA),
+    phase, FALSE, FALSE, &scan))
+    return FALSE;
+if (require_move) {
+    if (!scan.phase_int_valid)
         return FALSE;
-    if (((op & MIKASA_NCR_BM_TYPE_MASK) == MIKASA_NCR_BM_TYPE) &&
-        (((op & MIKASA_NCR_BM_PHASE_MASK) >>
-          MIKASA_NCR_BM_PHASE_SHIFT) == phase))
-        seen = TRUE;
-    if (((op & MIKASA_NCR_TC_GROUP_MASK) == MIKASA_NCR_TC_INT) &&
-        ((op & MIKASA_NCR_TC_INTFLY) == 0) &&
-        seen && mikasa_ncr_script_condition (op, &state)) {
-        *dsps = arg;
-        return TRUE;
-        }
-    next = mikasa_ncr_next_script_addr (dsp, op);
-    if (!mikasa_ncr_advance_script (&dsp, op, arg, next, stack, &sp,
-        &state))
-        return FALSE;
+    *dsps = scan.phase_int_dsps;
+    return TRUE;
     }
-return FALSE;
+if (!scan.any_int_valid)
+    return FALSE;
+*dsps = scan.any_int_dsps;
+return TRUE;
 }
 
 static uint32 mikasa_ncr_data_int_dsps (uint32 dsp, uint32 phase)

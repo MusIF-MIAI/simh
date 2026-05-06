@@ -106,6 +106,10 @@ Not implemented yet:
   write-one clearing, while auxiliary script scans suppress `INTFLY` side
   effects. Auxiliary scans also suppress SCRIPTS register-op, load/store, and
   memory-copy writes while preserving local SFBR/carry state for conditions.
+  `SELECT`, direct/table MOVE discovery, scatter/gather MOVE collection, and
+  completion `INT` lookup now use a shared SCRIPTS scan pass so conditional
+  flow and non-side-effect state stay consistent across the high-level NCR
+  frontend.
   SCRIPTS `SET`/`CLR` now implement the documented carry, ACK, ATN, and
   target-mode side effects in `SOCL`, `SBCL`, and `SCNTL0`.
   SCRIPTS `SELECT` now latches the destination ID, table-indirect `SXFER` and

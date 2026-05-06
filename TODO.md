@@ -28,6 +28,9 @@
   interrupt status, abort, reset, and select-timeout behavior.
 - [x] Initialize the integrated NCR 53C810 PCI interrupt line as ICU IRQ 12,
   matching the AlphaServer 1000 platform route.
+- [x] Collapse auxiliary NCR SCRIPTS scans behind one shared pass for
+  `SELECT`, direct/table MOVE discovery, scatter/gather collection, and `INT`
+  completion lookup.
 - [x] Add NCR SCRIPTS scanning for select, table/direct/indirect moves,
   register ops, load/store, memory copy, and basic conditional flow.
 - [x] Collect multiple NCR data-phase MOVE entries and transfer SCSI payloads
@@ -138,6 +141,8 @@
   still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run direct APB smoke after EPIC `NDEV` latching; APB still loads from
   DKA0 and reaches the known `PC: 200039E0` halt.
+- [x] Re-run SRM ROM smoke after unifying auxiliary NCR SCRIPTS scans; it
+  still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -145,7 +150,9 @@
 
 - [ ] Replace the NCR SCRIPTS scanner with a real executor for conditional
   control flow, phase mismatch, disconnect/reselect, scatter/gather chaining,
-  and full memory/register side effects.
+  and full memory/register side effects. The current helper scans now share
+  one pass, but command execution is still a high-level SCSI transaction
+  frontend rather than an instruction-by-instruction 53C810 engine.
 - [ ] Wire the NCR disk path to SIMH `sim_scsi` where it fits, rather than the
   current local SCSI command handling.
 - [ ] Complete APECS/DECchip 21071 behavior beyond the current register shells,
