@@ -138,7 +138,10 @@ Not implemented yet:
   two-longword length, enforces the documented alignment/count limits, rejects
   chip register-window target addresses with `DSTAT.IID`, and does not load
   `SFBR`; Memory Move can access the NCR register windows and loads visible
-  `TEMP`.
+  `TEMP`. Script tracing uses the same three-bit instruction type for
+  Load/Store versus Memory Move. `ADDER` is preserved as read-only and
+  updated by `CTEST5.ADCK`/`CTEST5.BBCK` pulse writes, which also update
+  `DNAD`/`DBC` and auto-clear the pulse bits.
   Additional driver-probed registers now use
   writable masks (`CTEST2/5`, `DMODE`, `DCNTL`, `MACNTL`, `STIME1`,
   `STEST1/2/3`, and `SIEN1`), `DCNTL.PFF` auto-clears after the emulated

@@ -280,6 +280,7 @@
 #define MIKASA_NCR_REG_DMODE        0x38
 #define MIKASA_NCR_REG_DIEN         0x39
 #define MIKASA_NCR_REG_DCNTL        0x3B
+#define MIKASA_NCR_REG_ADDER        0x3C
 #define MIKASA_NCR_REG_SIEN0        0x40
 #define MIKASA_NCR_REG_SIEN1        0x41
 #define MIKASA_NCR_REG_SIST0        0x42
@@ -378,6 +379,8 @@
 #define MIKASA_NCR_CTEST3_FLF       0x08
 #define MIKASA_NCR_CTEST3_CLF       0x04
 #define MIKASA_NCR_CTEST3_WRITABLE  0x0B
+#define MIKASA_NCR_CTEST5_ADCK      0x80
+#define MIKASA_NCR_CTEST5_BBCK      0x40
 #define MIKASA_NCR_CTEST5_WRITABLE  0x3F
 #define MIKASA_NCR_MACNTL_810       0x40
 #define MIKASA_NCR_MACNTL_WRITABLE  0x0F
@@ -818,6 +821,7 @@ static void mikasa_ncr_clear_wait_reselect (void);
 static void mikasa_ncr_set_wait_reselect (uint32 dsp, uint32 jump);
 static void mikasa_ncr_clear_scsi_fifo (void);
 static void mikasa_ncr_write_ctest3 (uint8 val);
+static void mikasa_ncr_write_ctest5 (uint8 val);
 static void mikasa_ncr_write_stest3 (uint8 val);
 static t_bool mikasa_ncr_bar_reg (uint32 addr, uint32 bar, uint32 mask,
     uint32 *reg);
@@ -2202,12 +2206,15 @@ switch (op & 0xFF000000u) {
         return "REG_REG";
         }
 
-switch (op & 0xC0000000u) {
+switch (op & MIKASA_NCR_MM_GROUP_MASK) {
     case 0x00000000u:
         return "MOVE";
 
-    case 0xC0000000u:
+    case MIKASA_NCR_MM_GROUP:
         return "COPY";
+
+    case MIKASA_NCR_LS_GROUP:
+        return "LOAD_STORE";
         }
 
 return "SCRIPT";
@@ -2252,7 +2259,7 @@ for (i = 0; i < MIKASA_NCR_TRACE_INSNS; i++) {
     uint32 op = mikasa_read_phys_long (pa);
     uint32 arg = mikasa_read_phys_long (pa + 4);
 
-    if ((op & 0xC0000000u) == 0xC0000000u)
+    if ((op & MIKASA_NCR_MM_GROUP_MASK) == MIKASA_NCR_MM_GROUP)
         sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
             "NCR SCRIPT %08llX: %-11s %08X %08X %08X\n",
             (unsigned long long) pa, mikasa_ncr_script_name (op), op, arg,
@@ -2261,7 +2268,7 @@ for (i = 0; i < MIKASA_NCR_TRACE_INSNS; i++) {
         sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
             "NCR SCRIPT %08llX: %-11s %08X %08X\n",
             (unsigned long long) pa, mikasa_ncr_script_name (op), op, arg);
-    pa += ((op & 0xC0000000u) == 0xC0000000u) ? 12 : 8;
+    pa += ((op & MIKASA_NCR_MM_GROUP_MASK) == MIKASA_NCR_MM_GROUP) ? 12 : 8;
     }
 return;
 }
@@ -3039,6 +3046,8 @@ uint8 old;
 reg = reg & (MIKASA_NCR_REG_SIZE - 1);
 old = mikasa_ncr_reg[reg];
 if ((reg == MIKASA_NCR_REG_DSTAT) ||
+    ((reg >= MIKASA_NCR_REG_ADDER) &&
+    (reg < (MIKASA_NCR_REG_ADDER + 4))) ||
     (reg == MIKASA_NCR_REG_SSID) ||
     (reg == MIKASA_NCR_REG_SBCL) ||
     (reg == MIKASA_NCR_REG_SSTAT0) ||
@@ -3086,8 +3095,10 @@ if (reg == MIKASA_NCR_REG_CTEST3) {
     }
 if (reg == MIKASA_NCR_REG_CTEST2)
     val = val & MIKASA_NCR_CTEST2_WRITABLE;
-if (reg == MIKASA_NCR_REG_CTEST5)
-    val = val & MIKASA_NCR_CTEST5_WRITABLE;
+if (reg == MIKASA_NCR_REG_CTEST5) {
+    mikasa_ncr_write_ctest5 (val);
+    return;
+    }
 if (reg == MIKASA_NCR_REG_DMODE)
     val = val & MIKASA_NCR_DMODE_WRITABLE;
 if (reg == MIKASA_NCR_REG_DIEN)
@@ -4668,6 +4679,27 @@ mikasa_ncr_reg[MIKASA_NCR_REG_CTEST3] =
 return;
 }
 
+static void mikasa_ncr_write_ctest5 (uint8 val)
+{
+uint32 dnad = mikasa_ncr_reg_l (MIKASA_NCR_REG_DNAD);
+uint32 dbc = mikasa_ncr_reg_l (MIKASA_NCR_REG_DBC);
+
+if (val & MIKASA_NCR_CTEST5_ADCK) {
+    dnad = dnad + 1;
+    mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DNAD, dnad);
+    mikasa_ncr_set_reg_l (MIKASA_NCR_REG_ADDER, dnad);
+    }
+if (val & MIKASA_NCR_CTEST5_BBCK) {
+    dbc = (dbc & 0xFF000000u) |
+        (((dbc & MIKASA_NCR_BM_COUNT_MASK) - 1) & MIKASA_NCR_BM_COUNT_MASK);
+    mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DBC, dbc);
+    mikasa_ncr_set_reg_l (MIKASA_NCR_REG_ADDER,
+        dnad + (dbc & MIKASA_NCR_BM_COUNT_MASK));
+    }
+mikasa_ncr_reg[MIKASA_NCR_REG_CTEST5] = val & MIKASA_NCR_CTEST5_WRITABLE;
+return;
+}
+
 static void mikasa_ncr_write_stest3 (uint8 val)
 {
 if (val & MIKASA_NCR_STEST3_CSF)
@@ -4712,6 +4744,8 @@ if (reg == MIKASA_NCR_REG_ISTAT) {
         mikasa_ncr_start_script (sigp_dsp);
     }
 else if ((reg == MIKASA_NCR_REG_DSTAT) ||
+    ((reg >= MIKASA_NCR_REG_ADDER) &&
+    (reg < (MIKASA_NCR_REG_ADDER + 4))) ||
     (reg == MIKASA_NCR_REG_SSID) ||
     (reg == MIKASA_NCR_REG_SBCL) ||
     (reg == MIKASA_NCR_REG_SSTAT0) ||
@@ -4760,8 +4794,10 @@ else {
         mikasa_ncr_write_ctest3 (val);
     else if (reg == MIKASA_NCR_REG_CTEST2)
         val = val & MIKASA_NCR_CTEST2_WRITABLE;
-    else if (reg == MIKASA_NCR_REG_CTEST5)
-        val = val & MIKASA_NCR_CTEST5_WRITABLE;
+    else if (reg == MIKASA_NCR_REG_CTEST5) {
+        mikasa_ncr_write_ctest5 (val);
+        return;
+        }
     else if (reg == MIKASA_NCR_REG_DMODE)
         val = val & MIKASA_NCR_DMODE_WRITABLE;
     else if (reg == MIKASA_NCR_REG_DIEN)
