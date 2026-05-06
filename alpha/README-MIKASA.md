@@ -17,6 +17,16 @@ Implemented:
   - `DKA100`
   - `DKA200`
   - `DKA300`
+- Mikasa platform hardware shell:
+  - APECS/DECchip 21071 now exposes the Comanche `0x180000000` register
+    block and the EPIC `0x1A0000000` register block through the same system
+    DIB.
+  - EPIC sparse PCI memory accesses now use `HAXR1` for high-address
+    extension, and EPIC DMA window registers preserve the documented writable
+    fields used by the PCI DMA mapper.
+  - ISA legacy DMA controller registers, ISA DMA page registers, and a minimal
+    floppy-controller shell are present so standard I/O probes do not fall
+    through to unhandled ports.
 - Mikasa SRM firmware loader:
   - `SET MIKASA ROM=<path>` accepts the AlphaServer 1000 LFU SRM image
     `mksrmrom.exe` and AXPbox-style `decompressed.rom` files.
@@ -65,9 +75,10 @@ Implemented:
 
 Not implemented yet:
 
-- Complete real Mikasa 21071/CIA PCI host bridge behavior.
+- Complete real Mikasa 21071 PCI host bridge behavior. The current Comanche
+  and EPIC models are register shells, not a full chipset implementation.
 - Complete NCR/Symbios 53C810 SCRIPTS/DMA engine and SCSI bus transactions.
-- Network, VGA, NVRAM, and multiprocessor support.
+- Network, VGA, full NVRAM, and multiprocessor support.
 - A complete SRM-compatible firmware execution environment. The real SRM image
   now reaches the SRM banner and receives serial input, but it does not reach
   an SRM prompt yet.
@@ -322,10 +333,11 @@ debug tracing, the PC cycles inside the ROM decompressor around `0x900301` and
    and SWRPB/boot context are still minimal.
 
 5. Add more Mikasa platform I/O.
-   The current model implements APECS sparse ISA I/O, EPIC register storage,
-   PCI configuration cycles, the raw-IDSEL `7` Intel 82375EB PCI/EISA bridge,
-   the raw-IDSEL `6` NCR 53C810 PCI configuration/register window, and a
-   minimal 8259 PIC/COM1 receive interrupt path.
+   The current model implements APECS sparse ISA I/O, Comanche/EPIC register
+   storage, HAXR1 sparse-memory addressing, PCI configuration cycles, the
+   raw-IDSEL `7` Intel 82375EB PCI/EISA bridge, the raw-IDSEL `6` NCR 53C810
+   PCI configuration/register window, ISA DMA/page-register storage, an FDC
+   shell, and a minimal 8259 PIC/COM1 receive interrupt path.
 
 6. Add a new NCR/Symbios 53C810 frontend.
    SIMH has a common SCSI backend, but no 53C810 PCI DMA frontend in this tree.
