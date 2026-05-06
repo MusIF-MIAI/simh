@@ -22,6 +22,9 @@
 - [x] Add Intel 82375EB/PCEB PCI/EISA bridge config shell with write masks.
 - [x] Add ISA DMA/page-register storage, FDC shell, OCP shell, RTC basics, and
   EISA CRAM/absent-slot behavior.
+- [x] Add a minimal 8042 keyboard-controller shell with command byte,
+  output-port, self-test, keyboard-interface test, keyboard reset, ID, ACK,
+  and parameter-command responses for standard I/O probes.
 - [x] Add optional file-backed 128-byte RTC/NVRAM image support with default
   RTC values and alarm/update/periodic interrupt state.
 - [x] Add 8259 PIC init, mask/pending/in-service, EOI, auto-EOI, cascade IACK,
@@ -485,6 +488,9 @@ the real path works.
 - Make the ISA/EISA base less synthetic:
   - improve Intel 82375EB/PCEB config space and EISA CRAM handling;
   - add ISA DMA page registers and harmless behavior for common DMA channels;
+  - current branch includes a minimal 8042 keyboard-controller shell for
+    command-byte, output-port, self-test, keyboard reset, ID, ACK, and common
+    parameter-command probes without changing the serial-console path;
   - return documented absent-slot behavior for EISA probes.
 - Implement MC146818 RTC/NVRAM more fully:
   - current branch has host-backed time-of-day, status A/B/C/D,

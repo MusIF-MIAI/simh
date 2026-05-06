@@ -37,6 +37,10 @@ Implemented:
   - ISA legacy DMA controller registers, ISA DMA page registers, and a minimal
     floppy-controller shell are present so standard I/O probes do not fall
     through to unhandled ports.
+  - A minimal 8042 keyboard-controller shell handles command-byte,
+    output-port, self-test, keyboard-interface test, keyboard reset, keyboard
+    ID, ACK, and common parameter-command probes while leaving the serial
+    console as the active console path.
 - Mikasa SRM firmware loader:
   - `SET MIKASA ROM=<path>` accepts the AlphaServer 1000 LFU SRM image
     `mksrmrom.exe` and AXPbox-style `decompressed.rom` files.

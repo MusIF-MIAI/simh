@@ -486,7 +486,9 @@
 #define MIKASA_ISA_CFG_INDEX        0x022
 #define MIKASA_ISA_CFG_DATA         0x023
 #define MIKASA_ISA_PIT              0x040
+#define MIKASA_ISA_KBD_DATA         0x060
 #define MIKASA_ISA_PORTB            0x061
+#define MIKASA_ISA_KBD_CMD          0x064
 #define MIKASA_ISA_RTC_INDEX        0x070
 #define MIKASA_ISA_RTC_DATA         0x071
 #define MIKASA_ISA_DMA_PAGE         0x080
@@ -523,6 +525,23 @@
 #define MIKASA_UART_MSR_CTS         0x10
 #define MIKASA_UART_MSR_DSR         0x20
 #define MIKASA_UART_MSR_DCD         0x80
+
+#define MIKASA_KBC_RESP_SIZE        8
+#define MIKASA_KBC_STATUS_OBF       0x01
+#define MIKASA_KBC_STATUS_SYS       0x04
+#define MIKASA_KBC_CMD_READ_BYTE    0x20
+#define MIKASA_KBC_CMD_WRITE_BYTE   0x60
+#define MIKASA_KBC_CMD_DISABLE_KBD  0xAD
+#define MIKASA_KBC_CMD_ENABLE_KBD   0xAE
+#define MIKASA_KBC_CMD_TEST_KBD     0xAB
+#define MIKASA_KBC_CMD_SELF_TEST    0xAA
+#define MIKASA_KBC_CMD_READ_OUT     0xD0
+#define MIKASA_KBC_CMD_WRITE_OUT    0xD1
+#define MIKASA_KBC_OUT_NORMAL       0x03
+#define MIKASA_KBD_ACK              0xFA
+#define MIKASA_KBD_BAT_OK           0xAA
+#define MIKASA_KBD_ID1              0xAB
+#define MIKASA_KBD_ID2              0x83
 
 #define MIKASA_FDC_MSR_RQM          0x80
 
@@ -909,6 +928,13 @@ static uint8 mikasa_cfg_index = 0;
 static uint8 mikasa_cfg_reg[256] = { 0 };
 static uint8 mikasa_pit_mode = 0;
 static uint8 mikasa_pit_reg[3] = { 0 };
+static uint8 mikasa_kbc_cmd_byte = 0;
+static uint8 mikasa_kbc_out_port = MIKASA_KBC_OUT_NORMAL;
+static uint8 mikasa_kbc_pending_cmd = 0;
+static uint8 mikasa_kbd_pending_cmd = 0;
+static uint8 mikasa_kbc_resp[MIKASA_KBC_RESP_SIZE] = { 0 };
+static uint32 mikasa_kbc_resp_head = 0;
+static uint32 mikasa_kbc_resp_count = 0;
 static uint8 mikasa_portb = 0;
 static uint8 mikasa_rtc_index = 0;
 static uint8 mikasa_rtc_reg[128] = { 0 };
@@ -5298,6 +5324,150 @@ mikasa_pci_conf_write_l (reg, data);
 return;
 }
 
+static void mikasa_kbc_reset (void)
+{
+mikasa_kbc_cmd_byte = 0;
+mikasa_kbc_out_port = MIKASA_KBC_OUT_NORMAL;
+mikasa_kbc_pending_cmd = 0;
+mikasa_kbd_pending_cmd = 0;
+memset (mikasa_kbc_resp, 0, sizeof (mikasa_kbc_resp));
+mikasa_kbc_resp_head = 0;
+mikasa_kbc_resp_count = 0;
+return;
+}
+
+static void mikasa_kbc_queue (uint8 val)
+{
+uint32 tail;
+
+if (mikasa_kbc_resp_count >= MIKASA_KBC_RESP_SIZE)
+    return;
+tail = (mikasa_kbc_resp_head + mikasa_kbc_resp_count) %
+    MIKASA_KBC_RESP_SIZE;
+mikasa_kbc_resp[tail] = val;
+mikasa_kbc_resp_count++;
+return;
+}
+
+static uint8 mikasa_kbc_read_data (void)
+{
+uint8 val = 0;
+
+if (mikasa_kbc_resp_count != 0) {
+    val = mikasa_kbc_resp[mikasa_kbc_resp_head];
+    mikasa_kbc_resp_head = (mikasa_kbc_resp_head + 1) %
+        MIKASA_KBC_RESP_SIZE;
+    mikasa_kbc_resp_count--;
+    }
+sim_debug (MIKASA_DBG_IO, &mikasa_dev, "KBC data read %02X\n", val);
+return val;
+}
+
+static uint8 mikasa_kbc_read (uint32 port)
+{
+uint8 status;
+
+if (port == MIKASA_ISA_KBD_DATA)
+    return mikasa_kbc_read_data ();
+status = MIKASA_KBC_STATUS_SYS |
+    ((mikasa_kbc_resp_count != 0) ? MIKASA_KBC_STATUS_OBF : 0);
+sim_debug (MIKASA_DBG_IO, &mikasa_dev, "KBC status read %02X\n", status);
+return status;
+}
+
+static void mikasa_kbc_write_data (uint8 val)
+{
+if (mikasa_kbc_pending_cmd == MIKASA_KBC_CMD_WRITE_BYTE) {
+    mikasa_kbc_cmd_byte = val;
+    mikasa_kbc_pending_cmd = 0;
+    }
+else if (mikasa_kbc_pending_cmd == MIKASA_KBC_CMD_WRITE_OUT) {
+    mikasa_kbc_out_port = val;
+    mikasa_kbc_pending_cmd = 0;
+    }
+else if (mikasa_kbd_pending_cmd != 0) {
+    mikasa_kbd_pending_cmd = 0;
+    mikasa_kbc_queue (MIKASA_KBD_ACK);
+    }
+else {
+    switch (val) {
+        case 0xED:                              /* set LEDs */
+        case 0xF0:                              /* select scan set */
+        case 0xF3:                              /* typematic rate */
+            mikasa_kbd_pending_cmd = val;
+            mikasa_kbc_queue (MIKASA_KBD_ACK);
+            break;
+
+        case 0xEE:                              /* echo */
+            mikasa_kbc_queue (0xEE);
+            break;
+
+        case 0xF2:                              /* read keyboard ID */
+            mikasa_kbc_queue (MIKASA_KBD_ACK);
+            mikasa_kbc_queue (MIKASA_KBD_ID1);
+            mikasa_kbc_queue (MIKASA_KBD_ID2);
+            break;
+
+        case 0xF4:                              /* enable scanning */
+        case 0xF5:                              /* disable scanning */
+        case 0xF6:                              /* set defaults */
+            mikasa_kbc_queue (MIKASA_KBD_ACK);
+            break;
+
+        case 0xFF:                              /* reset keyboard */
+            mikasa_kbc_queue (MIKASA_KBD_ACK);
+            mikasa_kbc_queue (MIKASA_KBD_BAT_OK);
+            break;
+
+        default:
+            mikasa_kbc_queue (MIKASA_KBD_ACK);
+            break;
+            }
+    }
+sim_debug (MIKASA_DBG_IO, &mikasa_dev, "KBC data write %02X\n", val);
+return;
+}
+
+static void mikasa_kbc_write (uint32 port, uint8 val)
+{
+if (port == MIKASA_ISA_KBD_DATA) {
+    mikasa_kbc_write_data (val);
+    return;
+    }
+mikasa_kbc_pending_cmd = 0;
+switch (val) {
+    case MIKASA_KBC_CMD_READ_BYTE:
+        mikasa_kbc_queue (mikasa_kbc_cmd_byte);
+        break;
+
+    case MIKASA_KBC_CMD_WRITE_BYTE:
+    case MIKASA_KBC_CMD_WRITE_OUT:
+        mikasa_kbc_pending_cmd = val;
+        break;
+
+    case MIKASA_KBC_CMD_SELF_TEST:
+        mikasa_kbc_queue (0x55);
+        break;
+
+    case MIKASA_KBC_CMD_TEST_KBD:
+        mikasa_kbc_queue (0);
+        break;
+
+    case MIKASA_KBC_CMD_READ_OUT:
+        mikasa_kbc_queue (mikasa_kbc_out_port);
+        break;
+
+    case MIKASA_KBC_CMD_DISABLE_KBD:
+    case MIKASA_KBC_CMD_ENABLE_KBD:
+        break;
+
+    default:
+        break;
+        }
+sim_debug (MIKASA_DBG_IO, &mikasa_dev, "KBC command write %02X\n", val);
+return;
+}
+
 static uint8 mikasa_isa_read (uint32 port)
 {
 uint32 irr = (~mikasa_irq_summary) & M16;
@@ -5319,6 +5489,8 @@ if (port == MIKASA_ISA_CFG_DATA)
     return mikasa_cfg_reg[mikasa_cfg_index];
 if ((port >= MIKASA_ISA_PIT) && (port < (MIKASA_ISA_PIT + 4)))
     return mikasa_pit_read (port);
+if ((port == MIKASA_ISA_KBD_DATA) || (port == MIKASA_ISA_KBD_CMD))
+    return mikasa_kbc_read (port);
 if (port == MIKASA_ISA_PORTB)
     return mikasa_portb;
 if (port == MIKASA_ISA_RTC_INDEX)
@@ -5400,6 +5572,10 @@ if (port == MIKASA_ISA_CFG_DATA) {
     }
 if ((port >= MIKASA_ISA_PIT) && (port < (MIKASA_ISA_PIT + 4))) {
     mikasa_pit_write (port, val);
+    return;
+    }
+if ((port == MIKASA_ISA_KBD_DATA) || (port == MIKASA_ISA_KBD_CMD)) {
+    mikasa_kbc_write (port, val);
     return;
     }
 if (port == MIKASA_ISA_PORTB) {
@@ -8256,6 +8432,7 @@ mikasa_cfg_index = 0;
 memset (mikasa_cfg_reg, 0, sizeof (mikasa_cfg_reg));
 mikasa_pit_mode = 0;
 memset (mikasa_pit_reg, 0, sizeof (mikasa_pit_reg));
+mikasa_kbc_reset ();
 mikasa_portb = 0;
 mikasa_rtc_index = 0;
 if (!mikasa_nvram_loaded)
