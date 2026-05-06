@@ -247,6 +247,10 @@
 #define MIKASA_NCR_SFBR_REG         0x68000000u
 #define MIKASA_NCR_REG_SFBR_OP      0x70000000u
 #define MIKASA_NCR_REG_REG          0x78000000u
+#define MIKASA_NCR_LS_GROUP_MASK    0xE0000000u
+#define MIKASA_NCR_LS_GROUP         0xE0000000u
+#define MIKASA_NCR_LS_LOAD          0x01000000u
+#define MIKASA_NCR_LS_DSA_REL       0x10000000u
 #define MIKASA_NCR_ALU_OP_MASK      0x07000000u
 #define MIKASA_NCR_ALU_LOAD         0x00000000u
 #define MIKASA_NCR_ALU_SHL          0x01000000u
@@ -1983,6 +1987,35 @@ switch (group) {
 return;
 }
 
+static t_bool mikasa_ncr_script_load_store (uint32 op, uint32 arg,
+    MIKASA_NCR_SCRIPT_STATE *state)
+{
+uint32 reg = (op >> 16) & 0x7F;
+uint32 count = op & 7;
+uint32 memaddr = (op & MIKASA_NCR_LS_DSA_REL) ?
+    mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA) + mikasa_ncr_sext24 (arg) : arg;
+uint32 i;
+
+for (i = 0; i < count; i++) {
+    uint32 r = (reg + i) & (MIKASA_NCR_REG_SIZE - 1);
+    uint8 val;
+
+    if (op & MIKASA_NCR_LS_LOAD) {
+        if (!mikasa_pci_dma_read_byte (memaddr + i, &val))
+            return FALSE;
+        mikasa_ncr_reg[r] = val;
+        if (r == MIKASA_NCR_REG_SFBR)
+            state->sfbr = val;
+        }
+    else {
+        val = mikasa_ncr_reg[r];
+        if (!mikasa_pci_dma_write_byte (memaddr + i, val))
+            return FALSE;
+        }
+    }
+return TRUE;
+}
+
 static t_bool mikasa_ncr_script_condition (uint32 op,
     MIKASA_NCR_SCRIPT_STATE *state)
 {
@@ -2024,6 +2057,12 @@ if ((op & MIKASA_NCR_BM_TYPE_MASK) == 0xC0000000u) {
     if (!mikasa_pci_dma_read_long (next - 4, &dst))
         return FALSE;
     (void) mikasa_ncr_script_copy (arg, dst, op & MIKASA_NCR_BM_COUNT_MASK);
+    *dsp = next;
+    return TRUE;
+    }
+if ((op & MIKASA_NCR_LS_GROUP_MASK) == MIKASA_NCR_LS_GROUP) {
+    if (!mikasa_ncr_script_load_store (op, arg, state))
+        return FALSE;
     *dsp = next;
     return TRUE;
     }
