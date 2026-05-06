@@ -104,6 +104,8 @@ Not implemented yet:
   the current frontend cannot find a matching script interrupt. `DSTAT` causes
   are preserved until the CPU reads the status register, and unhandled
   fetch/DMA script paths raise `DSTAT.BF` instead of failing silently.
+  `DSTAT`, `SIST0`, and `SIST1` now have a second-level interrupt stack, with
+  the stacked `DSPS` value preserved for DMA interrupt causes.
   Zero-byte direct Block Move and Memory Move instructions raise `DSTAT.IID`,
   and select timeouts clear the expected-disconnect bit.
   `INTFLY` is treated as non-halting and sets `ISTAT.INTF`, with CPU

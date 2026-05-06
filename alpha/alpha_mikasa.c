@@ -792,6 +792,7 @@ static uint8 mikasa_pic_iack (void);
 static uint32 mikasa_ncr_sext24 (uint32 val);
 static uint32 mikasa_ncr_next_script_addr (uint32 dsp, uint32 op);
 static void mikasa_ncr_update_irq (void);
+static void mikasa_ncr_promote_interrupt_stack (void);
 static void mikasa_ncr_clear_transaction (void);
 static void mikasa_ncr_clear_wait_reselect (void);
 static void mikasa_ncr_set_wait_reselect (uint32 dsp, uint32 jump);
@@ -878,6 +879,11 @@ static uint32 mikasa_comanche_reg[MIKASA_COMANCHE_SIZE >> 5] = { 0 };
 static uint32 mikasa_epic_reg[MIKASA_EPIC_SIZE >> 5] = { 0 };
 static uint32 mikasa_ncr_cfg[MIKASA_PCI_CFG_DWORDS] = { 0 };
 static uint8 mikasa_ncr_reg[MIKASA_NCR_REG_SIZE] = { 0 };
+static uint8 mikasa_ncr_dstat_stack = 0;
+static uint8 mikasa_ncr_sist0_stack = 0;
+static uint8 mikasa_ncr_sist1_stack = 0;
+static t_bool mikasa_ncr_dsps_stack_valid = FALSE;
+static uint32 mikasa_ncr_dsps_stack = 0;
 static uint32 mikasa_tulip_cfg[MIKASA_PCI_CFG_DWORDS] = { 0 };
 static uint8 mikasa_tulip_reg[MIKASA_TULIP_REG_SIZE] = { 0 };
 static uint8 mikasa_tulip_srom[MIKASA_TULIP_SROM_BYTES] = { 0 };
@@ -2040,13 +2046,16 @@ reg = reg & (MIKASA_NCR_REG_SIZE - 1);
 if (reg == MIKASA_NCR_REG_DSTAT) {
     mikasa_ncr_reg[MIKASA_NCR_REG_DSTAT] &= MIKASA_NCR_DSTAT_DFE;
     mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &= ~MIKASA_NCR_ISTAT_DIP;
+    mikasa_ncr_promote_interrupt_stack ();
     mikasa_ncr_update_irq ();
     }
 else if ((reg == MIKASA_NCR_REG_SIST0) || (reg == MIKASA_NCR_REG_SIST1)) {
     mikasa_ncr_reg[reg] = 0;
     if ((mikasa_ncr_reg[MIKASA_NCR_REG_SIST0] == 0) &&
-        (mikasa_ncr_reg[MIKASA_NCR_REG_SIST1] == 0))
+        (mikasa_ncr_reg[MIKASA_NCR_REG_SIST1] == 0)) {
         mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &= ~MIKASA_NCR_ISTAT_SIP;
+        mikasa_ncr_promote_interrupt_stack ();
+        }
     mikasa_ncr_update_irq ();
     }
 else if (reg == MIKASA_NCR_REG_CTEST2) {
@@ -2368,6 +2377,16 @@ return;
 
 static void mikasa_ncr_set_dip (uint8 dstat, uint32 dsps)
 {
+if (mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &
+    (MIKASA_NCR_ISTAT_DIP | MIKASA_NCR_ISTAT_SIP)) {
+    mikasa_ncr_dstat_stack |= dstat;
+    mikasa_ncr_dsps_stack = dsps;
+    mikasa_ncr_dsps_stack_valid = TRUE;
+    mikasa_ncr_update_irq ();
+    sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+        "NCR stack DIP dstat=%02X dsps=%u\n", dstat, dsps);
+    return;
+    }
 mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DSPS, dsps);
 mikasa_ncr_reg[MIKASA_NCR_REG_DSTAT] =
     (mikasa_ncr_reg[MIKASA_NCR_REG_DSTAT] & MIKASA_NCR_DSTAT_IRQS) |
@@ -2381,9 +2400,45 @@ return;
 
 static void mikasa_ncr_set_sip (uint8 sist0, uint8 sist1)
 {
+if (mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &
+    (MIKASA_NCR_ISTAT_DIP | MIKASA_NCR_ISTAT_SIP)) {
+    mikasa_ncr_sist0_stack |= sist0;
+    mikasa_ncr_sist1_stack |= sist1;
+    mikasa_ncr_update_irq ();
+    return;
+    }
 mikasa_ncr_reg[MIKASA_NCR_REG_SIST0] |= sist0;
 mikasa_ncr_reg[MIKASA_NCR_REG_SIST1] |= sist1;
 mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] |= MIKASA_NCR_ISTAT_SIP;
+mikasa_ncr_update_irq ();
+return;
+}
+
+static void mikasa_ncr_promote_interrupt_stack (void)
+{
+if ((mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &
+    (MIKASA_NCR_ISTAT_DIP | MIKASA_NCR_ISTAT_SIP)) != 0)
+    return;
+if ((mikasa_ncr_dstat_stack == 0) && (mikasa_ncr_sist0_stack == 0) &&
+    (mikasa_ncr_sist1_stack == 0))
+    return;
+if (mikasa_ncr_dstat_stack != 0) {
+    if (mikasa_ncr_dsps_stack_valid)
+        mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DSPS, mikasa_ncr_dsps_stack);
+    mikasa_ncr_reg[MIKASA_NCR_REG_DSTAT] =
+        (mikasa_ncr_reg[MIKASA_NCR_REG_DSTAT] & MIKASA_NCR_DSTAT_DFE) |
+        MIKASA_NCR_DSTAT_DFE | mikasa_ncr_dstat_stack;
+    mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] |= MIKASA_NCR_ISTAT_DIP;
+    }
+if ((mikasa_ncr_sist0_stack != 0) || (mikasa_ncr_sist1_stack != 0)) {
+    mikasa_ncr_reg[MIKASA_NCR_REG_SIST0] |= mikasa_ncr_sist0_stack;
+    mikasa_ncr_reg[MIKASA_NCR_REG_SIST1] |= mikasa_ncr_sist1_stack;
+    mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] |= MIKASA_NCR_ISTAT_SIP;
+    }
+mikasa_ncr_dstat_stack = 0;
+mikasa_ncr_sist0_stack = 0;
+mikasa_ncr_sist1_stack = 0;
+mikasa_ncr_dsps_stack_valid = FALSE;
 mikasa_ncr_update_irq ();
 return;
 }
@@ -4458,6 +4513,11 @@ return;
 static void mikasa_ncr_init_regs (void)
 {
 memset (mikasa_ncr_reg, 0, sizeof (mikasa_ncr_reg));
+mikasa_ncr_dstat_stack = 0;
+mikasa_ncr_sist0_stack = 0;
+mikasa_ncr_sist1_stack = 0;
+mikasa_ncr_dsps_stack_valid = FALSE;
+mikasa_ncr_dsps_stack = 0;
 mikasa_ncr_clear_transaction ();
 mikasa_ncr_clear_wait_reselect ();
 mikasa_ncr_clear_irq ();
