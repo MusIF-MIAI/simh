@@ -154,9 +154,12 @@ Not implemented yet:
   the expected and sampled phases visible through the SCSI phase registers,
   and STATUS/MESSAGE remain pending for the next script restart.
   The local SCSI disk path also handles extended probe/read commands such as
-  `READ(12)`, `WRITE(12)`, `REPORT LUNS`, `READ CAPACITY(16)`, and basic
-  INQUIRY EVPD pages 0x00/0x80/0x83. It reports formatted 512-byte media for
-  `READ FORMAT CAPACITIES` and empty defect lists for `READ DEFECT DATA(10/12)`.
+  `READ(12)`, `WRITE(12)`, `REPORT LUNS`, `READ CAPACITY(16)`, `READ(16)`,
+  `WRITE(16)`, `WRITE AND VERIFY(16)`, `VERIFY(16)`, and basic INQUIRY EVPD
+  pages 0x00/0x80/0x83. It reports formatted 512-byte media for `READ FORMAT
+  CAPACITIES`, empty defect lists for `READ DEFECT DATA(10/12)`, zeroed
+  diagnostic/read-buffer style replies, and harmless `FORMAT UNIT` and cache
+  sync completions.
   CDBs now drive explicit DATA IN, DATA OUT, or no-data phase selection, and
   harmless DATA OUT parameter lists are consumed instead of leaving stale DMA
   progress. MODE SENSE replies include a direct-access block descriptor unless

@@ -112,6 +112,9 @@
   non-changeable fields zeroed.
 - [x] Add common extended SCSI disk probes: `READ(12)`, `WRITE(12)`,
   `REPORT LUNS`, and `READ CAPACITY(16)`.
+- [x] Add additional SCSI disk probes and 16-byte commands: `FORMAT UNIT`,
+  `RECEIVE DIAGNOSTIC RESULTS`, `READ LONG`, `READ(16)`, `WRITE(16)`,
+  `WRITE AND VERIFY(16)`, `VERIFY(16)`, and `SYNCHRONIZE CACHE(16)`.
 - [x] Add SCSI `READ FORMAT CAPACITIES` and `READ DEFECT DATA(12)` responses
   for older disk geometry/defect-list probes.
 - [x] Add INQUIRY EVPD pages 0x00, 0x80, and 0x83 for supported-page,
@@ -189,6 +192,8 @@
   (`SIDL`/`SODL`/`SBDL`); it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after parsing common NCR `MESSAGE OUT` messages; it
   still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after adding more SCSI disk probe and 16-byte CDB
+  coverage; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -307,6 +312,10 @@ the real path works.
     device-identification data for generic SCSI probes;
   - current branch reports formatted 512-byte media for `READ FORMAT
     CAPACITIES` and empty defect lists for `READ DEFECT DATA(10/12)`;
+  - current branch handles more SCSI disk probes and 16-byte commands:
+    `FORMAT UNIT`, `RECEIVE DIAGNOSTIC RESULTS`, `READ LONG`, `READ(16)`,
+    `WRITE(16)`, `WRITE AND VERIFY(16)`, `VERIFY(16)`, and `SYNCHRONIZE
+    CACHE(16)`;
   - SRM smoke after the SCSI capacity/defect-list probe responses still
     reaches `V5.4-101` and enumerates `pka`/`ewa`;
   - current branch classifies CDB data phases explicitly and consumes

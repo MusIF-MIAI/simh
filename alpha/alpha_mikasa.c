@@ -2732,6 +2732,12 @@ return (((uint32) cdb[off]) << 24) | (((uint32) cdb[off + 1]) << 16) |
     (((uint32) cdb[off + 2]) << 8) | cdb[off + 3];
 }
 
+static t_uint64 mikasa_ncr_cdb_be64 (const uint8 *cdb, uint32 off)
+{
+return (((t_uint64) mikasa_ncr_cdb_be32 (cdb, off)) << 32) |
+    mikasa_ncr_cdb_be32 (cdb, off + 4);
+}
+
 static void mikasa_ncr_clear_sense (uint32 unit)
 {
 if (unit < MIKASA_DKA_UNITS) {
@@ -3480,6 +3486,13 @@ return TRUE;
 static t_bool mikasa_ncr_cmd_data_phase (const uint8 *cdb, uint32 *phase)
 {
 switch (cdb[0]) {
+    case 0x04:                                      /* FORMAT UNIT */
+        if (cdb[1] & 0x10) {
+            *phase = MIKASA_NCR_PHASE_DAT_OUT;
+            return TRUE;
+            }
+        return FALSE;
+
     case 0x07:                                      /* REASSIGN BLOCKS */
     case 0x0A:                                      /* WRITE(6) */
     case 0x15:                                      /* MODE SELECT(6) */
@@ -3489,6 +3502,8 @@ switch (cdb[0]) {
     case 0x3B:                                      /* WRITE BUFFER */
     case 0x3F:                                      /* WRITE LONG */
     case 0x55:                                      /* MODE SELECT(10) */
+    case 0x8A:                                      /* WRITE(16) */
+    case 0x8E:                                      /* WRITE AND VERIFY(16) */
     case 0xAA:                                      /* WRITE(12) */
     case 0xAE:                                      /* WRITE AND VERIFY(12) */
         *phase = MIKASA_NCR_PHASE_DAT_OUT;
@@ -3497,14 +3512,17 @@ switch (cdb[0]) {
     case 0x03:                                      /* REQUEST SENSE */
     case 0x08:                                      /* READ(6) */
     case 0x12:                                      /* INQUIRY */
+    case 0x1C:                                      /* RECEIVE DIAGNOSTIC RESULTS */
     case 0x1A:                                      /* MODE SENSE(6) */
     case 0x23:                                      /* READ FORMAT CAPACITIES */
     case 0x25:                                      /* READ CAPACITY(10) */
     case 0x28:                                      /* READ(10) */
     case 0x37:                                      /* READ DEFECT DATA */
     case 0x3C:                                      /* READ BUFFER */
+    case 0x3E:                                      /* READ LONG */
     case 0x4D:                                      /* LOG SENSE */
     case 0x5A:                                      /* MODE SENSE(10) */
+    case 0x88:                                      /* READ(16) */
     case 0x9E:                                      /* SERVICE ACTION IN(16) */
     case 0xA0:                                      /* REPORT LUNS */
     case 0xA8:                                      /* READ(12) */
@@ -3874,16 +3892,23 @@ return mikasa_ncr_write_scsi_data (data, buf, len);
 static t_bool mikasa_ncr_scsi_cmd (uint32 unit, const uint8 *cdb,
     const MIKASA_NCR_DMA_LIST *data, uint8 *status)
 {
-uint8 buf[256];
+uint8 buf[MIKASA_IO_BUFSIZE];
 UNIT *uptr = &dka_unit[unit];
 uint32 len = 0;
 uint32 lbn;
 uint32 blocks;
+t_uint64 lbn64;
 
 *status = 0;
 memset (buf, 0, sizeof (buf));
 switch (cdb[0]) {
     case 0x00:                                              /* TEST UNIT READY */
+        mikasa_ncr_clear_sense (unit);
+        return TRUE;
+
+    case 0x04:                                              /* FORMAT UNIT */
+        if (!mikasa_ncr_discard_scsi_data (data))
+            return FALSE;
         mikasa_ncr_clear_sense (unit);
         return TRUE;
 
@@ -3930,7 +3955,6 @@ switch (cdb[0]) {
         mikasa_ncr_clear_sense (unit);
         return mikasa_ncr_write_scsi_data (data, buf, len);
 
-    case 0x15:                                              /* MODE SELECT(6) */
     case 0x1D:                                              /* SEND DIAGNOSTIC */
         if (!mikasa_ncr_discard_scsi_data (data))
             return FALSE;
@@ -3938,6 +3962,7 @@ switch (cdb[0]) {
         return TRUE;
 
     case 0x07:                                              /* REASSIGN BLOCKS */
+    case 0x15:                                              /* MODE SELECT(6) */
         if (!mikasa_ncr_discard_scsi_data (data))
             return FALSE;
         mikasa_ncr_clear_sense (unit);
@@ -3955,6 +3980,12 @@ switch (cdb[0]) {
             return TRUE;
         *status = 2;
         return TRUE;
+
+    case 0x1C:                                              /* RECEIVE DIAGNOSTIC RESULTS */
+        len = mikasa_ncr_min3 (data->bytes,
+            (((uint32) cdb[3]) << 8) | cdb[4], sizeof (buf));
+        mikasa_ncr_clear_sense (unit);
+        return mikasa_ncr_write_scsi_data (data, buf, len);
 
     case 0x23:                                              /* READ FORMAT CAPACITIES */
         return mikasa_ncr_scsi_read_format_capacities (unit, cdb, data);
@@ -4031,6 +4062,14 @@ switch (cdb[0]) {
         mikasa_ncr_clear_sense (unit);
         return mikasa_ncr_write_scsi_data (data, buf, len);
 
+    case 0x3E:                                              /* READ LONG */
+        len = mikasa_ncr_alloc_len10 (cdb);
+        if (len == 0)
+            len = MIKASA_DKA_BLOCK_SIZE;
+        len = mikasa_ncr_min3 (data->bytes, len, sizeof (buf));
+        mikasa_ncr_clear_sense (unit);
+        return mikasa_ncr_write_scsi_data (data, buf, len);
+
     case 0x3F:                                              /* WRITE LONG */
         if (uptr->flags & UNIT_RO) {
             mikasa_ncr_set_sense (unit, 0x07, 0x27, 0x00);
@@ -4053,6 +4092,39 @@ switch (cdb[0]) {
         if (mikasa_ncr_scsi_mode_sense (unit, cdb, data, TRUE))
             return TRUE;
         *status = 2;
+        return TRUE;
+
+    case 0x88:                                              /* READ(16) */
+        lbn64 = mikasa_ncr_cdb_be64 (cdb, 2);
+        blocks = mikasa_ncr_cdb_be32 (cdb, 10);
+        if (lbn64 > M32) {
+            mikasa_ncr_set_sense (unit, 0x05, 0x21, 0x00);
+            *status = 2;
+            return TRUE;
+            }
+        if (mikasa_ncr_scsi_read (unit, (uint32) lbn64, blocks, data)) {
+            mikasa_ncr_clear_sense (unit);
+            return TRUE;
+            }
+        mikasa_ncr_set_sense (unit, 0x05, 0x21, 0x00);
+        *status = 2;
+        return TRUE;
+
+    case 0x8A:                                              /* WRITE(16) */
+    case 0x8E:                                              /* WRITE AND VERIFY(16) */
+        lbn64 = mikasa_ncr_cdb_be64 (cdb, 2);
+        blocks = mikasa_ncr_cdb_be32 (cdb, 10);
+        if (lbn64 > M32) {
+            mikasa_ncr_set_sense (unit, 0x05, 0x21, 0x00);
+            *status = 2;
+            return TRUE;
+            }
+        return mikasa_ncr_scsi_write (unit, (uint32) lbn64, blocks, data,
+            status);
+
+    case 0x8F:                                              /* VERIFY(16) */
+    case 0x91:                                              /* SYNCHRONIZE CACHE(16) */
+        mikasa_ncr_clear_sense (unit);
         return TRUE;
 
     case 0x9E:                                              /* SERVICE ACTION IN(16) */
