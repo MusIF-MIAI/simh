@@ -239,6 +239,7 @@
 #define MIKASA_TULIP_CSR_STATUS     0x28
 #define MIKASA_TULIP_CSR_CMD        0x30
 #define MIKASA_TULIP_CSR_INTR       0x38
+#define MIKASA_TULIP_CSR_MISSED     0x40
 #define MIKASA_TULIP_CSR_SIO        0x48
 #define MIKASA_TULIP_CSR_SIA_STATUS 0x60
 #define MIKASA_TULIP_CSR_SIA_CONN   0x68
@@ -254,12 +255,23 @@
 #define MIKASA_TULIP_SROM_BYTES     128
 #define MIKASA_TULIP_SROM_READ      6
 #define MIKASA_TULIP_SROM_ADDR_BITS 6
+#define MIKASA_TULIP_ENETROM_BYTES  32
+#define MIKASA_TULIP_DESC_OWNER     0x80000000u
+#define MIKASA_TULIP_DFLAG_ENDRING  0x0008u
+#define MIKASA_TULIP_DFLAG_CHAIN    0x0004u
+#define MIKASA_TULIP_DFLAG_TXINTR   0x0200u
 #define MIKASA_TULIP_STS_TXS_MASK   0x00700000u
 #define MIKASA_TULIP_STS_TXS_STOP   0x00000000u
 #define MIKASA_TULIP_STS_TXS_SUSP   0x00600000u
 #define MIKASA_TULIP_STS_RXS_MASK   0x000E0000u
 #define MIKASA_TULIP_STS_RXS_STOP   0x00000000u
+#define MIKASA_TULIP_STS_RXS_WAIT   0x00060000u
 #define MIKASA_TULIP_STS_RXS_SUSP   0x00080000u
+#define MIKASA_TULIP_STS_NORMAL     0x00010000u
+#define MIKASA_TULIP_STS_ABNORMAL   0x00008000u
+#define MIKASA_TULIP_STS_RXNOBUF    0x00000080u
+#define MIKASA_TULIP_STS_TXINTR     0x00000001u
+#define MIKASA_TULIP_STS_TXNOBUF    0x00000004u
 #define MIKASA_TULIP_STS_W1C        0x0001FFFFu
 #define MIKASA_TULIP_CMD_TXRUN      0x00002000u
 #define MIKASA_TULIP_CMD_RXRUN      0x00000002u
@@ -459,7 +471,7 @@
 #define MIKASA_NCR_TC_INT           0x98000000u
 #define MIKASA_NCR_TC_REL           0x00800000u
 #define MIKASA_NCR_TC_CARRY         0x00200000u
-#define MIKASA_NCR_TC_JUMP_IF       0x00080000u
+#define MIKASA_NCR_TC_IFTRUE        0x00080000u
 #define MIKASA_NCR_TC_DATA          0x00040000u
 #define MIKASA_NCR_TC_PHASE         0x00020000u
 #define MIKASA_NCR_TC_INTFLY        0x00100000u
@@ -696,8 +708,6 @@ typedef struct {
     uint8 tag;
     uint32 data_phase;
     uint8 status;
-    t_bool status_dsps_valid;
-    uint32 status_dsps;
     } MIKASA_NCR_TRANSACTION;
 
 uint32 mikasa_irq_mask = 0;
@@ -958,10 +968,17 @@ static uint32 mikasa_ncr_dsps_stack = 0;
 static uint32 mikasa_tulip_cfg[MIKASA_PCI_CFG_DWORDS] = { 0 };
 static uint8 mikasa_tulip_reg[MIKASA_TULIP_REG_SIZE] = { 0 };
 static uint8 mikasa_tulip_srom[MIKASA_TULIP_SROM_BYTES] = { 0 };
+static uint8 mikasa_tulip_enetrom[MIKASA_TULIP_ENETROM_BYTES] = { 0 };
 static uint32 mikasa_tulip_srom_shift = 0;
 static uint32 mikasa_tulip_srom_bits = 0;
 static uint32 mikasa_tulip_srom_out = 0;
 static uint32 mikasa_tulip_srom_out_bits = 0;
+static uint32 mikasa_tulip_enetrom_idx = 0;
+static uint32 mikasa_tulip_tx_base = 0;
+static uint32 mikasa_tulip_tx_cur = 0;
+static uint32 mikasa_tulip_rx_base = 0;
+static uint32 mikasa_tulip_rx_cur = 0;
+static uint32 mikasa_tulip_desc_skip = 0;
 static uint32 mikasa_ncr_script_trace_count = 0;
 static uint32 mikasa_icu_int_req_bits = 0;
 static uint32 mikasa_pic_int_req_bits = 0;
@@ -1951,7 +1968,17 @@ return TRUE;
 
 static uint8 mikasa_tulip_read_b (uint32 reg)
 {
-uint8 val = mikasa_tulip_reg[reg & (MIKASA_TULIP_REG_SIZE - 1)];
+uint8 val;
+
+reg = reg & (MIKASA_TULIP_REG_SIZE - 1);
+if (reg == MIKASA_TULIP_CSR_SIO) {
+    val = mikasa_tulip_enetrom[mikasa_tulip_enetrom_idx &
+        (MIKASA_TULIP_ENETROM_BYTES - 1)];
+    if (mikasa_tulip_enetrom_idx < (MIKASA_TULIP_ENETROM_BYTES - 1))
+        mikasa_tulip_enetrom_idx++;
+    }
+else
+    val = mikasa_tulip_reg[reg];
 
 sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "TULIP read %02X=%02X\n",
     reg, val);
@@ -1992,9 +2019,42 @@ return;
 static void mikasa_tulip_init_srom (void)
 {
 static const uint8 mac[6] = { 0x08, 0x00, 0x2B, 0x00, 0x00, 0x01 };
+static const uint8 testpat[8] = { 0xFF, 0x00, 0x55, 0xAA,
+    0xFF, 0x00, 0x55, 0xAA };
+uint32 cksum;
 
 memset (mikasa_tulip_srom, 0xFF, sizeof (mikasa_tulip_srom));
 memcpy (&mikasa_tulip_srom[20], mac, sizeof (mac));
+memset (mikasa_tulip_enetrom, 0, sizeof (mikasa_tulip_enetrom));
+memcpy (&mikasa_tulip_enetrom[0], mac, sizeof (mac));
+cksum = ((uint32) mikasa_tulip_enetrom[0]) |
+    (((uint32) mikasa_tulip_enetrom[1]) << 8);
+cksum = cksum * 2;
+if (cksum > 65535)
+    cksum = cksum - 65535;
+cksum = cksum + (((uint32) mikasa_tulip_enetrom[2]) |
+    (((uint32) mikasa_tulip_enetrom[3]) << 8));
+if (cksum > 65535)
+    cksum = cksum - 65535;
+cksum = cksum * 2;
+if (cksum > 65535)
+    cksum = cksum - 65535;
+cksum = cksum + (((uint32) mikasa_tulip_enetrom[4]) |
+    (((uint32) mikasa_tulip_enetrom[5]) << 8));
+if (cksum >= 65535)
+    cksum = cksum - 65535;
+mikasa_tulip_enetrom[6] = (uint8) cksum;
+mikasa_tulip_enetrom[7] = (uint8) (cksum >> 8);
+mikasa_tulip_enetrom[8] = mikasa_tulip_enetrom[7];
+mikasa_tulip_enetrom[9] = mikasa_tulip_enetrom[6];
+mikasa_tulip_enetrom[10] = mikasa_tulip_enetrom[5];
+mikasa_tulip_enetrom[11] = mikasa_tulip_enetrom[4];
+mikasa_tulip_enetrom[12] = mikasa_tulip_enetrom[3];
+mikasa_tulip_enetrom[13] = mikasa_tulip_enetrom[2];
+mikasa_tulip_enetrom[14] = mikasa_tulip_enetrom[1];
+mikasa_tulip_enetrom[15] = mikasa_tulip_enetrom[0];
+memcpy (&mikasa_tulip_enetrom[24], testpat, sizeof (testpat));
+mikasa_tulip_enetrom_idx = 0;
 mikasa_tulip_srom_reset_state ();
 return;
 }
@@ -2060,6 +2120,64 @@ mikasa_tulip_set_l (MIKASA_TULIP_CSR_SIO, sio);
 return;
 }
 
+static t_bool mikasa_tulip_dma_write_l (uint32 addr, uint32 val)
+{
+return mikasa_pci_dma_write_byte (addr, (uint8) val) &&
+    mikasa_pci_dma_write_byte (addr + 1, (uint8) (val >> 8)) &&
+    mikasa_pci_dma_write_byte (addr + 2, (uint8) (val >> 16)) &&
+    mikasa_pci_dma_write_byte (addr + 3, (uint8) (val >> 24));
+}
+
+static uint32 mikasa_tulip_next_desc (uint32 desc, uint32 ctl, uint32 addr2,
+    uint32 base)
+{
+uint32 flags = ctl >> 22;
+
+if (flags & MIKASA_TULIP_DFLAG_CHAIN)
+    return addr2 & ~3u;
+if (flags & MIKASA_TULIP_DFLAG_ENDRING)
+    return base;
+return desc + 16 + mikasa_tulip_desc_skip;
+}
+
+static void mikasa_tulip_process_tx (void)
+{
+uint32 status = mikasa_tulip_read_l (MIKASA_TULIP_CSR_STATUS);
+uint32 desc = mikasa_tulip_tx_cur ? mikasa_tulip_tx_cur : mikasa_tulip_tx_base;
+uint32 i;
+t_bool completed = FALSE;
+
+if (desc == 0)
+    return;
+for (i = 0; i < 16; i++) {
+    uint32 dstat;
+    uint32 ctl;
+    uint32 addr2;
+    uint32 flags;
+
+    if (!mikasa_pci_dma_read_long (desc, &dstat) ||
+        !mikasa_pci_dma_read_long (desc + 4, &ctl) ||
+        !mikasa_pci_dma_read_long (desc + 12, &addr2))
+        break;
+    if ((dstat & MIKASA_TULIP_DESC_OWNER) == 0)
+        break;
+    flags = ctl >> 22;
+    if (!mikasa_tulip_dma_write_l (desc, 0))
+        break;
+    completed = TRUE;
+    sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+        "TULIP TX desc %08X flags=%03X\n", desc, flags);
+    desc = mikasa_tulip_next_desc (desc, ctl, addr2, mikasa_tulip_tx_base);
+    if (desc == 0)
+        break;
+    }
+mikasa_tulip_tx_cur = desc;
+if (completed)
+    status |= MIKASA_TULIP_STS_TXINTR | MIKASA_TULIP_STS_NORMAL;
+mikasa_tulip_set_l (MIKASA_TULIP_CSR_STATUS, status);
+return;
+}
+
 static void mikasa_tulip_update_state (void)
 {
 uint32 cmd = mikasa_tulip_read_l (MIKASA_TULIP_CSR_CMD);
@@ -2068,8 +2186,11 @@ uint32 status = mikasa_tulip_read_l (MIKASA_TULIP_CSR_STATUS);
 status = status & ~(MIKASA_TULIP_STS_TXS_MASK | MIKASA_TULIP_STS_RXS_MASK);
 status |= (cmd & MIKASA_TULIP_CMD_TXRUN) ? MIKASA_TULIP_STS_TXS_SUSP :
     MIKASA_TULIP_STS_TXS_STOP;
-status |= (cmd & MIKASA_TULIP_CMD_RXRUN) ? MIKASA_TULIP_STS_RXS_SUSP :
-    MIKASA_TULIP_STS_RXS_STOP;
+if (cmd & MIKASA_TULIP_CMD_RXRUN)
+    status |= (mikasa_tulip_rx_base != 0) ? MIKASA_TULIP_STS_RXS_WAIT :
+        MIKASA_TULIP_STS_RXS_SUSP;
+else
+    status |= MIKASA_TULIP_STS_RXS_STOP;
 mikasa_tulip_set_l (MIKASA_TULIP_CSR_STATUS, status);
 return;
 }
@@ -2078,6 +2199,12 @@ static void mikasa_tulip_reset_regs (void)
 {
 memset (mikasa_tulip_reg, 0, sizeof (mikasa_tulip_reg));
 mikasa_tulip_srom_reset_state ();
+mikasa_tulip_enetrom_idx = 0;
+mikasa_tulip_tx_base = 0;
+mikasa_tulip_tx_cur = 0;
+mikasa_tulip_rx_base = 0;
+mikasa_tulip_rx_cur = 0;
+mikasa_tulip_desc_skip = 0;
 mikasa_tulip_set_l (MIKASA_TULIP_CSR_STATUS,
     MIKASA_TULIP_STS_TXS_STOP | MIKASA_TULIP_STS_RXS_STOP);
 return;
@@ -2113,6 +2240,7 @@ switch (reg) {
             mikasa_tulip_reset_regs ();
             return;
             }
+        mikasa_tulip_desc_skip = ((val >> 2) & 0x1Fu) * 4;
         mikasa_tulip_set_l (reg, val);
         break;
 
@@ -2123,15 +2251,37 @@ switch (reg) {
 
     case MIKASA_TULIP_CSR_CMD:
         mikasa_tulip_set_l (reg, val);
+        if (val & MIKASA_TULIP_CMD_TXRUN)
+            mikasa_tulip_process_tx ();
         mikasa_tulip_update_state ();
         break;
 
     case MIKASA_TULIP_CSR_SIO:
-        mikasa_tulip_write_sio (val);
+        mikasa_tulip_enetrom_idx = 0;
+        mikasa_tulip_set_l (reg, val & 0x7FFFFFFFu);
+        mikasa_tulip_srom_reset_state ();
+        break;
+
+    case MIKASA_TULIP_CSR_TXLIST:
+        mikasa_tulip_tx_base = val & ~3u;
+        mikasa_tulip_tx_cur = mikasa_tulip_tx_base;
+        mikasa_tulip_set_l (reg, mikasa_tulip_tx_base);
+        break;
+
+    case MIKASA_TULIP_CSR_RXLIST:
+        mikasa_tulip_rx_base = val & ~3u;
+        mikasa_tulip_rx_cur = mikasa_tulip_rx_base;
+        mikasa_tulip_set_l (reg, mikasa_tulip_rx_base);
+        mikasa_tulip_update_state ();
         break;
 
     case MIKASA_TULIP_CSR_TXPOLL:
+        mikasa_tulip_process_tx ();
+        mikasa_tulip_update_state ();
+        break;
+
     case MIKASA_TULIP_CSR_RXPOLL:
+        mikasa_tulip_update_state ();
         break;
 
     default:
@@ -2803,6 +2953,16 @@ mikasa_ncr_reg[MIKASA_NCR_REG_SBDL] = val;
 return;
 }
 
+static void mikasa_ncr_signal_phase_mismatch (uint32 expected,
+    uint32 sampled)
+{
+mikasa_ncr_latch_phase (expected, sampled);
+mikasa_ncr_set_sip (MIKASA_NCR_SIST0_MIA, 0);
+sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+    "NCR phase mismatch expected=%u sampled=%u\n", expected, sampled);
+return;
+}
+
 static void mikasa_ncr_phase_mismatch (const MIKASA_NCR_DMA_LIST *list,
     uint32 expected, uint32 sampled)
 {
@@ -2811,10 +2971,7 @@ if (list->count != 0) {
         list->seg[0].count, 0);
     expected = mikasa_ncr_op_phase (list->seg[0].op);
     }
-mikasa_ncr_latch_phase (expected, sampled);
-mikasa_ncr_set_sip (MIKASA_NCR_SIST0_MIA, 0);
-sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
-    "NCR phase mismatch expected=%u sampled=%u\n", expected, sampled);
+mikasa_ncr_signal_phase_mismatch (expected, sampled);
 return;
 }
 
@@ -3379,11 +3536,11 @@ return;
 static t_bool mikasa_ncr_script_condition (uint32 op,
     MIKASA_NCR_SCRIPT_STATE *state)
 {
-t_bool jump_if = (op & MIKASA_NCR_TC_JUMP_IF) ? TRUE : FALSE;
+t_bool want_true = (op & MIKASA_NCR_TC_IFTRUE) ? TRUE : FALSE;
 t_bool do_it;
 
 if (op & MIKASA_NCR_TC_CARRY)
-    return state->carry == jump_if;
+    return state->carry == want_true;
 if ((op & (MIKASA_NCR_TC_DATA | MIKASA_NCR_TC_PHASE)) != 0) {
     do_it = TRUE;
     if (op & MIKASA_NCR_TC_DATA) {
@@ -3391,19 +3548,19 @@ if ((op & (MIKASA_NCR_TC_DATA | MIKASA_NCR_TC_PHASE)) != 0) {
         uint8 data = (uint8) op;
         t_bool match = ((state->sfbr & ~mask) == (data & ~mask));
 
-        if (match != jump_if)
+        if (match != want_true)
             do_it = FALSE;
         }
     if (op & MIKASA_NCR_TC_PHASE) {
         t_bool match = (state->phase != MIKASA_NCR_SCRIPT_NO_PHASE) &&
             (state->phase == mikasa_ncr_op_phase (op));
 
-        if (match != jump_if)
+        if (match != want_true)
             do_it = FALSE;
         }
     return do_it;
     }
-return jump_if;
+return TRUE;
 }
 
 static t_bool mikasa_ncr_advance_script (uint32 *dsp, uint32 op, uint32 arg,
@@ -3447,6 +3604,29 @@ if ((op & MIKASA_NCR_BM_TYPE_MASK) == MIKASA_NCR_BM_TYPE) {
         if (state->side_effects)
             mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_IID, arg);
         return FALSE;
+        }
+    if (state->side_effects &&
+        (state->phase == mikasa_ncr_op_phase (op)) &&
+        ((state->phase == MIKASA_NCR_PHASE_STS) ||
+        (state->phase == MIKASA_NCR_PHASE_MSG_IN))) {
+        uint32 count;
+        uint32 addr;
+
+        if (!mikasa_ncr_resolve_move (mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA),
+            op, arg, &count, &addr))
+            return FALSE;
+        if (count != 0) {
+            if (!mikasa_pci_dma_write_byte (addr, state->sfbr))
+                return FALSE;
+            mikasa_ncr_set_sfbr (state->sfbr);
+            mikasa_ncr_finish_move (op, addr, count, 1);
+            if (state->phase == MIKASA_NCR_PHASE_STS) {
+                state->phase = MIKASA_NCR_PHASE_MSG_IN;
+                state->sfbr = 0;
+                mikasa_ncr_latch_phase (MIKASA_NCR_PHASE_STS,
+                    MIKASA_NCR_PHASE_MSG_IN);
+                }
+            }
         }
     *dsp = next;
     return TRUE;
@@ -3744,21 +3924,9 @@ if (mikasa_ncr_find_phase_int (dsp, MIKASA_NCR_SCRIPT_NO_PHASE, FALSE, &dsps))
 return MIKASA_NCR_DSPS_OK;
 }
 
-static t_bool mikasa_ncr_find_status_int_dsps (uint32 dsp, uint32 *dsps)
-{
-if (mikasa_ncr_find_phase_int (dsp, MIKASA_NCR_PHASE_MSG_IN, TRUE, dsps))
-    return TRUE;
-if (mikasa_ncr_find_phase_int (dsp, MIKASA_NCR_PHASE_STS, TRUE, dsps))
-    return TRUE;
-if (mikasa_ncr_find_phase_int (dsp, MIKASA_NCR_SCRIPT_NO_PHASE, FALSE, dsps))
-    return TRUE;
-return FALSE;
-}
-
 static void mikasa_ncr_clear_transaction (void)
 {
 memset (&mikasa_ncr_transaction, 0, sizeof (mikasa_ncr_transaction));
-mikasa_ncr_transaction.status_dsps = MIKASA_NCR_DSPS_OK;
 return;
 }
 
@@ -3803,11 +3971,6 @@ mikasa_ncr_transaction.dsa = dsa;
 mikasa_ncr_transaction.target = target;
 mikasa_ncr_transaction.data_phase = data_phase;
 mikasa_ncr_transaction.status = status;
-mikasa_ncr_transaction.status_dsps_valid =
-    mikasa_ncr_find_status_int_dsps (dsp,
-        &mikasa_ncr_transaction.status_dsps);
-if (!mikasa_ncr_transaction.status_dsps_valid)
-    mikasa_ncr_transaction.status_dsps = MIKASA_NCR_DSPS_OK;
 return;
 }
 
@@ -3920,37 +4083,41 @@ switch (cdb[0]) {
         }
 }
 
-static void mikasa_ncr_write_status_msg (uint32 dsp, uint32 dsa,
-    uint8 status)
+static t_bool mikasa_ncr_write_phase_byte (uint32 dsp, uint32 dsa,
+    uint32 phase, uint32 def_off, uint8 val)
 {
 uint32 count;
 uint32 addr;
-uint32 sts_off;
-uint32 msg_off;
+uint32 off;
 
-if (!mikasa_ncr_find_table_move (dsp, MIKASA_NCR_PHASE_STS, &sts_off))
-    sts_off = 0x24;
-if (mikasa_ncr_table_entry (dsa, sts_off, &count, &addr) && (count != 0)) {
-    (void) mikasa_pci_dma_write_byte (addr, status);
-    mikasa_ncr_set_sfbr (status);
-    mikasa_ncr_finish_move (mikasa_ncr_move_op_for_phase (
-        MIKASA_NCR_PHASE_STS), addr, count, 1);
-    }
-if (mikasa_ncr_find_table_move (dsp, MIKASA_NCR_PHASE_MSG_IN, &msg_off) &&
-    mikasa_ncr_table_entry (dsa, msg_off, &count, &addr) && (count != 0)) {
-    (void) mikasa_pci_dma_write_byte (addr, 0);
-    mikasa_ncr_set_sfbr (0);
-    mikasa_ncr_finish_move (mikasa_ncr_move_op_for_phase (
-        MIKASA_NCR_PHASE_MSG_IN), addr, count, 1);
-    return;
-    }
-if (mikasa_ncr_find_direct_move (dsp, MIKASA_NCR_PHASE_MSG_IN, &count, &addr) &&
+if (!mikasa_ncr_find_table_move (dsp, phase, &off))
+    off = def_off;
+if ((off != M32) && mikasa_ncr_table_entry (dsa, off, &count, &addr) &&
     (count != 0)) {
-    (void) mikasa_pci_dma_write_byte (addr, 0);
-    mikasa_ncr_set_sfbr (0);
-    mikasa_ncr_finish_move (mikasa_ncr_move_op_for_phase (
-        MIKASA_NCR_PHASE_MSG_IN), addr, count, 1);
+    (void) mikasa_pci_dma_write_byte (addr, val);
+    mikasa_ncr_set_sfbr (val);
+    mikasa_ncr_finish_move (mikasa_ncr_move_op_for_phase (phase), addr,
+        count, 1);
+    return TRUE;
     }
+if (mikasa_ncr_find_direct_move (dsp, phase, &count, &addr) &&
+    (count != 0)) {
+    (void) mikasa_pci_dma_write_byte (addr, val);
+    mikasa_ncr_set_sfbr (val);
+    mikasa_ncr_finish_move (mikasa_ncr_move_op_for_phase (phase), addr,
+        count, 1);
+    return TRUE;
+    }
+return FALSE;
+}
+
+static void mikasa_ncr_write_status_msg (uint32 dsp, uint32 dsa,
+    uint8 status)
+{
+(void) mikasa_ncr_write_phase_byte (dsp, dsa, MIKASA_NCR_PHASE_STS, 0x24,
+    status);
+(void) mikasa_ncr_write_phase_byte (dsp, dsa, MIKASA_NCR_PHASE_MSG_IN, M32,
+    0);
 return;
 }
 
@@ -4313,13 +4480,6 @@ switch (cdb[0]) {
     case 0x1E:                                      /* PREVENT/ALLOW */
         return TRUE;
 
-    case 0x12:                                      /* INQUIRY */
-        return ((cdb[1] & 1) == 0) && (cdb[4] != 0) &&
-            (data->bytes != 0);
-
-    case 0x25:                                      /* READ CAPACITY(10) */
-        return data->bytes != 0;
-
     default:
         return FALSE;
         }
@@ -4675,7 +4835,29 @@ switch (cdb[0]) {
         }
 }
 
-static t_bool mikasa_ncr_run_control_script (uint32 dsp)
+static t_bool mikasa_ncr_scsi_no_lun_cmd (uint32 unit, const uint8 *cdb,
+    const MIKASA_NCR_DMA_LIST *data, uint8 *status)
+{
+uint8 buf[36];
+uint32 len;
+
+if ((cdb[0] == 0x12) && ((cdb[1] & 1) == 0) && (cdb[4] != 0) &&
+    (data->bytes != 0)) {
+    memset (buf, 0, sizeof (buf));
+    buf[0] = 0x7F;                         /* no logical unit present */
+    buf[4] = 31;
+    len = mikasa_ncr_min3 (data->bytes, cdb[4], sizeof (buf));
+    mikasa_ncr_clear_sense (unit);
+    *status = 0;
+    return mikasa_ncr_write_scsi_data (data, buf, len);
+    }
+mikasa_ncr_set_sense (unit, 0x05, 0x25, 0x00);
+*status = 2;
+return mikasa_ncr_write_dma_list_zero (data);
+}
+
+static t_bool mikasa_ncr_run_control_script_phase (uint32 dsp, uint32 phase,
+    uint8 sfbr)
 {
 uint32 stack[MIKASA_NCR_SCRIPT_STACK];
 MIKASA_NCR_SCRIPT_STATE state;
@@ -4684,8 +4866,8 @@ uint32 i;
 
 memset (stack, 0, sizeof (stack));
 memset (&state, 0, sizeof (state));
-state.phase = MIKASA_NCR_SCRIPT_NO_PHASE;
-state.sfbr = mikasa_ncr_reg[MIKASA_NCR_REG_SFBR];
+state.phase = phase;
+state.sfbr = sfbr;
 state.side_effects = TRUE;
 for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
     uint32 op;
@@ -4708,6 +4890,12 @@ for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
         return mikasa_ncr_wait_reselect ? TRUE : FALSE;
     }
 return FALSE;
+}
+
+static t_bool mikasa_ncr_run_control_script (uint32 dsp)
+{
+return mikasa_ncr_run_control_script_phase (dsp, MIKASA_NCR_SCRIPT_NO_PHASE,
+    mikasa_ncr_reg[MIKASA_NCR_REG_SFBR]);
 }
 
 static t_bool mikasa_ncr_run_script (uint32 dsp)
@@ -4790,16 +4978,25 @@ sim_debug (MIKASA_DBG_PCI, &mikasa_dev, " data_segs=%u/%u\n", data.count,
     data.bytes);
 
 if (mikasa_ncr_transaction.lun != 0) {
-    mikasa_ncr_set_sense (target, 0x05, 0x25, 0x00);
-    status = 2;
-    (void) mikasa_ncr_write_dma_list_zero (&data);
+    if (!mikasa_ncr_scsi_no_lun_cmd (target, cdb, &data, &status)) {
+        status = 2;
+        (void) mikasa_ncr_write_dma_list_zero (&data);
+        }
     }
 else if (!mikasa_ncr_scsi_cmd (target, cdb, &data, &status)) {
     status = 2;
     (void) mikasa_ncr_write_dma_list_zero (&data);
     }
 if (data.bytes != 0) {
+    uint32 data_resid;
+
     mikasa_ncr_defer_status_phase (dsp, dsa, target, data_phase, status);
+    data_resid = mikasa_ncr_reg_l (MIKASA_NCR_REG_DBC) &
+        MIKASA_NCR_BM_COUNT_MASK;
+    if (data_resid != 0) {
+        mikasa_ncr_signal_phase_mismatch (data_phase, MIKASA_NCR_PHASE_STS);
+        return TRUE;
+        }
     if (!mikasa_ncr_last_move_phase (data_phase)) {
         mikasa_ncr_phase_mismatch (&data, data_phase,
             MIKASA_NCR_PHASE_STS);
@@ -4885,16 +5082,19 @@ return TRUE;
 static void mikasa_ncr_start_script (uint32 dsp)
 {
 if (mikasa_ncr_transaction.status_pending) {
-    uint32 dsa = mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA);
-    uint32 status_dsps = mikasa_ncr_transaction.status_dsps_valid ?
-        mikasa_ncr_transaction.status_dsps : mikasa_ncr_status_int_dsps (dsp);
+    uint8 status = mikasa_ncr_transaction.status;
 
-    if (dsa == 0)
-        dsa = mikasa_ncr_transaction.dsa;
-    mikasa_ncr_write_status_msg (dsp, dsa, mikasa_ncr_transaction.status);
-    mikasa_ncr_set_connected (FALSE);
+    mikasa_ncr_transaction.status_pending = FALSE;
+    mikasa_ncr_latch_phase (MIKASA_NCR_PHASE_STS,
+        MIKASA_NCR_PHASE_STS);
+    mikasa_ncr_trace_script (dsp);
+    if (!mikasa_ncr_run_control_script_phase (dsp,
+        MIKASA_NCR_PHASE_STS, status)) {
+        mikasa_ncr_set_connected (FALSE);
+        if (!mikasa_ncr_wait_reselect)
+            mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_BF, dsp);
+        }
     mikasa_ncr_clear_transaction ();
-    mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SIR, status_dsps);
     }
 else {
     mikasa_ncr_trace_script (dsp);

@@ -177,14 +177,26 @@
   `SCSI_DEV` disk units, and attach/detach DKA images through the common
   `sim_disk` backend while preserving the exact recovered image capacities.
 - [x] Add a Mikasa NCR `sim_scsi` bus and route safe SCSI-2 commands through
-  it (`TEST UNIT READY`, standard `INQUIRY`, `READ CAPACITY(10)`,
-  reserve/release, start/stop, and prevent/allow), while keeping VMS-sensitive
-  READ/WRITE, MODE SENSE, VPD, and REQUEST SENSE paths in the local shim.
+  it (`TEST UNIT READY`, reserve/release, start/stop, and prevent/allow),
+  while keeping SRM/VMS-sensitive `INQUIRY`, `READ CAPACITY`, READ/WRITE,
+  MODE SENSE, VPD, and REQUEST SENSE paths in the local shim.
+- [x] Correct NCR SCRIPTS transfer-control condition polarity: in fetched
+  opcodes bit 19 represents the encoded `IFTRUE` sense, while the cleared bit
+  is the XOR-produced `IFFALSE` form used by real scripts.
+- [x] Execute deferred NCR status/message completion by running the firmware
+  control script with STATUS as the current phase, then transition the script
+  state to MESSAGE IN after the status byte instead of synthesizing an
+  intermediate `DSPS`.
+- [x] Return a valid standard INQUIRY "no logical unit present" response for
+  non-zero LUNs instead of treating every non-zero LUN INQUIRY as check
+  condition.
 - [x] Add DECchip 21040/Tulip PCI/CSR shell.
 - [x] Add DECchip 21040 software reset, CSR5 write-one-to-clear status,
   CSR6 run-state reporting, and byte/word CSR write merging.
 - [x] Add DECchip 21040 CSR9 EEPROM/SROM bit-bang reads with a stable DEC OUI
   MAC address for early Ethernet driver probes.
+- [x] Add DECchip 21040 legacy 32-byte Ethernet Address ROM reads and enough
+  transmit-descriptor ownership completion for SRM setup frames to clear.
 - [x] Re-run SRM ROM smoke after the current APECS/NCR hardware batch; it
   still reaches the Mikasa `V5.4-101` banner and sees pka/ewa.
 - [x] Re-run SRM ROM smoke after the NCR progress/status and extended SCSI
@@ -286,6 +298,11 @@
 - [x] Re-run SRM ROM smoke after initial `sim_scsi` wiring; all four ODS2
   dumps attach without size errors, and SRM still reaches `V5.4-101` and
   detects pka/ewa.
+- [x] Re-run SRM ROM smoke after fixing NCR SCRIPTS condition polarity and
+  deferred STATUS/MESSAGE handling; SRM still reaches `V5.4-101`, pka/ewa are
+  detected, and the old post-status `DSTAT.BF`/`DSPS=0x401427F0` failure is
+  gone. The remaining blocker is repeated SCSI `INQUIRY` discovery loops with
+  no `READ CAPACITY` yet.
 - [x] Re-run SRM ROM smoke after PIC/ELCR edge-vs-level handling; it still
   reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
@@ -296,12 +313,18 @@
 - [ ] Replace the NCR SCRIPTS scanner with a real executor for conditional
   control flow, phase mismatch, disconnect/reselect, scatter/gather chaining,
   and full memory/register side effects. The current helper scans now share
-  one pass, but command execution is still a high-level SCSI transaction
-  frontend rather than an instruction-by-instruction 53C810 engine.
+  one pass and deferred STATUS/MESSAGE control scripts now execute through the
+  script interpreter, but command execution is still a high-level SCSI
+  transaction frontend rather than a complete instruction-by-instruction
+  53C810 engine.
 - [ ] Continue expanding the NCR disk path onto SIMH `sim_scsi` where it fits.
-  The current branch has the shared bus/device/attach layer and routes safe
-  status/probe commands through `sim_scsi`, but READ/WRITE, MODE SENSE, VPD,
-  REQUEST SENSE, and extended VMS probe commands still use the local shim.
+  The current branch has the shared bus/device/attach layer and routes only
+  conservative no-data status commands through `sim_scsi`; SRM/VMS-sensitive
+  probe and disk commands still use the local shim.
+- [ ] Debug the current SRM post-banner discovery loop: after the latest NCR
+  fixes SRM repeatedly issues standard `INQUIRY` to targets 0-3 and LUNs 0-7,
+  then select-times-out targets 4-6. It has not yet advanced to `READ
+  CAPACITY` or a visible `>>>` prompt.
 - [ ] Complete APECS/DECchip 21071 behavior beyond the current register shells,
   especially actually raising error causes, remaining HAE/config details, and
   DMA corner cases.
@@ -312,7 +335,8 @@
   defaults such as console mode, auto_action, boot device, and boot flags.
 - [ ] Improve OCP/Halt/Ctrl-P behavior enough for SRM console transitions.
 - [ ] Decide whether VGA/Cirrus probing is required for the real AS1000 path.
-- [ ] Implement real DECchip 21040 packet I/O and Tulip descriptor processing.
+- [ ] Implement real DECchip 21040 receive path, packet I/O, and full
+  descriptor processing beyond the current SRM setup-frame transmit shell.
 - [ ] Re-run SRM/APB smoke tests after the next hardware batch.
 - [ ] Continue the direct-APB `SYSBOOT.EXE;2` lookup investigation under
   `[SYS0.SYSEXE]` and `[SYS0.SYSCOMMON.SYSEXE]`.
@@ -455,7 +479,8 @@ the real path works.
     data-out parameter lists for harmless no-op disk commands;
   - current branch links SIMH `sim_scsi`, exposes DKA targets as `SCSI_DEV`
     disk units, uses the common `sim_disk` attach/detach backend, and routes
-    safe status/probe commands through a Mikasa NCR `sim_scsi` bus;
+    only conservative no-data status commands through a Mikasa NCR `sim_scsi`
+    bus;
   - continue moving compatible READ/WRITE and SCSI probe paths to `sim_scsi`
     only where the common backend can preserve VMS-visible behavior;
   - keep target-absent timeout behavior clean with and without attached disks.

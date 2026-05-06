@@ -195,11 +195,13 @@ Not implemented yet:
   timeout, reset, and abort. The low-level `SBCL` bus lines now assert `BSY`
   while connected and clear bus-control lines when the bus becomes free.
   Pending status/message completion is retained in an explicit NCR transaction
-  state with target, `DSP`, `DSA`, data phase, status byte, and saved
-  completion `DSPS`. When a command has a pending DATA
-  phase but the target moves directly to STATUS, `SIST0.MIA` is latched with
-  the expected and sampled phases visible through the SCSI phase registers,
-  and STATUS/MESSAGE remain pending for the next script restart.
+  state with target, `DSP`, `DSA`, data phase, and status byte. When a command
+  has a pending DATA phase but the target moves directly to STATUS,
+  `SIST0.MIA` is latched with the expected and sampled phases visible through
+  the SCSI phase registers. The next script restart now runs the firmware's
+  own STATUS/MESSAGE control script with STATUS as the current phase, then
+  transitions to MESSAGE IN after the status byte and lets the script reach
+  its own completion `INT`.
   The local SCSI disk path also handles extended probe/read commands such as
   `READ(12)`, `WRITE(12)`, `REPORT LUNS`, `READ CAPACITY(16)`, `READ(16)`,
   `WRITE(16)`, `WRITE AND VERIFY(16)`, `VERIFY(16)`, and basic INQUIRY EVPD
@@ -214,15 +216,17 @@ Not implemented yet:
   control pages. Changeable-page MODE SENSE probes (`PC=1`) keep the page
   layouts but return zeroed value fields.
   The DKA targets are now also registered as SIMH `sim_scsi` disk devices and
-  attach through the common `sim_disk` backend. The NCR frontend routes safe
-  status/probe commands through a Mikasa `sim_scsi` bus while keeping the
-  VMS-sensitive READ/WRITE, MODE SENSE, VPD, and REQUEST SENSE behavior in the
-  local shim until the common backend can match it.
+  attach through the common `sim_disk` backend. The NCR frontend routes only
+  conservative no-data status commands through a Mikasa `sim_scsi` bus while
+  keeping SRM/VMS-sensitive INQUIRY, READ CAPACITY, READ/WRITE, MODE SENSE,
+  VPD, and REQUEST SENSE behavior in the local shim until the common backend
+  can match it.
 - Full Ethernet, VGA, full NVRAM, and multiprocessor support. A DECchip 21040
   PCI/CSR shell exists so firmware and OS probes see a plausible DEC Ethernet
-  device, including basic reset/status/run-state behavior, but packet I/O is
-  not implemented yet. CSR9 EEPROM/SROM bit-bang reads return a deterministic
-  DEC OUI station address for early Ethernet driver probes.
+  device, including basic reset/status/run-state behavior, legacy Ethernet
+  Address ROM reads, CSR9 EEPROM/SROM reads, and minimal transmit-descriptor
+  ownership completion for SRM setup frames, but real packet I/O is not
+  implemented yet.
 - A complete SRM-compatible firmware execution environment. The real SRM image
   now reaches the SRM banner and receives serial input, but it does not reach
   an SRM prompt yet.
@@ -487,16 +491,18 @@ debug tracing, the PC cycles inside the ROM decompressor around `0x900301` and
    raw-IDSEL `7` Intel 82375EB PCI/EISA bridge, the raw-IDSEL `6` NCR 53C810
    PCI configuration/register window, ISA DMA/page-register storage, an FDC
    shell, a raw-IDSEL `11` DECchip 21040 PCI/CSR shell with basic
-   reset/status/run-state handling and CSR9 EEPROM/SROM reads,
+   reset/status/run-state handling, legacy Address ROM reads, CSR9
+   EEPROM/SROM reads, and setup-frame transmit-descriptor completion,
    ELCR/PIC initialization and auto-EOI handling, and a minimal 8259 PIC/COM1
    receive interrupt path.
 
 6. Continue the NCR/Symbios 53C810 frontend.
    SIMH has a common SCSI backend, but no complete 53C810 PCI DMA frontend in
    this tree. The implementation must be written cleanly for SIMH licensing; do
-   not copy GPL code from AXPbox. The immediate missing pieces are conditional
-   SCRIPTS execution, phase-mismatch paths, and wiring the transfer layer to
-   SIMH `sim_scsi` where practical.
+   not copy GPL code from AXPbox. The immediate missing pieces are completing
+   instruction-by-instruction SCRIPTS execution, resolving the repeated SRM
+   INQUIRY discovery loop, and wiring more of the transfer layer to SIMH
+   `sim_scsi` where practical.
 
 7. Wire the 53C810 frontend to the four DKA images.
    Once APB switches from firmware disk reads to OS disk I/O, the current raw
