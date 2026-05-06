@@ -203,6 +203,8 @@
 #define MIKASA_NCR_DSPS_DAT_IN      9
 #define MIKASA_NCR_TRACE_INSNS      64
 #define MIKASA_NCR_TRACE_LIMIT      8
+#define MIKASA_NCR_SCRIPT_SCAN_INSNS 128
+#define MIKASA_NCR_SCRIPT_STACK     8
 #define MIKASA_NCR_BM_TYPE_MASK     0xC0000000u
 #define MIKASA_NCR_BM_TYPE          0x00000000u
 #define MIKASA_NCR_BM_TABLE         0x10000000u
@@ -214,6 +216,15 @@
 #define MIKASA_NCR_PHASE_CMD        2
 #define MIKASA_NCR_PHASE_STS        3
 #define MIKASA_NCR_PHASE_MSG_IN     7
+#define MIKASA_NCR_SCR_SEL_ABS      0x40000000u
+#define MIKASA_NCR_SCR_SEL_ABS_ATN  0x41000000u
+#define MIKASA_NCR_SCR_SEL_TBL      0x42000000u
+#define MIKASA_NCR_SCR_SEL_TBL_ATN  0x43000000u
+#define MIKASA_NCR_SCR_JUMP         0x80080000u
+#define MIKASA_NCR_SCR_JUMPR        0x80880000u
+#define MIKASA_NCR_SCR_CALL         0x88080000u
+#define MIKASA_NCR_SCR_CALLR        0x88880000u
+#define MIKASA_NCR_SCR_RETURN       0x90080000u
 #define MIKASA_ISA_DMA1             0x000
 #define MIKASA_ISA_PIC1             0x020
 #define MIKASA_ISA_CFG_INDEX        0x022
@@ -1615,8 +1626,10 @@ return;
 static t_bool mikasa_ncr_table_entry (uint32 dsa, uint32 off, uint32 *count,
     uint32 *addr)
 {
-return mikasa_pci_dma_read_long (dsa + off, count) &&
-    mikasa_pci_dma_read_long (dsa + off + 4, addr);
+uint32 table = (dsa + off) & ~3u;
+
+return mikasa_pci_dma_read_long (table, count) &&
+    mikasa_pci_dma_read_long (table + 4, addr);
 }
 
 static t_bool mikasa_ncr_read_dma_buf (uint32 addr, uint8 *buf, uint32 len)
@@ -1666,17 +1679,108 @@ uint32 m = (a < b) ? a : b;
 return (m < c) ? m : c;
 }
 
+static uint32 mikasa_ncr_sext24 (uint32 val)
+{
+val = val & 0x00FFFFFFu;
+return (val & 0x00800000u) ? (val | 0xFF000000u) : val;
+}
+
+static t_bool mikasa_ncr_read_script (uint32 dsp, uint32 *op, uint32 *arg)
+{
+return mikasa_pci_dma_read_long (dsp, op) &&
+    mikasa_pci_dma_read_long (dsp + 4, arg);
+}
+
+static uint32 mikasa_ncr_next_script_addr (uint32 dsp, uint32 op)
+{
+return dsp + (((op & MIKASA_NCR_BM_TYPE_MASK) == 0xC0000000u) ? 12 : 8);
+}
+
+static void mikasa_ncr_advance_script (uint32 *dsp, uint32 op, uint32 arg,
+    uint32 next, uint32 *stack, uint32 *sp)
+{
+switch (op) {
+    case MIKASA_NCR_SCR_JUMP:
+        *dsp = arg;
+        return;
+
+    case MIKASA_NCR_SCR_JUMPR:
+        *dsp = next + mikasa_ncr_sext24 (arg);
+        return;
+
+    case MIKASA_NCR_SCR_CALL:
+        if (*sp < MIKASA_NCR_SCRIPT_STACK)
+            stack[(*sp)++] = next;
+        *dsp = arg;
+        return;
+
+    case MIKASA_NCR_SCR_CALLR:
+        if (*sp < MIKASA_NCR_SCRIPT_STACK)
+            stack[(*sp)++] = next;
+        *dsp = next + mikasa_ncr_sext24 (arg);
+        return;
+
+    case MIKASA_NCR_SCR_RETURN:
+        if (*sp != 0) {
+            *dsp = stack[--(*sp)];
+            return;
+            }
+        break;
+        }
+
+*dsp = next;
+return;
+}
+
+static t_bool mikasa_ncr_find_select (uint32 dsp, uint32 dsa, uint32 *target)
+{
+uint32 stack[MIKASA_NCR_SCRIPT_STACK];
+uint32 sp = 0;
+uint32 i;
+
+for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
+    uint32 op;
+    uint32 arg;
+    uint32 next;
+
+    if (!mikasa_ncr_read_script (dsp, &op, &arg))
+        return FALSE;
+    switch (op & 0xFF000000u) {
+        case MIKASA_NCR_SCR_SEL_ABS:
+        case MIKASA_NCR_SCR_SEL_ABS_ATN:
+            *target = (op >> 16) & 0x0Fu;
+            return TRUE;
+
+        case MIKASA_NCR_SCR_SEL_TBL:
+        case MIKASA_NCR_SCR_SEL_TBL_ATN: {
+            uint32 sel;
+            uint32 table = (dsa + mikasa_ncr_sext24 (op)) & ~3u;
+
+            if (!mikasa_pci_dma_read_long (table, &sel))
+                return FALSE;
+            *target = (sel >> 16) & 0x0Fu;
+            return TRUE;
+            }
+            }
+    next = mikasa_ncr_next_script_addr (dsp, op);
+    mikasa_ncr_advance_script (&dsp, op, arg, next, stack, &sp);
+    }
+return FALSE;
+}
+
 static t_bool mikasa_ncr_find_direct_move (uint32 dsp, uint32 phase,
     uint32 *count, uint32 *addr)
 {
-uint32 off;
+uint32 stack[MIKASA_NCR_SCRIPT_STACK];
+uint32 sp = 0;
+uint32 i;
 
-for (off = 0; off < 0x400; off += 8) {
+for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
     uint32 op;
     uint32 arg;
+    uint32 next;
 
-    if (!mikasa_pci_dma_read_long (dsp + off, &op) ||
-        !mikasa_pci_dma_read_long (dsp + off + 4, &arg))
+    if (!mikasa_ncr_read_script (dsp, &op, &arg))
         return FALSE;
     if (((op & MIKASA_NCR_BM_TYPE_MASK) == MIKASA_NCR_BM_TYPE) &&
         ((op & MIKASA_NCR_BM_TABLE) == 0) &&
@@ -1687,8 +1791,8 @@ for (off = 0; off < 0x400; off += 8) {
         *addr = arg;
         return TRUE;
         }
-    if ((op & MIKASA_NCR_BM_TYPE_MASK) == 0xC0000000u)
-        off += 4;
+    next = mikasa_ncr_next_script_addr (dsp, op);
+    mikasa_ncr_advance_script (&dsp, op, arg, next, stack, &sp);
     }
 return FALSE;
 }
@@ -1696,24 +1800,26 @@ return FALSE;
 static t_bool mikasa_ncr_find_table_move (uint32 dsp, uint32 phase,
     uint32 *table_off)
 {
-uint32 off;
+uint32 stack[MIKASA_NCR_SCRIPT_STACK];
+uint32 sp = 0;
+uint32 i;
 
-for (off = 0; off < 0x400; off += 8) {
+for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
     uint32 op;
     uint32 arg;
+    uint32 next;
 
-    if (!mikasa_pci_dma_read_long (dsp + off, &op) ||
-        !mikasa_pci_dma_read_long (dsp + off + 4, &arg))
+    if (!mikasa_ncr_read_script (dsp, &op, &arg))
         return FALSE;
     if (((op & MIKASA_NCR_BM_TYPE_MASK) == MIKASA_NCR_BM_TYPE) &&
         ((op & MIKASA_NCR_BM_TABLE) != 0) &&
         (((op & MIKASA_NCR_BM_PHASE_MASK) >>
           MIKASA_NCR_BM_PHASE_SHIFT) == phase)) {
-        *table_off = arg;
+        *table_off = mikasa_ncr_sext24 (arg);
         return TRUE;
         }
-    if ((op & MIKASA_NCR_BM_TYPE_MASK) == 0xC0000000u)
-        off += 4;
+    next = mikasa_ncr_next_script_addr (dsp, op);
+    mikasa_ncr_advance_script (&dsp, op, arg, next, stack, &sp);
     }
 return FALSE;
 }
@@ -1853,7 +1959,6 @@ switch (cdb[0]) {
 
 static t_bool mikasa_ncr_run_script (uint32 dsp)
 {
-uint32 script0;
 uint32 dsa = mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA);
 uint32 cmd_count;
 uint32 cmd_addr;
@@ -1866,11 +1971,8 @@ uint32 i;
 uint8 cdb[16];
 uint8 status;
 
-if (!mikasa_pci_dma_read_long (dsp, &script0))
+if (!mikasa_ncr_find_select (dsp, dsa, &target))
     return FALSE;
-if ((script0 & 0xFF000000u) != 0x41000000u)
-    return FALSE;
-target = (script0 >> 16) & 0xFF;
 if ((target >= MIKASA_DKA_UNITS) || ((dka_unit[target].flags & UNIT_ATT) == 0)) {
     sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
         "NCR target %u select timeout\n", target);
