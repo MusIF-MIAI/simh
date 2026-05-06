@@ -49,6 +49,8 @@
 - [x] Raise NCR `DSTAT.IID` for fetched zero-byte direct Block Move and Memory
   Move instructions, and clear selection-disconnect expectation after select
   timeouts.
+- [x] Raise NCR `DSTAT.IID` when SCRIPTS Load/Store memory targets the
+  controller's own memory-mapped register window.
 - [x] Treat NCR SCRIPTS `INTFLY` as a non-halting interrupt-on-the-fly path and
   expose/clear `ISTAT.INTF`.
 - [x] Keep NCR `INTFLY` side effects out of auxiliary script scans so debug
@@ -211,6 +213,8 @@
   reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after reflecting NCR connected/bus-free state in
   `SBCL`; it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after detecting SCRIPTS Load/Store-to-register
+  `DSTAT.IID`; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -276,6 +280,8 @@ the real path works.
   - current branch raises `DSTAT.IID` for zero-byte direct Block Move and
     Memory Move instructions, and clears `SCNTL2.SDU` after selection
     timeouts;
+  - current branch raises `DSTAT.IID` when SCRIPTS Load/Store memory targets
+    the controller's own memory-mapped register window;
   - current branch collects multiple data-phase MOVE entries and reads/writes
     SCSI payloads across scatter/gather segment lists;
   - current branch updates visible SCRIPTS/DMA progress registers for handled

@@ -801,6 +801,8 @@ static void mikasa_ncr_promote_interrupt_stack (void);
 static void mikasa_ncr_clear_transaction (void);
 static void mikasa_ncr_clear_wait_reselect (void);
 static void mikasa_ncr_set_wait_reselect (uint32 dsp, uint32 jump);
+static t_bool mikasa_ncr_bar_reg (uint32 addr, uint32 bar, uint32 mask,
+    uint32 *reg);
 static t_bool mikasa_apb_iobox_read (uint32 unit, t_uint64 lbn,
     t_uint64 addr);
 static t_bool mikasa_apb_iobox_write (uint32 unit, t_uint64 lbn,
@@ -3096,8 +3098,14 @@ uint32 reg = (op >> 16) & 0x7F;
 uint32 count = op & 7;
 uint32 memaddr = (op & MIKASA_NCR_LS_DSA_REL) ?
     mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA) + mikasa_ncr_sext24 (arg) : arg;
+uint32 regaddr;
 uint32 i;
 
+if (mikasa_ncr_bar_reg (memaddr, 0x14, 0xFFFFFFFFu, &regaddr)) {
+    if (state->side_effects)
+        mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_IID, arg);
+    return FALSE;
+    }
 for (i = 0; i < count; i++) {
     uint32 r = (reg + i) & (MIKASA_NCR_REG_SIZE - 1);
     uint8 val;

@@ -107,7 +107,9 @@ Not implemented yet:
   `DSTAT`, `SIST0`, and `SIST1` now have a second-level interrupt stack, with
   the stacked `DSPS` value preserved for DMA interrupt causes.
   Zero-byte direct Block Move and Memory Move instructions raise `DSTAT.IID`,
-  and select timeouts clear the expected-disconnect bit.
+  SCRIPTS Load/Store memory accesses into the controller's own memory-mapped
+  register window also raise `DSTAT.IID`, and select timeouts clear the
+  expected-disconnect bit.
   `INTFLY` is treated as non-halting and sets `ISTAT.INTF`, with CPU
   write-one clearing, while auxiliary script scans suppress `INTFLY` side
   effects and no longer clobber visible `DBC`/`DSP`/`DSPS` fetch-progress
