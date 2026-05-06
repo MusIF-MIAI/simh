@@ -328,6 +328,7 @@
 #define MIKASA_NCR_DSTAT_SIR        0x04
 #define MIKASA_NCR_DSTAT_SSI        0x08
 #define MIKASA_NCR_DSTAT_ABRT       0x10
+#define MIKASA_NCR_DSTAT_IID        0x01
 #define MIKASA_NCR_DSTAT_IRQS       0x7Du
 #define MIKASA_NCR_SSTAT0_WOA       0x04
 #define MIKASA_NCR_SSTAT0_RST       0x02
@@ -2513,6 +2514,7 @@ if ((newval & MIKASA_NCR_SCNTL0_START) &&
         mikasa_ncr_set_sip (MIKASA_NCR_SIST0_CMP, 0);
         }
     else {
+        mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL2] &= ~MIKASA_NCR_SCNTL2_SDU;
         mikasa_ncr_set_connected (FALSE);
         mikasa_ncr_set_sip (0, MIKASA_NCR_SIST1_STO);
         }
@@ -3124,6 +3126,11 @@ uint32 group = op & MIKASA_NCR_TC_GROUP_MASK;
 if ((op & MIKASA_NCR_BM_TYPE_MASK) == 0xC0000000u) {
     uint32 dst;
 
+    if ((op & MIKASA_NCR_BM_COUNT_MASK) == 0) {
+        if (state->side_effects)
+            mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_IID, arg);
+        return FALSE;
+        }
     if (state->side_effects) {
         if (!mikasa_pci_dma_read_long (next - 4, &dst))
             return FALSE;
@@ -3136,6 +3143,16 @@ if ((op & MIKASA_NCR_BM_TYPE_MASK) == 0xC0000000u) {
 if ((op & MIKASA_NCR_LS_GROUP_MASK) == MIKASA_NCR_LS_GROUP) {
     if (!mikasa_ncr_script_load_store (op, arg, state))
         return FALSE;
+    *dsp = next;
+    return TRUE;
+    }
+if ((op & MIKASA_NCR_BM_TYPE_MASK) == MIKASA_NCR_BM_TYPE) {
+    if (((op & MIKASA_NCR_BM_TABLE) == 0) &&
+        ((op & MIKASA_NCR_BM_COUNT_MASK) == 0)) {
+        if (state->side_effects)
+            mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_IID, arg);
+        return FALSE;
+        }
     *dsp = next;
     return TRUE;
     }
@@ -4260,6 +4277,7 @@ if ((target >= MIKASA_DKA_UNITS) || ((dka_unit[target].flags & UNIT_ATT) == 0)) 
     sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
         "NCR target %u select timeout\n", target);
     mikasa_ncr_clear_transaction ();
+    mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL2] &= ~MIKASA_NCR_SCNTL2_SDU;
     mikasa_ncr_set_connected (FALSE);
     mikasa_ncr_set_sip (0, MIKASA_NCR_SIST1_STO);
     return TRUE;
@@ -4380,8 +4398,10 @@ if ((op & MIKASA_NCR_TC_GROUP_MASK) == MIKASA_NCR_SCR_SEL_ABS) {
     if ((target < MIKASA_DKA_UNITS) &&
         ((dka_unit[target].flags & UNIT_ATT) != 0))
         mikasa_ncr_set_connected (TRUE);
-    else
+    else {
+        mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL2] &= ~MIKASA_NCR_SCNTL2_SDU;
         mikasa_ncr_set_sip (0, MIKASA_NCR_SIST1_STO);
+        }
     mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DSP, next);
     mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SSI,
         mikasa_ncr_reg_l (MIKASA_NCR_REG_DSPS));

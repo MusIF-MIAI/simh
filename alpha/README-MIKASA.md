@@ -104,6 +104,8 @@ Not implemented yet:
   the current frontend cannot find a matching script interrupt. `DSTAT` causes
   are preserved until the CPU reads the status register, and unhandled
   fetch/DMA script paths raise `DSTAT.BF` instead of failing silently.
+  Zero-byte direct Block Move and Memory Move instructions raise `DSTAT.IID`,
+  and select timeouts clear the expected-disconnect bit.
   `INTFLY` is treated as non-halting and sets `ISTAT.INTF`, with CPU
   write-one clearing, while auxiliary script scans suppress `INTFLY` side
   effects and no longer clobber visible `DBC`/`DSP`/`DSPS` fetch-progress

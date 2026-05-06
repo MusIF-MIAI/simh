@@ -44,6 +44,9 @@
 - [x] Preserve already-latched NCR `DSTAT` causes until the CPU reads `DSTAT`,
   and raise `DSTAT.BF` for script fetch/DMA paths the frontend cannot execute
   instead of failing silently.
+- [x] Raise NCR `DSTAT.IID` for fetched zero-byte direct Block Move and Memory
+  Move instructions, and clear selection-disconnect expectation after select
+  timeouts.
 - [x] Treat NCR SCRIPTS `INTFLY` as a non-halting interrupt-on-the-fly path and
   expose/clear `ISTAT.INTF`.
 - [x] Keep NCR `INTFLY` side effects out of auxiliary script scans so debug
@@ -198,6 +201,8 @@
   coverage; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after adding low-level NCR `SCNTL0.START` and
   `SCNTL1.RST`; it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after NCR `DSTAT.IID` zero-count MOVE handling; it
+  still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -258,6 +263,9 @@ the real path works.
     `ISTAT`, SIR/DIP/SIP, abort, and select-timeout paths used so far;
   - current branch latches `DSTAT`/`SIST` causes independently of
     `DIEN`/`SIEN` masks and only asserts IRQ for enabled causes;
+  - current branch raises `DSTAT.IID` for zero-byte direct Block Move and
+    Memory Move instructions, and clears `SCNTL2.SDU` after selection
+    timeouts;
   - current branch collects multiple data-phase MOVE entries and reads/writes
     SCSI payloads across scatter/gather segment lists;
   - current branch updates visible SCRIPTS/DMA progress registers for handled
