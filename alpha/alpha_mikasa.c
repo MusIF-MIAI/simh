@@ -212,6 +212,7 @@
 #define MIKASA_ISA_COM2             0x2F8
 #define MIKASA_ISA_SIO_INDEX        0x398
 #define MIKASA_ISA_SIO_DATA         0x399
+#define MIKASA_ISA_FDC              0x3F0
 #define MIKASA_ISA_COM1             0x3F8
 #define MIKASA_ISA_NMI_CTRL         0x461
 #define MIKASA_ISA_OCP              0x530
@@ -237,6 +238,8 @@
 #define MIKASA_UART_MSR_CTS         0x10
 #define MIKASA_UART_MSR_DSR         0x20
 #define MIKASA_UART_MSR_DCD         0x80
+
+#define MIKASA_FDC_MSR_RQM          0x80
 
 #define MIKASA_RTC_STATUSA          0x0A
 #define MIKASA_RTC_STATUSB          0x0B
@@ -550,6 +553,7 @@ static uint8 mikasa_rtc_index = 0;
 static uint8 mikasa_rtc_reg[128] = { 0 };
 static uint8 mikasa_sio_index = 0;
 static uint8 mikasa_sio_reg[256] = { 0 };
+static uint8 mikasa_fdc_reg[8] = { 0 };
 static uint8 mikasa_nmi_ctrl = 0;
 static uint8 mikasa_eisa_cram_page = 0;
 static uint8 mikasa_eisa_cram[MIKASA_EISA_CRAM_PAGES][MIKASA_EISA_CRAM_SIZE];
@@ -2042,6 +2046,13 @@ if (port == MIKASA_ISA_SIO_INDEX)
     return mikasa_sio_index;
 if (port == MIKASA_ISA_SIO_DATA)
     return mikasa_sio_reg[mikasa_sio_index];
+if ((port >= MIKASA_ISA_FDC) && (port < (MIKASA_ISA_FDC + 8))) {
+    uint32 reg = port - MIKASA_ISA_FDC;
+
+    if (reg == 4)
+        return mikasa_fdc_reg[reg] | MIKASA_FDC_MSR_RQM;
+    return mikasa_fdc_reg[reg];
+    }
 if ((port >= MIKASA_ISA_COM1) && (port < (MIKASA_ISA_COM1 + 8)))
     return mikasa_uart_read (port);
 if (port == MIKASA_ISA_NMI_CTRL)
@@ -2126,6 +2137,10 @@ if (port == MIKASA_ISA_SIO_INDEX) {
     }
 if (port == MIKASA_ISA_SIO_DATA) {
     mikasa_sio_reg[mikasa_sio_index] = val;
+    return;
+    }
+if ((port >= MIKASA_ISA_FDC) && (port < (MIKASA_ISA_FDC + 8))) {
+    mikasa_fdc_reg[port - MIKASA_ISA_FDC] = val;
     return;
     }
 if ((port >= MIKASA_ISA_COM1) && (port < (MIKASA_ISA_COM1 + 8))) {
@@ -4839,6 +4854,7 @@ mikasa_rtc_reg[MIKASA_RTC_STATUSA] = 0x26;
 mikasa_rtc_reg[MIKASA_RTC_STATUSB] = MIKASA_RTC_24HR;
 mikasa_sio_index = 0;
 memset (mikasa_sio_reg, 0, sizeof (mikasa_sio_reg));
+memset (mikasa_fdc_reg, 0, sizeof (mikasa_fdc_reg));
 mikasa_nmi_ctrl = 0;
 mikasa_eisa_cram_page = 0;
 memset (mikasa_eisa_cram, 0, sizeof (mikasa_eisa_cram));
