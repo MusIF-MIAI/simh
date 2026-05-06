@@ -151,6 +151,8 @@
 #define MIKASA_EPIC_PCI_MASK_1      0x140
 #define MIKASA_EPIC_PCI_MASK_2      0x160
 #define MIKASA_EPIC_PCI_MASK_MASK   0xFFF00000u
+#define MIKASA_EPIC_HAXR1           0x1A0
+#define MIKASA_EPIC_HAXR1_EADDR     0xF8000000u
 #define MIKASA_EPIC_DCSR_PASS2      0x80000000u
 /* On-board devices use raw APECS IDSEL slots; SRM prints virtual slots. */
 #define MIKASA_PCI_SLOT_SCSI        6
@@ -1132,11 +1134,34 @@ return val;
 static void mikasa_epic_write (t_uint64 pa, t_uint64 val, uint32 lnt)
 {
 uint32 off = (uint32) (pa - MIKASA_EPIC_BASE);
-uint32 index = (off & (MIKASA_EPIC_SIZE - 1)) >> 5;
+uint32 reg = off & (MIKASA_EPIC_SIZE - 1);
+uint32 index = reg >> 5;
+uint32 data = (uint32) val;
 
-mikasa_epic_reg[index] = (uint32) val;
+switch (reg) {
+    case MIKASA_EPIC_TBASE_1:
+    case MIKASA_EPIC_TBASE_2:
+        data = data & MIKASA_EPIC_TBASE_MASK;
+        break;
+
+    case MIKASA_EPIC_PCI_BASE_1:
+    case MIKASA_EPIC_PCI_BASE_2:
+        data = data & (MIKASA_EPIC_PCI_BASE_MASK |
+            MIKASA_EPIC_PCI_BASE_SGEN | MIKASA_EPIC_PCI_BASE_WENB);
+        break;
+
+    case MIKASA_EPIC_PCI_MASK_1:
+    case MIKASA_EPIC_PCI_MASK_2:
+        data = data & MIKASA_EPIC_PCI_MASK_MASK;
+        break;
+
+    case MIKASA_EPIC_HAXR1:
+        data = data & MIKASA_EPIC_HAXR1_EADDR;
+        break;
+        }
+mikasa_epic_reg[index] = data;
 sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "EPIC write %03X=%08X\n",
-    off, (uint32) val);
+    off, data);
 return;
 }
 
@@ -2236,7 +2261,8 @@ return;
 static t_uint64 mikasa_pci_sparse_mem_read (t_uint64 pa, uint32 lnt)
 {
 t_uint64 off = pa - MIKASA_APECS_PCI_SPARSE;
-uint32 addr = (uint32) (off >> 5);
+uint32 addr = ((uint32) (off >> 5) & 0x07FFFFFFu) |
+    (mikasa_epic_reg[MIKASA_EPIC_HAXR1 >> 5] & MIKASA_EPIC_HAXR1_EADDR);
 uint32 mode = (uint32) ((off >> 3) & 3);
 uint32 reg;
 uint32 val;
@@ -2263,7 +2289,8 @@ static void mikasa_pci_sparse_mem_write (t_uint64 pa, t_uint64 val,
     uint32 lnt)
 {
 t_uint64 off = pa - MIKASA_APECS_PCI_SPARSE;
-uint32 addr = (uint32) (off >> 5);
+uint32 addr = ((uint32) (off >> 5) & 0x07FFFFFFu) |
+    (mikasa_epic_reg[MIKASA_EPIC_HAXR1 >> 5] & MIKASA_EPIC_HAXR1_EADDR);
 uint32 mode = (uint32) ((off >> 3) & 3);
 uint32 reg;
 uint32 data;
