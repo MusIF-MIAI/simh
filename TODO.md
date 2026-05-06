@@ -59,7 +59,8 @@ the real path works.
 ## P2 Enumerated Devices
 
 - Add PCI config-shell devices that the AlphaServer 1000 firmware may expect:
-  - DECchip 21040 Ethernet at the documented slot when enabled;
+  - current branch exposes a DECchip 21040 Ethernet PCI/CSR shell at raw IDSEL
+    `11`; packet I/O and real Tulip descriptor processing are still deferred;
   - VGA/Cirrus shell only if firmware probes require it;
   - floppy/FDC shell only enough for `DVA0` probing.
 - Defer full Ethernet, VGA, and floppy data paths until SRM reaches a prompt

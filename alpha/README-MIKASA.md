@@ -81,7 +81,9 @@ Not implemented yet:
   simple script walking, `SEL_ABS`/`SEL_TBL`, table-indirect command/data/status
   moves, controller interrupt status, common SCSI-2 disk commands, and per-target
   REQUEST SENSE state, but it is not a complete SCRIPTS processor.
-- Network, VGA, full NVRAM, and multiprocessor support.
+- Full Ethernet, VGA, full NVRAM, and multiprocessor support. A DECchip 21040
+  PCI/CSR shell exists so firmware and OS probes see a plausible DEC Ethernet
+  device, but packet I/O is not implemented yet.
 - A complete SRM-compatible firmware execution environment. The real SRM image
   now reaches the SRM banner and receives serial input, but it does not reach
   an SRM prompt yet.
@@ -341,8 +343,9 @@ debug tracing, the PC cycles inside the ROM decompressor around `0x900301` and
    storage, HAXR1 sparse-memory addressing, PCI configuration cycles, the
    raw-IDSEL `7` Intel 82375EB PCI/EISA bridge, the raw-IDSEL `6` NCR 53C810
    PCI configuration/register window, ISA DMA/page-register storage, an FDC
-   shell, ELCR/PIC initialization and auto-EOI handling, and a minimal 8259
-   PIC/COM1 receive interrupt path.
+   shell, a raw-IDSEL `11` DECchip 21040 PCI/CSR shell, ELCR/PIC
+   initialization and auto-EOI handling, and a minimal 8259 PIC/COM1 receive
+   interrupt path.
 
 6. Continue the NCR/Symbios 53C810 frontend.
    SIMH has a common SCSI backend, but no complete 53C810 PCI DMA frontend in
