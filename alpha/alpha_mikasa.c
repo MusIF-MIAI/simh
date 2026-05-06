@@ -1301,6 +1301,26 @@ static t_bool mikasa_pceb_bar_reg (uint32 reg)
 return ((reg >= 0x10) && (reg <= 0x24)) || (reg == 0x30);
 }
 
+static uint32 mikasa_pceb_conf_mask (uint32 reg)
+{
+switch (reg) {
+    case 0x04:
+        return 0x00000157u;
+
+    case 0x0C:
+        return 0x0000FFFFu;
+
+    case 0x3C:
+        return 0x000000FFu;
+
+    case 0x40:
+        return M32;
+
+    default:
+        return ((reg >= 0x44) && (reg < 0x80)) ? M32 : 0;
+        }
+}
+
 static uint32 mikasa_masked_update (uint32 old, uint32 val, uint32 mask)
 {
 return (old & ~mask) | (val & mask);
@@ -2580,8 +2600,11 @@ uint32 func = (cfg >> 8) & 7;
 uint32 reg = cfg & 0xFC;
 
 if ((bus == 0) && (slot == MIKASA_PCI_SLOT_PCEB) && (func == 0)) {
-    if ((reg != 0x00) && (reg != 0x08) && !mikasa_pceb_bar_reg (reg))
-        mikasa_pceb_cfg[reg >> 2] = val;
+    uint32 mask = mikasa_pceb_conf_mask (reg);
+
+    if ((mask != 0) && !mikasa_pceb_bar_reg (reg))
+        mikasa_pceb_cfg[reg >> 2] =
+            mikasa_masked_update (mikasa_pceb_cfg[reg >> 2], val, mask);
     sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
         "PCI config write bus %u slot %u func %u reg %02X=%08X\n",
         bus, slot, func, reg, val);
