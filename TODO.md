@@ -57,6 +57,9 @@
   and select-with-ATN state into visible 53C810 registers.
 - [x] Model visible NCR SCRIPTS wait-state behavior for legal disconnect and
   no-event wait-reselect paths.
+- [x] Preserve NCR `WAIT RESELECT` as an explicit wait state and honor
+  `ISTAT.SIGP` by jumping to the alternate script address and resuming
+  execution; `CTEST2` mirrors and clears the visible `SIGP` bit on read.
 - [x] Model additional visible 53C810 register semantics used by real drivers:
   `SCNTL2.SDU`, `SSTAT2.LDSC`, host `SCID`/`RESPID`, selector `SSID`,
   `TEMP` for SCRIPTS `CALL`/`RETURN`, `WAIT RESELECT` `SIGP` branching, and
@@ -163,6 +166,8 @@
   fetch-progress registers; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after adding NCR `DCNTL.SSM` single-step execution;
   it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after preserving NCR `WAIT RESELECT`/`SIGP` wait
+  state; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 

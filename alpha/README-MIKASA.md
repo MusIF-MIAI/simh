@@ -118,13 +118,14 @@ Not implemented yet:
   `SCNTL3` values, and select-with-ATN state into the visible controller
   registers. `WAIT DISCONNECT` now clears connected state as a legal bus-free
   transition, sets `SSTAT2.LDSC`, and clears `SCNTL2.SDU`. `WAIT RESELECT`
-  stops script scanning until real reselect event support is added, but now
-  honors `ISTAT.SIGP` by branching to the instruction's alternate address.
-  `TEMP` is updated for SCRIPTS `CALL`/`RETURN`, host ID defaults are exposed
-  through `SCID`/`RESPID`, and SCRIPTS register writes use the same writable
-  masks for visible controller registers. `MESSAGE OUT` buffers are now
-  consumed before command execution and ATN is cleared after the message-out
-  handshake. `CTEST3` now preserves the 53C810 revision nibble and handles FIFO
+  now records an explicit wait state; real reselect events are still not
+  generated, but `ISTAT.SIGP` aborts the wait by jumping to the alternate
+  address and `CTEST2` mirrors/clears the visible `SIGP` bit on read. `TEMP`
+  is updated for SCRIPTS `CALL`/`RETURN`, host ID defaults are exposed through
+  `SCID`/`RESPID`, and SCRIPTS register writes use the same writable masks for
+  visible controller registers. `MESSAGE OUT` buffers are now consumed before
+  command execution and ATN is cleared after the message-out handshake.
+  `CTEST3` now preserves the 53C810 revision nibble and handles FIFO
   clear/flush writes against the local FIFO-empty model. `SFBR` is updated with
   the first byte of handled data-in, status, and message-in phases. SCRIPTS
   selection attempts now expose the won-arbitration status bit in `SSTAT0`.
