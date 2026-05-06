@@ -125,6 +125,8 @@
   it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after honoring MODE SENSE changeable-page probes;
   it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run direct APB smoke after the SCSI/PCI hardware batch; APB still
+  loads from DKA0 and reaches the known `PC: 200039E0` halt.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
