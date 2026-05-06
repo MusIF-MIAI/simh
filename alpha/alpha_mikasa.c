@@ -256,6 +256,7 @@
 #define MIKASA_NCR_BAR_SIZE         0x100
 #define MIKASA_NCR_BAR_MASK         0xFFFFFF00u
 #define MIKASA_NCR_REG_SCNTL0       0x00
+#define MIKASA_NCR_REG_SCNTL1       0x01
 #define MIKASA_NCR_REG_SFBR         0x08
 #define MIKASA_NCR_REG_SOCL         0x09
 #define MIKASA_NCR_REG_SBCL         0x0B
@@ -282,6 +283,7 @@
 #define MIKASA_NCR_REG_GPCNTL       0x47
 #define MIKASA_NCR_REG_STEST0       0x4C
 #define MIKASA_NCR_SCNTL0_ARB       0xC0
+#define MIKASA_NCR_SCNTL1_ISCON     0x10
 #define MIKASA_NCR_DSTAT_DFE        0x80
 #define MIKASA_NCR_DSTAT_SIR        0x04
 #define MIKASA_NCR_DSTAT_ABRT       0x10
@@ -290,9 +292,19 @@
 #define MIKASA_NCR_ISTAT_SRST       0x40
 #define MIKASA_NCR_ISTAT_SIGP       0x20
 #define MIKASA_NCR_ISTAT_ABRT       0x80
+#define MIKASA_NCR_ISTAT_SEM        0x10
+#define MIKASA_NCR_ISTAT_CON        0x08
 #define MIKASA_NCR_ISTAT_INTF       0x04
 #define MIKASA_NCR_ISTAT_SIP        0x02
 #define MIKASA_NCR_ISTAT_DIP        0x01
+#define MIKASA_NCR_SIST0_MIA        0x80
+#define MIKASA_NCR_SIST0_CMP        0x40
+#define MIKASA_NCR_SIST0_SEL        0x20
+#define MIKASA_NCR_SIST0_RSL        0x10
+#define MIKASA_NCR_SIST0_SGE        0x08
+#define MIKASA_NCR_SIST0_UDC        0x04
+#define MIKASA_NCR_SIST0_RST        0x02
+#define MIKASA_NCR_SIST0_PAR        0x01
 #define MIKASA_NCR_SIST1_STO        0x04
 #define MIKASA_NCR_CTEST1_FMT       0xF0
 #define MIKASA_NCR_CTEST2_DACK      0x01
@@ -323,6 +335,7 @@
 #define MIKASA_NCR_PHASE_DAT_IN     1
 #define MIKASA_NCR_PHASE_CMD        2
 #define MIKASA_NCR_PHASE_STS        3
+#define MIKASA_NCR_PHASE_MSG_OUT    6
 #define MIKASA_NCR_PHASE_MSG_IN     7
 #define MIKASA_NCR_SCR_SEL_ABS      0x40000000u
 #define MIKASA_NCR_SCR_SEL_ABS_ATN  0x41000000u
@@ -2310,19 +2323,44 @@ static uint32 mikasa_ncr_move_op_for_phase (uint32 phase)
 return (phase << MIKASA_NCR_BM_PHASE_SHIFT) & MIKASA_NCR_BM_PHASE_MASK;
 }
 
+static uint32 mikasa_ncr_op_phase (uint32 op)
+{
+return (op & MIKASA_NCR_BM_PHASE_MASK) >> MIKASA_NCR_BM_PHASE_SHIFT;
+}
+
+static void mikasa_ncr_latch_phase (uint32 expected, uint32 sampled)
+{
+expected = expected & 7u;
+sampled = sampled & 7u;
+mikasa_ncr_reg[MIKASA_NCR_REG_SOCL] =
+    (mikasa_ncr_reg[MIKASA_NCR_REG_SOCL] & ~7u) | expected;
+mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] =
+    (mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] & ~7u) | sampled;
+mikasa_ncr_reg[MIKASA_NCR_REG_SSTAT1] =
+    (mikasa_ncr_reg[MIKASA_NCR_REG_SSTAT1] & ~7u) | sampled;
+return;
+}
+
+static void mikasa_ncr_set_connected (t_bool connected)
+{
+if (connected) {
+    mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL1] |= MIKASA_NCR_SCNTL1_ISCON;
+    mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] |= MIKASA_NCR_ISTAT_CON;
+    }
+else {
+    mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL1] &= ~MIKASA_NCR_SCNTL1_ISCON;
+    mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &= ~MIKASA_NCR_ISTAT_CON;
+    }
+return;
+}
+
 static void mikasa_ncr_finish_move (uint32 op, uint32 addr, uint32 count,
     uint32 done)
 {
 uint32 resid = (done < count) ? count - done : 0;
-uint8 phase = (uint8) ((op & MIKASA_NCR_BM_PHASE_MASK) >>
-    MIKASA_NCR_BM_PHASE_SHIFT);
+uint32 phase = mikasa_ncr_op_phase (op);
 
-mikasa_ncr_reg[MIKASA_NCR_REG_SOCL] =
-    (mikasa_ncr_reg[MIKASA_NCR_REG_SOCL] & ~7u) | phase;
-mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] =
-    (mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] & ~7u) | phase;
-mikasa_ncr_reg[MIKASA_NCR_REG_SSTAT1] =
-    (mikasa_ncr_reg[MIKASA_NCR_REG_SSTAT1] & ~7u) | phase;
+mikasa_ncr_latch_phase (phase, phase);
 mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DBC,
     (op & 0xFF000000u) | (resid & MIKASA_NCR_BM_COUNT_MASK));
 mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DNAD, addr + done);
@@ -3493,20 +3531,26 @@ if ((target >= MIKASA_DKA_UNITS) || ((dka_unit[target].flags & UNIT_ATT) == 0)) 
     sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
         "NCR target %u select timeout\n", target);
     mikasa_ncr_status_phase = FALSE;
+    mikasa_ncr_set_connected (FALSE);
     mikasa_ncr_set_sip (0, MIKASA_NCR_SIST1_STO);
     return TRUE;
     }
+mikasa_ncr_set_connected (TRUE);
 if (!mikasa_ncr_find_table_move (dsp, MIKASA_NCR_PHASE_CMD, &cmd_off))
     cmd_off = 0x0C;
 if (!mikasa_ncr_table_entry (dsa, cmd_off, &cmd_count, &cmd_addr) ||
-    (cmd_count == 0))
+    (cmd_count == 0)) {
+    mikasa_ncr_set_connected (FALSE);
     return FALSE;
+    }
 cmd_move_count = cmd_count;
 if (cmd_count > sizeof (cdb))
     cmd_count = sizeof (cdb);
 memset (cdb, 0, sizeof (cdb));
-if (!mikasa_ncr_read_dma_buf (cmd_addr, cdb, cmd_count))
+if (!mikasa_ncr_read_dma_buf (cmd_addr, cdb, cmd_count)) {
+    mikasa_ncr_set_connected (FALSE);
     return FALSE;
+    }
 mikasa_ncr_finish_move (mikasa_ncr_move_op_for_phase (MIKASA_NCR_PHASE_CMD),
     cmd_addr, cmd_move_count, cmd_count);
 data_out = mikasa_ncr_data_out_cmd (cdb);
@@ -3547,6 +3591,7 @@ if (data.bytes != 0) {
 else {
     mikasa_ncr_status_phase = FALSE;
     mikasa_ncr_write_status_msg (dsp, dsa, status);
+    mikasa_ncr_set_connected (FALSE);
     mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SIR,
         mikasa_ncr_status_int_dsps (dsp));
     }
@@ -3559,13 +3604,15 @@ if (mikasa_ncr_status_phase) {
     mikasa_ncr_status_phase = FALSE;
     mikasa_ncr_write_status_msg (dsp, mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA),
         mikasa_ncr_status_byte);
+    mikasa_ncr_set_connected (FALSE);
     mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SIR,
         mikasa_ncr_status_dsps_valid ?
         mikasa_ncr_status_dsps : mikasa_ncr_status_int_dsps (dsp));
     }
 else {
     mikasa_ncr_trace_script (dsp);
-    (void) mikasa_ncr_run_script (dsp);
+    if (!mikasa_ncr_run_script (dsp))
+        mikasa_ncr_set_connected (FALSE);
     }
 return;
 }
@@ -3577,6 +3624,7 @@ mikasa_ncr_status_phase = FALSE;
 mikasa_ncr_status_dsps_valid = FALSE;
 mikasa_ncr_status_dsps = MIKASA_NCR_DSPS_OK;
 mikasa_ncr_clear_irq ();
+mikasa_ncr_set_connected (FALSE);
 mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL0] = MIKASA_NCR_SCNTL0_ARB;
 mikasa_ncr_reg[MIKASA_NCR_REG_DSTAT] = MIKASA_NCR_DSTAT_DFE;
 mikasa_ncr_reg[MIKASA_NCR_REG_CTEST1] = MIKASA_NCR_CTEST1_FMT;
@@ -3591,6 +3639,7 @@ return;
 static void mikasa_ncr_abort_script (void)
 {
 mikasa_ncr_status_phase = FALSE;
+mikasa_ncr_set_connected (FALSE);
 mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &= ~MIKASA_NCR_ISTAT_ABRT;
 mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_ABRT, 0);
 return;
@@ -3607,9 +3656,9 @@ if (reg == MIKASA_NCR_REG_ISTAT) {
     if (val & MIKASA_NCR_ISTAT_INTF)
         istat &= ~MIKASA_NCR_ISTAT_INTF;
     mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] =
-        (istat & (MIKASA_NCR_ISTAT_INTF | MIKASA_NCR_ISTAT_SIP |
-         MIKASA_NCR_ISTAT_DIP)) |
-        (val & MIKASA_NCR_ISTAT_SIGP);
+        (istat & (MIKASA_NCR_ISTAT_INTF | MIKASA_NCR_ISTAT_CON |
+         MIKASA_NCR_ISTAT_SIP | MIKASA_NCR_ISTAT_DIP)) |
+        (val & (MIKASA_NCR_ISTAT_SEM | MIKASA_NCR_ISTAT_SIGP));
     if (val & MIKASA_NCR_ISTAT_SRST)
         mikasa_ncr_init_regs ();
     else if (val & MIKASA_NCR_ISTAT_ABRT)
@@ -3626,6 +3675,9 @@ else if ((reg == MIKASA_NCR_REG_DSTAT) ||
     (reg == MIKASA_NCR_REG_SIST1))
     return;
 else {
+    if (reg == MIKASA_NCR_REG_SCNTL1)
+        val = (val & ~MIKASA_NCR_SCNTL1_ISCON) |
+            (mikasa_ncr_reg[reg] & MIKASA_NCR_SCNTL1_ISCON);
     if (reg == MIKASA_NCR_REG_DIEN)
         val = val & MIKASA_NCR_DSTAT_IRQS;
     else if (reg == MIKASA_NCR_REG_SIEN1)

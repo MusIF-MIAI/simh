@@ -42,6 +42,8 @@
   `DSP`, matching the normal 53C810 driver path.
 - [x] Preserve NCR read-only status registers on CPU writes and expose current
   MOVE phase through `SOCL`, `SBCL`, and `SSTAT1`.
+- [x] Track NCR connected state in `SCNTL1.ISCON`/`ISTAT.CON` across select,
+  command, data, status/message, timeout, reset, and abort paths.
 - [x] Honor NCR `DIEN`, `SIEN0`, and `SIEN1` interrupt masks while preserving
   latched `DSTAT`/`SIST` status.
 - [x] Add common SCSI-2 disk responses, per-target REQUEST SENSE, MODE SENSE
@@ -59,6 +61,8 @@
   still reaches the Mikasa `V5.4-101` banner and sees pka/ewa.
 - [x] Re-run SRM ROM smoke after the NCR progress/status and extended SCSI
   probe batch; it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after the NCR connected-state update; it still
+  reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -132,6 +136,8 @@ the real path works.
     `DSP` high-byte write;
   - current branch preserves read-only NCR status registers and reports the
     active MOVE phase in the SCSI bus/status phase bits;
+  - current branch tracks connected state in `SCNTL1.ISCON` and `ISTAT.CON`
+    during the high-level 53C810 target transaction;
   - current branch returns common SCSI-2 disk responses, write-protect check
     conditions, and per-target REQUEST SENSE state;
   - current branch returns basic INQUIRY EVPD supported-page, unit-serial, and

@@ -103,7 +103,10 @@ Not implemented yet:
   effects. SCRIPTS execution can now be started through `DCNTL.STD` as well as
   by writing `DSP`.
   CPU writes no longer overwrite read-only NCR status registers, and completed
-  MOVE phases are reflected in `SOCL`, `SBCL`, and `SSTAT1`.
+  MOVE phases are reflected in `SOCL`, `SBCL`, and `SSTAT1`. The high-level
+  NCR path also exposes connected state through `SCNTL1.ISCON` and `ISTAT.CON`
+  from successful select through status/message completion, and clears it on
+  timeout, reset, and abort.
   The local SCSI disk path also handles extended probe/read commands such as
   `READ(12)`, `WRITE(12)`, `REPORT LUNS`, `READ CAPACITY(16)`, and basic
   INQUIRY EVPD pages 0x00/0x80/0x83.
