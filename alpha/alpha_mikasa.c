@@ -23,6 +23,7 @@
 #include "alpha_defs.h"
 #include "alpha_ev5_defs.h"
 #include "sim_fio.h"
+#include "sim_scsi.h"
 
 #include <time.h>
 
@@ -51,6 +52,8 @@
 #define MIKASA_DKA_UNITS            4
 #define MIKASA_DKA_BLOCK_SIZE       512
 #define MIKASA_IO_BUFSIZE           4096
+#define MIKASA_NCR_SCSI_MAXFR       (1u << 16)
+#define MIKASA_NCR_SCSI_BUFSIZE     256
 #define MIKASA_SCSI_SLOT            6
 #define MIKASA_APB_IO_CMD_OFF       0x120
 #define MIKASA_APB_IO_LBN_OFF       0x128
@@ -616,6 +619,7 @@ extern uint32 int_req[IPL_HLVL];
 extern uint32 ev5_ipl;
 extern t_uint64 ev5_palbase;
 extern UNIT dka_unit[];
+extern SCSI_DEV dka_scsi_dev;
 
 typedef struct {
     uint8 sfbr;
@@ -931,6 +935,7 @@ static uint32 mikasa_ncr_wait_reselect_jump = 0;
 static uint8 mikasa_ncr_sense_key[MIKASA_DKA_UNITS] = { 0 };
 static uint8 mikasa_ncr_sense_asc[MIKASA_DKA_UNITS] = { 0 };
 static uint8 mikasa_ncr_sense_ascq[MIKASA_DKA_UNITS] = { 0 };
+static SCSI_BUS mikasa_ncr_scsi_bus = { 0 };
 static t_bool mikasa_direct_apb = FALSE;
 static uint32 mikasa_pceb_cfg[MIKASA_PCI_CFG_DWORDS] = { 0 };
 static uint8 mikasa_ocp_reg[4] = { 0 };
@@ -4144,6 +4149,128 @@ mikasa_ncr_clear_sense (unit);
 return mikasa_ncr_write_scsi_data (data, buf, len);
 }
 
+static t_stat mikasa_ncr_scsi_init (void)
+{
+uint32 i;
+t_stat r;
+
+mikasa_ncr_scsi_bus.dptr = &mikasa_dev;
+r = scsi_init (&mikasa_ncr_scsi_bus, MIKASA_NCR_SCSI_MAXFR);
+if (r != SCPE_OK)
+    return r;
+scsi_reset (&mikasa_ncr_scsi_bus);
+for (i = 0; i < MIKASA_DKA_UNITS; i++) {
+    scsi_add_unit (&mikasa_ncr_scsi_bus, i, &dka_unit[i]);
+    scsi_set_unit (&mikasa_ncr_scsi_bus, &dka_unit[i], &dka_scsi_dev);
+    }
+return SCPE_OK;
+}
+
+static uint32 mikasa_ncr_sim_scsi_cdb_len (const uint8 *cdb)
+{
+switch (cdb[0]) {
+    case 0x25:                                      /* READ CAPACITY(10) */
+        return 10;
+
+    default:
+        return 6;
+        }
+}
+
+static t_bool mikasa_ncr_sim_scsi_supported (const uint8 *cdb,
+    const MIKASA_NCR_DMA_LIST *data)
+{
+switch (cdb[0]) {
+    case 0x00:                                      /* TEST UNIT READY */
+    case 0x16:                                      /* RESERVE UNIT */
+    case 0x17:                                      /* RELEASE UNIT */
+    case 0x1B:                                      /* START STOP UNIT */
+    case 0x1E:                                      /* PREVENT/ALLOW */
+        return TRUE;
+
+    case 0x12:                                      /* INQUIRY */
+        return ((cdb[1] & 1) == 0) && (cdb[4] != 0) &&
+            (data->bytes != 0);
+
+    case 0x25:                                      /* READ CAPACITY(10) */
+        return data->bytes != 0;
+
+    default:
+        return FALSE;
+        }
+}
+
+static t_bool mikasa_ncr_scsi_cmd_sim_scsi (uint32 unit, const uint8 *cdb,
+    const MIKASA_NCR_DMA_LIST *data, uint8 *status, t_bool *handled)
+{
+uint8 buf[MIKASA_NCR_SCSI_BUFSIZE];
+uint8 msg = 0;
+uint32 cmd_len;
+uint32 read_len;
+uint32 write_len;
+t_stat r;
+
+*handled = FALSE;
+if (!mikasa_ncr_sim_scsi_supported (cdb, data))
+    return TRUE;
+*handled = TRUE;
+
+if (mikasa_ncr_scsi_bus.buf == NULL) {
+    r = mikasa_ncr_scsi_init ();
+    if (r != SCPE_OK)
+        return FALSE;
+    }
+
+scsi_reset (&mikasa_ncr_scsi_bus);
+if (!scsi_arbitrate (&mikasa_ncr_scsi_bus, 7) ||
+    !scsi_select (&mikasa_ncr_scsi_bus, unit))
+    return FALSE;
+
+mikasa_ncr_scsi_bus.lun = mikasa_ncr_transaction.lun;
+cmd_len = mikasa_ncr_sim_scsi_cdb_len (cdb);
+if (scsi_write (&mikasa_ncr_scsi_bus, (uint8 *) cdb, cmd_len) != cmd_len) {
+    scsi_release (&mikasa_ncr_scsi_bus);
+    return FALSE;
+    }
+
+if (mikasa_ncr_scsi_bus.phase == SCSI_DATI) {
+    read_len = mikasa_ncr_scsi_bus.buf_b - mikasa_ncr_scsi_bus.buf_t;
+    if (read_len > sizeof (buf)) {
+        scsi_release (&mikasa_ncr_scsi_bus);
+        return FALSE;
+        }
+    read_len = scsi_read (&mikasa_ncr_scsi_bus, buf, read_len);
+    write_len = (data->bytes < read_len) ? data->bytes : read_len;
+    if (!mikasa_ncr_write_scsi_data (data, buf, write_len)) {
+        scsi_release (&mikasa_ncr_scsi_bus);
+        return FALSE;
+        }
+    }
+
+if (mikasa_ncr_scsi_bus.phase != SCSI_STS) {
+    scsi_release (&mikasa_ncr_scsi_bus);
+    return FALSE;
+    }
+if (scsi_read (&mikasa_ncr_scsi_bus, status, 1) != 1) {
+    scsi_release (&mikasa_ncr_scsi_bus);
+    return FALSE;
+    }
+if (mikasa_ncr_scsi_bus.phase == SCSI_MSGI)
+    (void) scsi_read (&mikasa_ncr_scsi_bus, &msg, 1);
+scsi_release (&mikasa_ncr_scsi_bus);
+
+if (*status == 0)
+    mikasa_ncr_clear_sense (unit);
+else
+    mikasa_ncr_set_sense (unit, mikasa_ncr_scsi_bus.sense_key & 0x0F,
+        mikasa_ncr_scsi_bus.sense_code,
+        mikasa_ncr_scsi_bus.sense_qual);
+sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+    "NCR target %u CDB %02X handled by sim_scsi status %02X msg %02X\n",
+    unit, cdb[0], *status, msg);
+return TRUE;
+}
+
 static t_bool mikasa_ncr_scsi_cmd (uint32 unit, const uint8 *cdb,
     const MIKASA_NCR_DMA_LIST *data, uint8 *status)
 {
@@ -4153,9 +4280,14 @@ uint32 len = 0;
 uint32 lbn;
 uint32 blocks;
 t_uint64 lbn64;
+t_bool handled;
 
 *status = 0;
 memset (buf, 0, sizeof (buf));
+if (!mikasa_ncr_scsi_cmd_sim_scsi (unit, cdb, data, status, &handled))
+    return FALSE;
+if (handled)
+    return TRUE;
 switch (cdb[0]) {
     case 0x00:                                              /* TEST UNIT READY */
         mikasa_ncr_clear_sense (unit);
@@ -7975,6 +8107,8 @@ return SCPE_OK;
 
 t_stat mikasa_reset (DEVICE *dptr)
 {
+t_stat r;
+
 mikasa_irq_mask = 0;
 mikasa_irq_summary = 0;
 sim_cancel (&mikasa_unit);
@@ -8045,6 +8179,9 @@ mikasa_ncr_cfg[0x08 >> 2] = 0x01000001u;
 mikasa_ncr_cfg[0x10 >> 2] = 0x00000001u;
 mikasa_ncr_cfg[0x3C >> 2] = 0x4011010Cu;
 mikasa_ncr_init_regs ();
+r = mikasa_ncr_scsi_init ();
+if (r != SCPE_OK)
+    return r;
 memset (mikasa_ncr_sense_key, 0, sizeof (mikasa_ncr_sense_key));
 memset (mikasa_ncr_sense_asc, 0, sizeof (mikasa_ncr_sense_asc));
 memset (mikasa_ncr_sense_ascq, 0, sizeof (mikasa_ncr_sense_ascq));

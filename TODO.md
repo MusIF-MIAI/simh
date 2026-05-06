@@ -157,6 +157,13 @@
   per-target serial, and device-identification probes.
 - [x] Classify SCSI CDB data phases explicitly so no-data commands no longer
   get a synthetic DATA IN phase, and consume harmless DATA OUT parameter lists.
+- [x] Link SIMH `sim_scsi` into the alpha simulator, expose DKA targets as
+  `SCSI_DEV` disk units, and attach/detach DKA images through the common
+  `sim_disk` backend while preserving the exact recovered image capacities.
+- [x] Add a Mikasa NCR `sim_scsi` bus and route safe SCSI-2 commands through
+  it (`TEST UNIT READY`, standard `INQUIRY`, `READ CAPACITY(10)`,
+  reserve/release, start/stop, and prevent/allow), while keeping VMS-sensitive
+  READ/WRITE, MODE SENSE, VPD, and REQUEST SENSE paths in the local shim.
 - [x] Add DECchip 21040/Tulip PCI/CSR shell.
 - [x] Add DECchip 21040 software reset, CSR5 write-one-to-clear status,
   CSR6 run-state reporting, and byte/word CSR write merging.
@@ -260,6 +267,9 @@
   detects pka/ewa.
 - [x] Re-run SRM ROM smoke after masking NCR `SIEN1` to documented bits; it
   still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after initial `sim_scsi` wiring; all four ODS2
+  dumps attach without size errors, and SRM still reaches `V5.4-101` and
+  detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -270,8 +280,10 @@
   and full memory/register side effects. The current helper scans now share
   one pass, but command execution is still a high-level SCSI transaction
   frontend rather than an instruction-by-instruction 53C810 engine.
-- [ ] Wire the NCR disk path to SIMH `sim_scsi` where it fits, rather than the
-  current local SCSI command handling.
+- [ ] Continue expanding the NCR disk path onto SIMH `sim_scsi` where it fits.
+  The current branch has the shared bus/device/attach layer and routes safe
+  status/probe commands through `sim_scsi`, but READ/WRITE, MODE SENSE, VPD,
+  REQUEST SENSE, and extended VMS probe commands still use the local shim.
 - [ ] Complete APECS/DECchip 21071 behavior beyond the current register shells,
   especially actually raising error causes, remaining HAE/config details, and
   DMA corner cases.
@@ -419,7 +431,11 @@ the real path works.
     reaches `V5.4-101` and enumerates `pka`/`ewa`;
   - current branch classifies CDB data phases explicitly and consumes
     data-out parameter lists for harmless no-op disk commands;
-  - use SIMH `sim_scsi` as the backing SCSI command/device layer where it fits;
+  - current branch links SIMH `sim_scsi`, exposes DKA targets as `SCSI_DEV`
+    disk units, uses the common `sim_disk` attach/detach backend, and routes
+    safe status/probe commands through a Mikasa NCR `sim_scsi` bus;
+  - continue moving compatible READ/WRITE and SCSI probe paths to `sim_scsi`
+    only where the common backend can preserve VMS-visible behavior;
   - keep target-absent timeout behavior clean with and without attached disks.
 - Complete the APECS/DECchip 21071 base enough for firmware and operating
   systems:

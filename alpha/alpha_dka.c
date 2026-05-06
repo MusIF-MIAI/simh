@@ -23,6 +23,7 @@
 #include "alpha_defs.h"
 #include "scp.h"
 #include "sim_fio.h"
+#include "sim_scsi.h"
 
 #define DKA_NUMUNITS            4
 #define DKA_BLOCK_SIZE          512
@@ -39,6 +40,7 @@ extern uint32 pc_align;
 
 t_stat dka_reset (DEVICE *dptr);
 t_stat dka_attach (UNIT *uptr, CONST char *cptr);
+t_stat dka_detach (UNIT *uptr);
 t_stat dka_boot (int32 unitno, DEVICE *dptr);
 t_stat dka_set_osflags (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat dka_show_osflags (FILE *st, UNIT *uptr, int32 val, CONST void *desc);
@@ -52,6 +54,11 @@ static t_stat dka_read_blocks (UNIT *uptr, t_uint64 lbn, uint32 blocks,
     t_uint64 load_pa);
 
 uint32 dka_osflags = 0;
+
+SCSI_DEV dka_scsi_dev = {
+    SCSI_DISK, 0, 2, FALSE, DKA_BLOCK_SIZE, 0,
+    "DEC", "RZ58     (C) DEC", "2000", "RZ58", 0
+    };
 
 UNIT dka_unit[] = {
     { UDATA (NULL, UNIT_FIX|UNIT_ATTABLE|UNIT_ROABLE, 0) },
@@ -76,7 +83,7 @@ DEVICE dka0_dev = {
     "DKA0", &dka_unit[0], dka_reg, dka_mod,
     1, 16, 64, 1, 16, 8,
     NULL, NULL, &dka_reset,
-    &dka_boot, &dka_attach, NULL, NULL,
+    &dka_boot, &dka_attach, &dka_detach, NULL,
     DEV_SECTORS, 0, NULL
     };
 
@@ -84,7 +91,7 @@ DEVICE dka100_dev = {
     "DKA100", &dka_unit[1], dka_reg, dka_mod,
     1, 16, 64, 1, 16, 8,
     NULL, NULL, &dka_reset,
-    &dka_boot, &dka_attach, NULL, NULL,
+    &dka_boot, &dka_attach, &dka_detach, NULL,
     DEV_SECTORS, 0, NULL
     };
 
@@ -92,7 +99,7 @@ DEVICE dka200_dev = {
     "DKA200", &dka_unit[2], dka_reg, dka_mod,
     1, 16, 64, 1, 16, 8,
     NULL, NULL, &dka_reset,
-    &dka_boot, &dka_attach, NULL, NULL,
+    &dka_boot, &dka_attach, &dka_detach, NULL,
     DEV_SECTORS, 0, NULL
     };
 
@@ -100,9 +107,15 @@ DEVICE dka300_dev = {
     "DKA300", &dka_unit[3], dka_reg, dka_mod,
     1, 16, 64, 1, 16, 8,
     NULL, NULL, &dka_reset,
-    &dka_boot, &dka_attach, NULL, NULL,
+    &dka_boot, &dka_attach, &dka_detach, NULL,
     DEV_SECTORS, 0, NULL
     };
+
+static void dka_set_scsi_unit (UNIT *uptr)
+{
+uptr->up7 = &dka_scsi_dev;
+return;
+}
 
 static uint32 dka_get_unit_index (UNIT *uptr)
 {
@@ -169,13 +182,27 @@ return SCPE_OK;
 
 t_stat dka_attach (UNIT *uptr, CONST char *cptr)
 {
+char path[CBUFSIZE];
+t_offset fsize;
 t_stat r;
 
-r = attach_unit (uptr, cptr);
+dka_set_scsi_unit (uptr);
+get_glyph_quoted (cptr, path, 0);
+fsize = sim_fsize_name_ex (path);
+if (fsize > 0)
+    uptr->capac = fsize / DKA_BLOCK_SIZE;
+r = sim_disk_attach_ex (uptr, cptr, DKA_BLOCK_SIZE, sizeof (uint16),
+    FALSE, SCSI_DBG_DSK, NULL, 0, 0, NULL);
 if (r != SCPE_OK)
     return r;
 uptr->capac = sim_fsize_ex (uptr->fileref) / DKA_BLOCK_SIZE;
 return SCPE_OK;
+}
+
+t_stat dka_detach (UNIT *uptr)
+{
+dka_set_scsi_unit (uptr);
+return scsi_detach (uptr);
 }
 
 t_stat dka_boot (int32 unitno, DEVICE *dptr)
@@ -237,5 +264,11 @@ return SCPE_OK;
 
 t_stat dka_reset (DEVICE *dptr)
 {
+uint32 i;
+
+for (i = 0; i < dptr->numunits; i++) {
+    dka_set_scsi_unit (&dptr->units[i]);
+    scsi_reset_unit (&dptr->units[i]);
+    }
 return SCPE_OK;
 }

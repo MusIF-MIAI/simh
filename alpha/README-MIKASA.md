@@ -197,6 +197,11 @@ Not implemented yet:
   the CDB sets DBD, and include common disconnect/reconnect, format-device, and
   control pages. Changeable-page MODE SENSE probes (`PC=1`) keep the page
   layouts but return zeroed value fields.
+  The DKA targets are now also registered as SIMH `sim_scsi` disk devices and
+  attach through the common `sim_disk` backend. The NCR frontend routes safe
+  status/probe commands through a Mikasa `sim_scsi` bus while keeping the
+  VMS-sensitive READ/WRITE, MODE SENSE, VPD, and REQUEST SENSE behavior in the
+  local shim until the common backend can match it.
 - Full Ethernet, VGA, full NVRAM, and multiprocessor support. A DECchip 21040
   PCI/CSR shell exists so firmware and OS probes see a plausible DEC Ethernet
   device, including basic reset/status/run-state behavior, but packet I/O is

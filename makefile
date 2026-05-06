@@ -2887,9 +2887,9 @@ endif
 
 alpha : ${BIN}alpha${EXE}
 
-${BIN}alpha${EXE} : ${ALPHA} ${SIM}
+${BIN}alpha${EXE} : ${ALPHA} ${SIM} ${SCSI}
 	${MKDIRBIN}
-	${CC} ${ALPHA} ${SIM} ${ALPHA_OPT} ${CC_OUTSPEC} ${LDFLAGS}
+	${CC} ${ALPHA} ${SIM} ${SCSI} ${ALPHA_OPT} ${CC_OUTSPEC} ${LDFLAGS}
 ifneq (,$(call find_test,${ALPHAD},alpha))
 	$@ $(call find_test,${ALPHAD},alpha) ${TEST_ARG}
 endif
