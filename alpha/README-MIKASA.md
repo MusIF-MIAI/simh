@@ -135,7 +135,9 @@ Not implemented yet:
   OUT, or no-data phase selection, and harmless DATA OUT parameter lists are
   consumed instead of leaving stale DMA progress. MODE SENSE replies include a
   direct-access block descriptor unless the CDB sets DBD, and include common
-  disconnect/reconnect, format-device, and control pages.
+  disconnect/reconnect, format-device, and control pages. Changeable-page
+  MODE SENSE probes (`PC=1`) keep the page layouts but return zeroed value
+  fields.
 - Full Ethernet, VGA, full NVRAM, and multiprocessor support. A DECchip 21040
   PCI/CSR shell exists so firmware and OS probes see a plausible DEC Ethernet
   device, including basic reset/status/run-state behavior, but packet I/O is

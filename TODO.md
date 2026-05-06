@@ -76,6 +76,8 @@
 - [x] Include SCSI MODE SENSE block descriptors unless the CDB sets DBD.
 - [x] Add additional SCSI MODE SENSE pages for disconnect/reconnect, format
   device, and control-page probes.
+- [x] Honor MODE SENSE page-control `PC=1` by returning page layouts with
+  non-changeable fields zeroed.
 - [x] Add common extended SCSI disk probes: `READ(12)`, `WRITE(12)`,
   `REPORT LUNS`, and `READ CAPACITY(16)`.
 - [x] Add INQUIRY EVPD pages 0x00, 0x80, and 0x83 for supported-page,
@@ -120,6 +122,8 @@
 - [x] Re-run SRM ROM smoke after initializing the integrated NCR PCI
   interrupt line to IRQ 12; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after adding SCSI MODE SENSE pages 0x02/0x03/0x0A;
+  it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after honoring MODE SENSE changeable-page probes;
   it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
@@ -225,6 +229,10 @@ the real path works.
     the CDB, which better matches older direct-access disk drivers;
   - current branch returns additional MODE SENSE pages 0x02, 0x03, and 0x0A
     for older SCSI disk driver geometry/control probes;
+  - current branch honors MODE SENSE page-control `PC=1` for changeable-page
+    probes by returning page layouts with value fields zeroed;
+  - SRM smoke after MODE SENSE changeable-page handling still reaches
+    `V5.4-101` and enumerates `pka`/`ewa`;
   - SRM smoke after the additional MODE SENSE pages still reaches `V5.4-101`
     and enumerates `pka`/`ewa`;
   - SRM smoke after MODE SENSE descriptors still reaches `V5.4-101` and

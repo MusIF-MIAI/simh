@@ -3357,8 +3357,8 @@ mikasa_ncr_clear_sense (unit);
 return TRUE;
 }
 
-static uint32 mikasa_ncr_mode_page (uint32 unit, uint8 page_code, uint8 *buf,
-    uint32 max)
+static uint32 mikasa_ncr_mode_page (uint32 unit, uint8 page_code,
+    t_bool changeable, uint8 *buf, uint32 max)
 {
 UNIT *uptr = &dka_unit[unit];
 uint32 heads = 16;
@@ -3373,6 +3373,8 @@ switch (page_code) {
             return 0;
         buf[0] = 0x01;
         buf[1] = 0x0A;
+        if (changeable)
+            return 12;
         buf[2] = 0x80;                              /* AWRE */
         buf[3] = 0x0B;                              /* read retry count */
         buf[8] = 0x0B;                              /* write retry count */
@@ -3390,6 +3392,8 @@ switch (page_code) {
             return 0;
         buf[0] = 0x03;
         buf[1] = 0x16;
+        if (changeable)
+            return 24;
         mikasa_ncr_write_be16 (&buf[10], sectors);
         mikasa_ncr_write_be16 (&buf[12], MIKASA_DKA_BLOCK_SIZE);
         mikasa_ncr_write_be16 (&buf[14], 1);
@@ -3400,6 +3404,8 @@ switch (page_code) {
             return 0;
         buf[0] = 0x04;
         buf[1] = 0x16;
+        if (changeable)
+            return 24;
         mikasa_ncr_write_be24 (&buf[2], cylinders);
         buf[5] = (uint8) heads;
         mikasa_ncr_write_be24 (&buf[6], 0);
@@ -3412,6 +3418,8 @@ switch (page_code) {
             return 0;
         buf[0] = 0x08;
         buf[1] = 0x12;
+        if (changeable)
+            return 20;
         buf[2] = 0x04;                              /* read cache enable */
         return 20;
 
@@ -3427,21 +3435,27 @@ switch (page_code) {
         }
 }
 
-static uint32 mikasa_ncr_mode_pages (uint32 unit, uint8 page_code, uint8 *buf,
-    uint32 max)
+static uint32 mikasa_ncr_mode_pages (uint32 unit, uint8 page_code,
+    t_bool changeable, uint8 *buf, uint32 max)
 {
 uint32 off = 0;
 
 if (page_code == 0x3F) {
-    off += mikasa_ncr_mode_page (unit, 0x01, buf + off, max - off);
-    off += mikasa_ncr_mode_page (unit, 0x02, buf + off, max - off);
-    off += mikasa_ncr_mode_page (unit, 0x03, buf + off, max - off);
-    off += mikasa_ncr_mode_page (unit, 0x04, buf + off, max - off);
-    off += mikasa_ncr_mode_page (unit, 0x08, buf + off, max - off);
-    off += mikasa_ncr_mode_page (unit, 0x0A, buf + off, max - off);
+    off += mikasa_ncr_mode_page (unit, 0x01, changeable, buf + off,
+        max - off);
+    off += mikasa_ncr_mode_page (unit, 0x02, changeable, buf + off,
+        max - off);
+    off += mikasa_ncr_mode_page (unit, 0x03, changeable, buf + off,
+        max - off);
+    off += mikasa_ncr_mode_page (unit, 0x04, changeable, buf + off,
+        max - off);
+    off += mikasa_ncr_mode_page (unit, 0x08, changeable, buf + off,
+        max - off);
+    off += mikasa_ncr_mode_page (unit, 0x0A, changeable, buf + off,
+        max - off);
     return off;
     }
-return mikasa_ncr_mode_page (unit, page_code, buf, max);
+return mikasa_ncr_mode_page (unit, page_code, changeable, buf, max);
 }
 
 static t_bool mikasa_ncr_scsi_mode_sense (uint32 unit, const uint8 *cdb,
@@ -3450,6 +3464,7 @@ static t_bool mikasa_ncr_scsi_mode_sense (uint32 unit, const uint8 *cdb,
 uint8 buf[256];
 UNIT *uptr = &dka_unit[unit];
 uint32 page_code = cdb[2] & 0x3F;
+uint32 page_control = (cdb[2] >> 6) & 3;
 uint32 alloc = ten ? mikasa_ncr_alloc_len10 (cdb) : cdb[4];
 uint32 header = ten ? 8 : 4;
 uint32 desc = (cdb[1] & 0x08) ? 0 : 8;
@@ -3471,8 +3486,8 @@ if (desc != 0) {
     mikasa_ncr_write_be24 (&buf[header + 1], blocks);
     mikasa_ncr_write_be24 (&buf[header + 5], MIKASA_DKA_BLOCK_SIZE);
     }
-pages = mikasa_ncr_mode_pages (unit, page_code, buf + page_off,
-    sizeof (buf) - page_off);
+pages = mikasa_ncr_mode_pages (unit, page_code, page_control == 1,
+    buf + page_off, sizeof (buf) - page_off);
 if ((pages == 0) && (page_code != 0x00)) {
     mikasa_ncr_set_sense (unit, 0x05, 0x24, 0x00);
     return FALSE;
