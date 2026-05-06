@@ -100,8 +100,10 @@ Not implemented yet:
   the current frontend cannot find a matching script interrupt.
   `INTFLY` is treated as non-halting and sets `ISTAT.INTF`, with CPU
   write-one clearing, while auxiliary script scans suppress `INTFLY` side
-  effects. SCRIPTS execution can now be started through `DCNTL.STD` as well as
-  by writing `DSP`.
+  effects. Auxiliary scans also suppress SCRIPTS register-op, load/store, and
+  memory-copy writes while preserving local SFBR/carry state for conditions.
+  SCRIPTS execution can now be started through `DCNTL.STD` as well as by
+  writing `DSP`.
   CPU writes no longer overwrite read-only NCR status registers, and completed
   MOVE phases are reflected in `SOCL`, `SBCL`, and `SSTAT1`. The high-level
   NCR path also exposes connected state through `SCNTL1.ISCON` and `ISTAT.CON`

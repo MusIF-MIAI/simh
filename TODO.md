@@ -38,6 +38,9 @@
   expose/clear `ISTAT.INTF`.
 - [x] Keep NCR `INTFLY` side effects out of auxiliary script scans so debug
   searches do not reassert `ISTAT.INTF`.
+- [x] Suppress auxiliary NCR scan side effects for SCRIPTS register ops,
+  load/store, and memory-copy instructions while preserving local SFBR/carry
+  state needed for conditions.
 - [x] Start NCR SCRIPTS execution from `DCNTL.STD`, not only from writes to
   `DSP`, matching the normal 53C810 driver path.
 - [x] Preserve NCR read-only status registers on CPU writes and expose current
@@ -71,6 +74,8 @@
   it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after the first NCR `SIST0.MIA` phase-mismatch
   path; it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after suppressing auxiliary NCR scan side effects;
+  it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -139,7 +144,8 @@ the real path works.
     synthetic phase markers;
   - current branch lets SCRIPTS `INTFLY` continue execution while setting
     `ISTAT.INTF`, which the CPU can clear with the documented write-one path;
-    auxiliary scans suppress those side effects;
+    auxiliary scans suppress those side effects, as well as register-op,
+    load/store, and memory-copy writes;
   - current branch starts SCRIPTS from `DCNTL.STD` as well as the firmware-style
     `DSP` high-byte write;
   - current branch preserves read-only NCR status registers and reports the

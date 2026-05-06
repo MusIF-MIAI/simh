@@ -2696,17 +2696,22 @@ uint8 val;
 switch (group) {
     case MIKASA_NCR_SFBR_REG:
         val = mikasa_ncr_script_alu (state->sfbr, data, op, state);
-        mikasa_ncr_reg[reg & (MIKASA_NCR_REG_SIZE - 1)] = val;
+        if (state->side_effects)
+            mikasa_ncr_reg[reg & (MIKASA_NCR_REG_SIZE - 1)] = val;
+        if ((reg & (MIKASA_NCR_REG_SIZE - 1)) == MIKASA_NCR_REG_SFBR)
+            state->sfbr = val;
         break;
 
     case MIKASA_NCR_REG_SFBR_OP:
         state->sfbr = mikasa_ncr_script_alu (old, data, op, state);
-        mikasa_ncr_reg[MIKASA_NCR_REG_SFBR] = state->sfbr;
+        if (state->side_effects)
+            mikasa_ncr_reg[MIKASA_NCR_REG_SFBR] = state->sfbr;
         break;
 
     case MIKASA_NCR_REG_REG:
         val = mikasa_ncr_script_alu (old, data, op, state);
-        mikasa_ncr_reg[reg & (MIKASA_NCR_REG_SIZE - 1)] = val;
+        if (state->side_effects)
+            mikasa_ncr_reg[reg & (MIKASA_NCR_REG_SIZE - 1)] = val;
         if ((reg & (MIKASA_NCR_REG_SIZE - 1)) == MIKASA_NCR_REG_SFBR)
             state->sfbr = val;
         break;
@@ -2730,13 +2735,15 @@ for (i = 0; i < count; i++) {
     if (op & MIKASA_NCR_LS_LOAD) {
         if (!mikasa_pci_dma_read_byte (memaddr + i, &val))
             return FALSE;
-        mikasa_ncr_reg[r] = val;
+        if (state->side_effects)
+            mikasa_ncr_reg[r] = val;
         if (r == MIKASA_NCR_REG_SFBR)
             state->sfbr = val;
         }
     else {
         val = mikasa_ncr_reg[r];
-        if (!mikasa_pci_dma_write_byte (memaddr + i, val))
+        if (state->side_effects &&
+            !mikasa_pci_dma_write_byte (memaddr + i, val))
             return FALSE;
         }
     }
@@ -2781,9 +2788,12 @@ uint32 group = op & MIKASA_NCR_TC_GROUP_MASK;
 if ((op & MIKASA_NCR_BM_TYPE_MASK) == 0xC0000000u) {
     uint32 dst;
 
-    if (!mikasa_pci_dma_read_long (next - 4, &dst))
-        return FALSE;
-    (void) mikasa_ncr_script_copy (arg, dst, op & MIKASA_NCR_BM_COUNT_MASK);
+    if (state->side_effects) {
+        if (!mikasa_pci_dma_read_long (next - 4, &dst))
+            return FALSE;
+        (void) mikasa_ncr_script_copy (arg, dst,
+            op & MIKASA_NCR_BM_COUNT_MASK);
+        }
     *dsp = next;
     return TRUE;
     }
