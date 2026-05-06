@@ -49,6 +49,8 @@
   no-event wait-reselect paths.
 - [x] Consume NCR `MESSAGE OUT` moves before command execution and clear ATN
   after the message-out handshake.
+- [x] Model NCR `CTEST3` revision/writable bits and DMA FIFO clear/flush
+  effects with the local FIFO-empty state.
 - [x] Start NCR SCRIPTS execution from `DCNTL.STD`, not only from writes to
   `DSP`, matching the normal 53C810 driver path.
 - [x] Preserve NCR read-only status registers on CPU writes and expose current
@@ -92,6 +94,8 @@
   handling; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after consuming NCR `MESSAGE OUT`; it still reaches
   `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after NCR `CTEST3`/FIFO-empty handling; it still
+  reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -171,6 +175,8 @@ the real path works.
     stops script scans at `WAIT RESELECT` until real reselect events exist;
   - current branch consumes message-out buffers before command execution and
     clears ATN after that handshake;
+  - current branch preserves the `CTEST3` revision nibble and handles DMA FIFO
+    clear/flush writes consistently with the FIFO-empty model;
   - current branch starts SCRIPTS from `DCNTL.STD` as well as the firmware-style
     `DSP` high-byte write;
   - current branch preserves read-only NCR status registers and reports the
