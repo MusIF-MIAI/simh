@@ -67,6 +67,8 @@
 - [x] Decode NCR SCRIPTS Load/Store separately from Memory Move using the
   three-bit instruction type, keep Load/Store instructions two longwords, and
   enforce documented Load/Store alignment/count limits.
+- [x] Compare NCR Transfer Control phases using the documented bits `26..24`
+  instead of the data-compare low bits.
 - [x] Honor NCR Load/Store restrictions that chip register-window target
   addresses raise `DSTAT.IID` and `SFBR` cannot be loaded by Load/Store.
 - [x] Model SCRIPTS Memory Move access to NCR register windows, including
@@ -93,6 +95,9 @@
   and select-with-ATN state into visible 53C810 registers.
 - [x] Model visible NCR SCRIPTS wait-state behavior for legal disconnect and
   no-event wait-reselect paths.
+- [x] Execute non-SELECT NCR control scripts until a halting `INT` or wait
+  state, so post-status/message completion scripts do not falsely raise
+  `DSTAT.BF`.
 - [x] Preserve NCR `WAIT RESELECT` as an explicit wait state and honor
   `ISTAT.SIGP` by jumping to the alternate script address and resuming
   execution; `CTEST2` mirrors and clears the visible `SIGP` bit on read.
@@ -360,6 +365,9 @@ the real path works.
     enforces Load/Store alignment/count limits, blocks Load/Store register
     window targets, keeps `SFBR` from being loaded by Load/Store, and lets
     Memory Move reach NCR register windows while loading visible `TEMP`;
+  - current branch compares Transfer Control phases using the documented
+    `26..24` phase field and can run non-SELECT control scripts through a
+    halting `INT` or wait state;
   - current branch preserves read-only `ADDER`, updates `ADDER`/`DNAD`/`DBC`
     from `CTEST5.ADCK` and `CTEST5.BBCK` pulse writes, and auto-clears those
     pulse bits;

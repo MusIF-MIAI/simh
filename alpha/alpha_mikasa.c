@@ -3396,7 +3396,7 @@ if ((op & (MIKASA_NCR_TC_DATA | MIKASA_NCR_TC_PHASE)) != 0) {
         }
     if (op & MIKASA_NCR_TC_PHASE) {
         t_bool match = (state->phase != MIKASA_NCR_SCRIPT_NO_PHASE) &&
-            (state->phase == (op & 7));
+            (state->phase == mikasa_ncr_op_phase (op));
 
         if (match != jump_if)
             do_it = FALSE;
@@ -4675,6 +4675,41 @@ switch (cdb[0]) {
         }
 }
 
+static t_bool mikasa_ncr_run_control_script (uint32 dsp)
+{
+uint32 stack[MIKASA_NCR_SCRIPT_STACK];
+MIKASA_NCR_SCRIPT_STATE state;
+uint32 sp = 0;
+uint32 i;
+
+memset (stack, 0, sizeof (stack));
+memset (&state, 0, sizeof (state));
+state.phase = MIKASA_NCR_SCRIPT_NO_PHASE;
+state.sfbr = mikasa_ncr_reg[MIKASA_NCR_REG_SFBR];
+state.side_effects = TRUE;
+for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
+    uint32 op;
+    uint32 arg;
+    uint32 next;
+    uint32 group;
+
+    if (!mikasa_ncr_fetch_script (dsp, &op, &arg, TRUE))
+        return FALSE;
+    group = op & MIKASA_NCR_TC_GROUP_MASK;
+    if ((group == MIKASA_NCR_TC_INT) &&
+        ((op & MIKASA_NCR_TC_INTFLY) == 0) &&
+        mikasa_ncr_script_condition (op, &state)) {
+        mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SIR, arg);
+        return TRUE;
+        }
+    next = mikasa_ncr_next_script_addr (dsp, op);
+    if (!mikasa_ncr_advance_script (&dsp, op, arg, next, stack, &sp,
+        &state))
+        return mikasa_ncr_wait_reselect ? TRUE : FALSE;
+    }
+return FALSE;
+}
+
 static t_bool mikasa_ncr_run_script (uint32 dsp)
 {
 uint32 dsa = mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA);
@@ -4694,7 +4729,7 @@ uint8 status;
 
 if (!mikasa_ncr_find_select (dsp, dsa, &target)) {
     mikasa_ncr_clear_transaction ();
-    return FALSE;
+    return mikasa_ncr_run_control_script (dsp);
     }
 if ((target >= MIKASA_DKA_UNITS) || ((dka_unit[target].flags & UNIT_ATT) == 0)) {
     sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
