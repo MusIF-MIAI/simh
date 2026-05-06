@@ -322,6 +322,7 @@
 #define MIKASA_RTC_PF               0x40
 #define MIKASA_RTC_IRQF             0x80
 #define MIKASA_RTC_POWER_OK         0x80
+#define MIKASA_RTC_NVRAM_SIZE       128
 
 #define MIKASA_DBG_IO               0x0001
 #define MIKASA_DBG_UART             0x0002
@@ -464,6 +465,8 @@ t_stat mikasa_set_rom (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat mikasa_set_rom_payload (UNIT *uptr, int32 val, CONST char *cptr,
     void *desc);
 t_stat mikasa_save_rom (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
+t_stat mikasa_set_nvram (UNIT *uptr, int32 val, CONST char *cptr,
+    void *desc);
 t_stat mikasa_boot_rom (int32 unitno);
 t_stat mikasa_svc (UNIT *uptr);
 void mikasa_mem_write (t_uint64 pa, t_uint64 dat, uint32 lnt);
@@ -472,6 +475,8 @@ t_stat mikasa_pal_proc_inst (uint32 fnc);
 static t_bool mikasa_io_rd (t_uint64 pa, t_uint64 *val, uint32 lnt);
 static t_bool mikasa_io_wr (t_uint64 pa, t_uint64 val, uint32 lnt);
 
+static void mikasa_rtc_init_defaults (void);
+static t_stat mikasa_nvram_save_file (void);
 static void mikasa_zero_phys (t_uint64 pa, uint32 size);
 static t_stat mikasa_ensure_mem (void);
 static void mikasa_copy_cstr (char *dst, uint32 dst_size, const uint8 *src,
@@ -626,6 +631,8 @@ static uint8 mikasa_pit_reg[3] = { 0 };
 static uint8 mikasa_portb = 0;
 static uint8 mikasa_rtc_index = 0;
 static uint8 mikasa_rtc_reg[128] = { 0 };
+static char mikasa_nvram_path[CBUFSIZE] = "";
+static t_bool mikasa_nvram_loaded = FALSE;
 static uint8 mikasa_sio_index = 0;
 static uint8 mikasa_sio_reg[256] = { 0 };
 static uint8 mikasa_fdc_reg[8] = { 0 };
@@ -703,6 +710,9 @@ MTAB mikasa_mod[] = {
     { MTAB_XTD|MTAB_VDV|MTAB_VALR|MTAB_NC, 0, "ROMSAVE", "ROMSAVE",
       &mikasa_save_rom, NULL, NULL,
       "Save the current decompressed Mikasa SRM ROM image" },
+    { MTAB_XTD|MTAB_VDV|MTAB_VALR|MTAB_NC, 0, "NVRAM", "NVRAM",
+      &mikasa_set_nvram, NULL, NULL,
+      "Load or create a 128-byte Mikasa RTC/NVRAM image" },
     { 0 }
     };
 
@@ -1011,6 +1021,80 @@ if (mikasa_rtc_reg[MIKASA_RTC_STATUSB] & MIKASA_RTC_BINARY)
 return (uint8) (((val / 10) << 4) | (val % 10));
 }
 
+static t_bool mikasa_rtc_alarm_field_match (uint8 alarm, uint8 now)
+{
+if ((alarm & 0xC0) == 0xC0)
+    return TRUE;
+return alarm == now;
+}
+
+static t_bool mikasa_rtc_alarm_match (struct tm *tm)
+{
+return mikasa_rtc_alarm_field_match (mikasa_rtc_reg[0x01],
+    mikasa_rtc_encode ((uint32) tm->tm_sec)) &&
+    mikasa_rtc_alarm_field_match (mikasa_rtc_reg[0x03],
+    mikasa_rtc_encode ((uint32) tm->tm_min)) &&
+    mikasa_rtc_alarm_field_match (mikasa_rtc_reg[0x05],
+    mikasa_rtc_encode ((uint32) tm->tm_hour));
+}
+
+static void mikasa_rtc_init_defaults (void)
+{
+memset (mikasa_rtc_reg, 0, sizeof (mikasa_rtc_reg));
+mikasa_rtc_reg[0x01] = 0xC0;
+mikasa_rtc_reg[0x03] = 0xC0;
+mikasa_rtc_reg[0x05] = 0xC0;
+mikasa_rtc_reg[MIKASA_RTC_STATUSA] = 0x26;
+mikasa_rtc_reg[MIKASA_RTC_STATUSB] = MIKASA_RTC_24HR;
+mikasa_rtc_reg[MIKASA_RTC_STATUSD] = MIKASA_RTC_POWER_OK;
+return;
+}
+
+static t_stat mikasa_nvram_save_file (void)
+{
+FILE *fileref;
+t_stat r = SCPE_OK;
+
+if (mikasa_nvram_path[0] == 0)
+    return SCPE_OK;
+fileref = sim_fopen (mikasa_nvram_path, "wb");
+if (fileref == NULL)
+    return sim_messagef (SCPE_OPENERR,
+        "MIKASA: cannot open NVRAM image %s\n", mikasa_nvram_path);
+if (sim_fwrite (mikasa_rtc_reg, 1, MIKASA_RTC_NVRAM_SIZE, fileref) !=
+    MIKASA_RTC_NVRAM_SIZE)
+    r = SCPE_IOERR;
+fclose (fileref);
+return r;
+}
+
+t_stat mikasa_set_nvram (UNIT *uptr, int32 val, CONST char *cptr, void *desc)
+{
+FILE *fileref;
+size_t bytes;
+
+if ((cptr == NULL) || (*cptr == 0))
+    return SCPE_ARG;
+strncpy (mikasa_nvram_path, cptr, sizeof (mikasa_nvram_path) - 1);
+mikasa_nvram_path[sizeof (mikasa_nvram_path) - 1] = 0;
+fileref = sim_fopen (cptr, "rb");
+if (fileref == NULL) {
+    mikasa_rtc_init_defaults ();
+    mikasa_nvram_loaded = TRUE;
+    return mikasa_nvram_save_file ();
+    }
+bytes = sim_fread (mikasa_rtc_reg, 1, MIKASA_RTC_NVRAM_SIZE, fileref);
+fclose (fileref);
+if (bytes != MIKASA_RTC_NVRAM_SIZE)
+    return sim_messagef (SCPE_FMT,
+        "MIKASA: NVRAM image %s is not %u bytes\n", cptr,
+        MIKASA_RTC_NVRAM_SIZE);
+mikasa_nvram_loaded = TRUE;
+mikasa_rtc_reg[MIKASA_RTC_STATUSD] = MIKASA_RTC_POWER_OK;
+sim_printf ("Loaded Mikasa RTC/NVRAM image from %s\n", cptr);
+return SCPE_OK;
+}
+
 static uint8 mikasa_rtc_read_data (void)
 {
 uint8 index = mikasa_rtc_index & 0x7F;
@@ -1086,6 +1170,7 @@ uint8 index = mikasa_rtc_index & 0x7F;
 
 if ((index != MIKASA_RTC_INTR) && (index != MIKASA_RTC_STATUSD)) {
     mikasa_rtc_reg[index] = val;
+    (void) mikasa_nvram_save_file ();
     if ((index == MIKASA_RTC_STATUSB) &&
         ((val & (MIKASA_RTC_UIE | MIKASA_RTC_AIE | MIKASA_RTC_PIE)) == 0)) {
         mikasa_rtc_reg[MIKASA_RTC_INTR] = 0;
@@ -1101,11 +1186,19 @@ return;
 t_stat mikasa_svc (UNIT *uptr)
 {
 uint8 status = 0;
+time_t now;
+struct tm *tm;
 
 if (mikasa_rtc_reg[MIKASA_RTC_STATUSB] & MIKASA_RTC_PIE)
     status |= MIKASA_RTC_PF;
 if (mikasa_rtc_reg[MIKASA_RTC_STATUSB] & MIKASA_RTC_UIE)
     status |= MIKASA_RTC_UF;
+if (mikasa_rtc_reg[MIKASA_RTC_STATUSB] & MIKASA_RTC_AIE) {
+    now = time (NULL);
+    tm = localtime (&now);
+    if ((tm != NULL) && mikasa_rtc_alarm_match (tm))
+        status |= MIKASA_RTC_AF;
+    }
 if ((status != 0) && (mikasa_irq_mask & MIKASA_RTC_INTBIT)) {
     mikasa_rtc_reg[MIKASA_RTC_INTR] |= status | MIKASA_RTC_IRQF;
     mikasa_irq_summary |= MIKASA_RTC_INTBIT;
@@ -5880,9 +5973,12 @@ mikasa_pit_mode = 0;
 memset (mikasa_pit_reg, 0, sizeof (mikasa_pit_reg));
 mikasa_portb = 0;
 mikasa_rtc_index = 0;
-memset (mikasa_rtc_reg, 0, sizeof (mikasa_rtc_reg));
-mikasa_rtc_reg[MIKASA_RTC_STATUSA] = 0x26;
-mikasa_rtc_reg[MIKASA_RTC_STATUSB] = MIKASA_RTC_24HR;
+if (!mikasa_nvram_loaded)
+    mikasa_rtc_init_defaults ();
+else {
+    mikasa_rtc_reg[MIKASA_RTC_INTR] = 0;
+    mikasa_rtc_reg[MIKASA_RTC_STATUSD] = MIKASA_RTC_POWER_OK;
+    }
 mikasa_sio_index = 0;
 memset (mikasa_sio_reg, 0, sizeof (mikasa_sio_reg));
 memset (mikasa_fdc_reg, 0, sizeof (mikasa_fdc_reg));

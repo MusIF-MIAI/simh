@@ -53,6 +53,8 @@ Implemented:
   - `DEP MIKASA SCCSCALE <n>` can be used as a debug accelerator for SRM
     delay loops. The default is `1`, which preserves the normal PAL `RSCC`
     counter behavior.
+  - `SET MIKASA NVRAM=<path>` loads or creates a 128-byte MC146818-compatible
+    RTC/NVRAM image. RTC writes are persisted immediately when this is set.
 - OpenVMS Alpha APB direct loader:
   - Reads LBN/count from the primary boot block offsets used by the dump.
   - Loads the primary bootstrap at physical `0x00200000`.

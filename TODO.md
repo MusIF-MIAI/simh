@@ -13,6 +13,8 @@
 - [x] Add Intel 82375EB/PCEB PCI/EISA bridge config shell with write masks.
 - [x] Add ISA DMA/page-register storage, FDC shell, OCP shell, RTC basics, and
   EISA CRAM/absent-slot behavior.
+- [x] Add optional file-backed 128-byte RTC/NVRAM image support with default
+  RTC values and alarm/update/periodic interrupt state.
 - [x] Add 8259 PIC init, mask/pending/in-service, EOI, auto-EOI, cascade IACK,
   and ELCR storage.
 - [x] Route COM1 receive interrupts through the SRM-programmed PIC path.
@@ -37,8 +39,8 @@
   especially error registers, TBIA/HAE details, and DMA corner cases.
 - [ ] Validate ICU/PIC level-vs-edge semantics against OpenVMS and FreeBSD
   drivers.
-- [ ] Finish MC146818 RTC/NVRAM storage and real AlphaServer 1000 console
-  environment defaults.
+- [ ] Identify the real AlphaServer 1000 NVRAM layout and encode SRM console
+  defaults such as console mode, auto_action, boot device, and boot flags.
 - [ ] Improve OCP/Halt/Ctrl-P behavior enough for SRM console transitions.
 - [ ] Decide whether VGA/Cirrus probing is required for the real AS1000 path.
 - [ ] Implement real DECchip 21040 packet I/O and Tulip descriptor processing.
@@ -103,11 +105,11 @@ the real path works.
   - add ISA DMA page registers and harmless behavior for common DMA channels;
   - return documented absent-slot behavior for EISA probes.
 - Implement MC146818 RTC/NVRAM more fully:
-  - time-of-day, status A/B/C/D, update/periodic/alarm flags, and interrupt
-    behavior;
-  - 128-byte NVRAM storage with a documented default image;
+  - current branch has host-backed time-of-day, status A/B/C/D,
+    update/periodic/alarm flags, interrupt behavior, and optional file-backed
+    128-byte NVRAM storage;
   - plausible defaults for `console serial`, `auto_action`, boot device, and
-    boot flags once the AS1000 NVRAM layout is known.
+    boot flags still require the AS1000 NVRAM layout.
 - Improve OCP/Halt/Ctrl-P handling:
   - model the ready/status bits and Halt button behavior expected by SRM;
   - make console-entry decisions observable in debug traces.
