@@ -77,7 +77,10 @@ Not implemented yet:
 
 - Complete real Mikasa 21071 PCI host bridge behavior. The current Comanche
   and EPIC models are register shells, not a full chipset implementation.
-- Complete NCR/Symbios 53C810 SCRIPTS/DMA engine and SCSI bus transactions.
+- Full NCR/Symbios 53C810 SCRIPTS/DMA execution. The current frontend handles
+  simple script walking, `SEL_ABS`/`SEL_TBL`, table-indirect command/data/status
+  moves, controller interrupt status, common SCSI-2 disk commands, and per-target
+  REQUEST SENSE state, but it is not a complete SCRIPTS processor.
 - Network, VGA, full NVRAM, and multiprocessor support.
 - A complete SRM-compatible firmware execution environment. The real SRM image
   now reaches the SRM banner and receives serial input, but it does not reach
@@ -311,11 +314,12 @@ debug tracing, the PC cycles inside the ROM decompressor around `0x900301` and
 
 1. Advance the real SRM firmware path to the `P00>>>` prompt.
    The real `mksrmrom.exe` now prints the DEC/MIKASA SRM V5.4-101 banner. The
-   serial interrupt path is live, so the next work is the remaining post-banner
-   SCSI probe loop. PCI debug currently shows repeated `INQUIRY` commands to
-   targets 0-3, followed by select timeouts on targets 4-6, then another scan.
-   Continue tightening 53C810 SCRIPTS/data/status/message completion until the
-   probe finishes and `BOOT DKA0` can be issued from SRM.
+   serial interrupt path is live. The 53C810 path now decodes absolute and
+   table-indirect selectors, follows simple unconditional script control flow,
+   handles table-indirect command/data/status moves, and returns SCSI-2 sense
+   data for common disk commands. Continue replacing the scanner with a real
+   SCRIPTS executor until the probe finishes and `BOOT DKA0` can be issued from
+   SRM.
 
 2. Understand the direct-APB `SYSBOOT.EXE` lookup failure.
    The APB now reaches the system root and reads `SYSEXE`-related ODS-2
@@ -337,12 +341,15 @@ debug tracing, the PC cycles inside the ROM decompressor around `0x900301` and
    storage, HAXR1 sparse-memory addressing, PCI configuration cycles, the
    raw-IDSEL `7` Intel 82375EB PCI/EISA bridge, the raw-IDSEL `6` NCR 53C810
    PCI configuration/register window, ISA DMA/page-register storage, an FDC
-   shell, and a minimal 8259 PIC/COM1 receive interrupt path.
+   shell, ELCR/PIC initialization and auto-EOI handling, and a minimal 8259
+   PIC/COM1 receive interrupt path.
 
-6. Add a new NCR/Symbios 53C810 frontend.
-   SIMH has a common SCSI backend, but no 53C810 PCI DMA frontend in this tree.
-   The implementation must be written cleanly for SIMH licensing; do not copy
-   GPL code from AXPbox.
+6. Continue the NCR/Symbios 53C810 frontend.
+   SIMH has a common SCSI backend, but no complete 53C810 PCI DMA frontend in
+   this tree. The implementation must be written cleanly for SIMH licensing; do
+   not copy GPL code from AXPbox. The immediate missing pieces are conditional
+   SCRIPTS execution, scatter/gather chaining, phase-mismatch paths, and wiring
+   the transfer layer to SIMH `sim_scsi` where practical.
 
 7. Wire the 53C810 frontend to the four DKA images.
    Once APB switches from firmware disk reads to OS disk I/O, the current raw

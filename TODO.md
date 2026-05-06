@@ -16,12 +16,14 @@ the real path works.
 
 - Replace the current NCR/Symbios 53C810 command shim with a real-enough
   SCRIPTS/DMA engine:
-  - execute the SRM PKE script flow instead of recognizing only the first
-    selection/CDB pattern;
-  - implement table-indirect DSA moves for command, data, status, and message
-    phases;
-  - model `DSP`, `DSPS`, `DSTAT`, `SIST0`, `SIST1`, `ISTAT`, SIR/DIP/SIP, and
-    select timeout semantics from the NCR/LSI manuals;
+  - current branch follows simple unconditional script flow and decodes
+    `SEL_ABS`, `SEL_TBL`, and table-indirect command/data/status/message moves;
+  - continue replacing the scanner with actual conditional SCRIPTS execution,
+    scatter/gather chaining, phase mismatch handling, and memory moves;
+  - current branch models the main `DSP`, `DSPS`, `DSTAT`, `SIST0`, `SIST1`,
+    `ISTAT`, SIR/DIP/SIP, abort, and select-timeout paths used so far;
+  - current branch returns common SCSI-2 disk responses, write-protect check
+    conditions, and per-target REQUEST SENSE state;
   - use SIMH `sim_scsi` as the backing SCSI command/device layer where it fits;
   - keep target-absent timeout behavior clean with and without attached disks.
 - Complete the APECS/DECchip 21071 base enough for firmware and operating
@@ -34,8 +36,9 @@ the real path works.
 - Tighten interrupt routing:
   - keep AS1000 ICU bit 12 -> EV4 hardware IRQ2 -> SRM vector `0x9C0` for NCR;
   - keep COM1 IRQ4 through the 8259/PIC IACK path;
-  - model level/edge, mask, pending, in-service, EOI, and cascade behavior
-    closely enough for SRM and OpenVMS drivers.
+  - current branch handles PIC init sequencing, ICW4 auto-EOI, ELCR storage,
+    mask/pending/in-service state, EOI, and cascade IACK paths;
+  - continue checking level/edge semantics against OpenVMS and FreeBSD drivers.
 
 ## P1 Firmware Platform Devices
 
