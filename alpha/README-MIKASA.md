@@ -95,6 +95,9 @@ Not implemented yet:
   status bits remain latched until read.
   Handled SCRIPTS fetches and data MOVE transfers now update visible
   `DBC`, `DNAD`, `DSP`, and `DSPS` progress registers.
+  SCRIPTS `INT` completion interrupts now prefer the real second-word value
+  from the script in `DSPS`, falling back to synthetic phase markers only when
+  the current frontend cannot find a matching script interrupt.
   CPU writes no longer overwrite read-only NCR status registers, and completed
   MOVE phases are reflected in `SOCL`, `SBCL`, and `SSTAT1`.
   The local SCSI disk path also handles extended probe/read commands such as

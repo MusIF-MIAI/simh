@@ -30,6 +30,8 @@
   across scatter/gather DMA segment lists.
 - [x] Update NCR `DBC`, `DNAD`, `DSP`, and `DSPS` as handled SCRIPTS fetches
   and data MOVE transfers progress.
+- [x] Prefer real NCR SCRIPTS `INT` second-word values for `DSPS` completion
+  interrupts, with synthetic values only as fallback.
 - [x] Preserve NCR read-only status registers on CPU writes and expose current
   MOVE phase through `SOCL`, `SBCL`, and `SSTAT1`.
 - [x] Honor NCR `DIEN`, `SIEN0`, and `SIEN1` interrupt masks while preserving
@@ -107,6 +109,9 @@ the real path works.
     SCSI payloads across scatter/gather segment lists;
   - current branch updates visible SCRIPTS/DMA progress registers for handled
     instruction fetches and completed MOVE segments;
+  - current branch uses SCRIPTS `INT` instruction arguments for `DSPS`
+    completion values when they can be found, rather than always returning
+    synthetic phase markers;
   - current branch preserves read-only NCR status registers and reports the
     active MOVE phase in the SCSI bus/status phase bits;
   - current branch returns common SCSI-2 disk responses, write-protect check
