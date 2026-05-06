@@ -2993,12 +2993,27 @@ uint8 old;
 reg = reg & (MIKASA_NCR_REG_SIZE - 1);
 old = mikasa_ncr_reg[reg];
 if ((reg == MIKASA_NCR_REG_DSTAT) ||
+    (reg == MIKASA_NCR_REG_SSID) ||
+    (reg == MIKASA_NCR_REG_SBCL) ||
     (reg == MIKASA_NCR_REG_SSTAT0) ||
     (reg == MIKASA_NCR_REG_SSTAT1) ||
     (reg == MIKASA_NCR_REG_SSTAT2) ||
     (reg == MIKASA_NCR_REG_SIST0) ||
-    (reg == MIKASA_NCR_REG_SIST1))
+    (reg == MIKASA_NCR_REG_SIST1) ||
+    (reg == MIKASA_NCR_REG_SIDL) ||
+    (reg == (MIKASA_NCR_REG_SIDL + 1)) ||
+    (reg == MIKASA_NCR_REG_SBDL) ||
+    (reg == (MIKASA_NCR_REG_SBDL + 1)))
     return;
+if (reg == MIKASA_NCR_REG_SODL) {
+    mikasa_ncr_set_output_latch (val);
+    return;
+    }
+if (reg == (MIKASA_NCR_REG_SODL + 1)) {
+    mikasa_ncr_reg[reg] = val;
+    mikasa_ncr_reg[MIKASA_NCR_REG_SBDL + 1] = val;
+    return;
+    }
 if (reg == MIKASA_NCR_REG_SCNTL0) {
     mikasa_ncr_write_scntl0 (val);
     return;
@@ -4614,15 +4629,30 @@ if (reg == MIKASA_NCR_REG_ISTAT) {
         mikasa_ncr_start_script (sigp_dsp);
     }
 else if ((reg == MIKASA_NCR_REG_DSTAT) ||
+    (reg == MIKASA_NCR_REG_SSID) ||
+    (reg == MIKASA_NCR_REG_SBCL) ||
     (reg == MIKASA_NCR_REG_SSTAT0) ||
     (reg == MIKASA_NCR_REG_SSTAT1) ||
     (reg == MIKASA_NCR_REG_SSTAT2) ||
     (reg == MIKASA_NCR_REG_SIST0) ||
-    (reg == MIKASA_NCR_REG_SIST1))
+    (reg == MIKASA_NCR_REG_SIST1) ||
+    (reg == MIKASA_NCR_REG_SIDL) ||
+    (reg == (MIKASA_NCR_REG_SIDL + 1)) ||
+    (reg == MIKASA_NCR_REG_SBDL) ||
+    (reg == (MIKASA_NCR_REG_SBDL + 1)))
     return;
 else {
     uint8 old = mikasa_ncr_reg[reg];
 
+    if (reg == MIKASA_NCR_REG_SODL) {
+        mikasa_ncr_set_output_latch (val);
+        return;
+        }
+    if (reg == (MIKASA_NCR_REG_SODL + 1)) {
+        mikasa_ncr_reg[reg] = val;
+        mikasa_ncr_reg[MIKASA_NCR_REG_SBDL + 1] = val;
+        return;
+        }
     if (reg == MIKASA_NCR_REG_SCNTL0) {
         mikasa_ncr_write_scntl0 (val);
         return;

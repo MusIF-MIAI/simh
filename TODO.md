@@ -95,6 +95,9 @@
   data-in, status, and message-in transfers.
 - [x] Reflect first-byte SCSI bus data in low-level NCR latches: input phases
   update `SIDL`/`SBDL`, and output phases update `SODL`/`SBDL`.
+- [x] Preserve read-only NCR low-level bus/latch registers (`SSID`, `SBCL`,
+  `SIDL`, and `SBDL`) on host/SCRIPTS writes, while routing `SODL` writes to
+  the output/bus data latches.
 - [x] Reflect successful NCR SCRIPTS arbitration/select attempts in
   `SSTAT0.WOA`.
 - [x] Honor NCR `DMODE.MAN` manual-start mode so `DSP` writes do not start
@@ -227,6 +230,9 @@
   model; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after mirroring NCR BAR register aliases; it still
   reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after preserving NCR low-level read-only bus/latch
+  registers and routing `SODL` writes; it still reaches `V5.4-101` and detects
+  pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -323,6 +329,9 @@ the real path works.
     documented FIFO residual calculations see an empty FIFO;
   - current branch updates `SFBR` from handled data-in, status, and message-in
     phases so SCRIPTS tests see the first received byte;
+  - current branch preserves read-only low-level bus/latch registers (`SSID`,
+    `SBCL`, `SIDL`, and `SBDL`) on host/SCRIPTS writes, while `SODL` writes
+    update the output and bus data latches;
   - current branch exposes the won-arbitration status bit after SCRIPTS
     selection attempts;
   - current branch honors `DMODE.MAN`, requiring `DCNTL.STD` to start SCRIPTS

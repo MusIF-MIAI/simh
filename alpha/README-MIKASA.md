@@ -146,8 +146,10 @@ Not implemented yet:
   mirrors the low seven bits of `DBC`, so documented FIFO residual
   calculations report an empty FIFO. `SFBR`, `SIDL`, and
   `SBDL` are updated with the first byte of handled input phases, while
-  command/data/message output phases update `SODL`/`SBDL`. SCRIPTS selection
-  attempts now expose the won-arbitration status bit in `SSTAT0`.
+  command/data/message output phases update `SODL`/`SBDL`. Host and SCRIPTS
+  writes preserve read-only `SSID`, `SBCL`, `SIDL`, and `SBDL`; writes to
+  `SODL` update the output and bus data latches. SCRIPTS selection attempts
+  now expose the won-arbitration status bit in `SSTAT0`.
   `DMODE.MAN`
   manual-start mode is honored, so `DSP` writes only auto-start SCRIPTS when
   manual-start is clear; `DCNTL.SSM` single-step mode also requires
