@@ -2616,17 +2616,32 @@ static void mikasa_pci_conf_write (t_uint64 pa, t_uint64 val, uint32 lnt)
 uint32 off = (uint32) (pa - MIKASA_APECS_PCI_CONF);
 uint32 mode = (off >> 3) & 3;
 uint32 cfg = off >> 5;
+uint32 reg = cfg & ~3u;
+uint32 old;
 uint32 data;
+uint32 mask;
+uint32 shift;
 
-if (mode == 3)
+if (mode == 3) {
     data = (uint32) val;
-else if (mode == 1)
-    data = (uint32) (val >> (8 * (cfg & 2)));
-else if (lnt == L_BYTE)
-    data = (uint32) val;
-else
-    data = (uint32) (val >> (8 * (cfg & 3)));
-mikasa_pci_conf_write_l (cfg & ~3u, data);
+    mask = M32;
+    }
+else {
+    old = mikasa_pci_conf_read_l (reg);
+    if (mode == 1) {
+        shift = 8 * (cfg & 2);
+        data = ((uint32) (val >> shift)) & 0xFFFFu;
+        mask = 0xFFFFu << shift;
+        }
+    else {
+        shift = 8 * (cfg & 3);
+        data = (lnt == L_BYTE) ? ((uint32) val & 0xFFu) :
+            (((uint32) (val >> shift)) & 0xFFu);
+        mask = 0xFFu << shift;
+        }
+    data = (old & ~mask) | ((data << shift) & mask);
+    }
+mikasa_pci_conf_write_l (reg, data);
 return;
 }
 
