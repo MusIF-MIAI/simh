@@ -36,6 +36,8 @@
   latched `DSTAT`/`SIST` status.
 - [x] Add common SCSI-2 disk responses, per-target REQUEST SENSE, MODE SENSE
   pages, read/write paths, write-protect handling, and harmless disk no-ops.
+- [x] Add common extended SCSI disk probes: `READ(12)`, `WRITE(12)`,
+  `REPORT LUNS`, and `READ CAPACITY(16)`.
 - [x] Add DECchip 21040/Tulip PCI/CSR shell.
 - [x] Re-run SRM ROM smoke after the current APECS/NCR hardware batch; it
   still reaches the Mikasa `V5.4-101` banner and sees pka/ewa.

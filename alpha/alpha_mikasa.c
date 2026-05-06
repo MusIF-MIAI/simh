@@ -2268,6 +2268,13 @@ buf[3] = (uint8) val;
 return;
 }
 
+static void mikasa_ncr_write_be64 (uint8 *buf, t_uint64 val)
+{
+mikasa_ncr_write_be32 (buf, (uint32) (val >> 32));
+mikasa_ncr_write_be32 (buf + 4, (uint32) val);
+return;
+}
+
 static void mikasa_ncr_write_be16 (uint8 *buf, uint32 val)
 {
 buf[0] = (uint8) (val >> 8);
@@ -2293,6 +2300,12 @@ return (m < c) ? m : c;
 static uint32 mikasa_ncr_alloc_len10 (const uint8 *cdb)
 {
 return (((uint32) cdb[7]) << 8) | cdb[8];
+}
+
+static uint32 mikasa_ncr_cdb_be32 (const uint8 *cdb, uint32 off)
+{
+return (((uint32) cdb[off]) << 24) | (((uint32) cdb[off + 1]) << 16) |
+    (((uint32) cdb[off + 2]) << 8) | cdb[off + 3];
 }
 
 static void mikasa_ncr_clear_sense (uint32 unit)
@@ -2716,6 +2729,8 @@ switch (cdb[0]) {
     case 0x3B:                                      /* WRITE BUFFER */
     case 0x3F:                                      /* WRITE LONG */
     case 0x55:                                      /* MODE SELECT(10) */
+    case 0xAA:                                      /* WRITE(12) */
+    case 0xAE:                                      /* WRITE AND VERIFY(12) */
         return TRUE;
 
     default:
@@ -3031,6 +3046,23 @@ switch (cdb[0]) {
         blocks = (((uint32) cdb[7]) << 8) | cdb[8];
         return mikasa_ncr_scsi_write (unit, lbn, blocks, data, status);
 
+    case 0xA8:                                              /* READ(12) */
+        lbn = mikasa_ncr_cdb_be32 (cdb, 2);
+        blocks = mikasa_ncr_cdb_be32 (cdb, 6);
+        if (mikasa_ncr_scsi_read (unit, lbn, blocks, data)) {
+            mikasa_ncr_clear_sense (unit);
+            return TRUE;
+            }
+        mikasa_ncr_set_sense (unit, 0x05, 0x21, 0x00);
+        *status = 2;
+        return TRUE;
+
+    case 0xAA:                                              /* WRITE(12) */
+    case 0xAE:                                              /* WRITE AND VERIFY(12) */
+        lbn = mikasa_ncr_cdb_be32 (cdb, 2);
+        blocks = mikasa_ncr_cdb_be32 (cdb, 6);
+        return mikasa_ncr_scsi_write (unit, lbn, blocks, data, status);
+
     case 0x2B:                                              /* SEEK(10) */
     case 0x2F:                                              /* VERIFY(10) */
     case 0x34:                                              /* PRE-FETCH(10) */
@@ -3074,6 +3106,29 @@ switch (cdb[0]) {
             return TRUE;
         *status = 2;
         return TRUE;
+
+    case 0x9E:                                              /* SERVICE ACTION IN(16) */
+        if ((cdb[1] & 0x1F) != 0x10) {                      /* READ CAPACITY(16) */
+            mikasa_ncr_set_sense (unit, 0x05, 0x20, 0x00);
+            *status = 2;
+            return TRUE;
+            }
+        if ((uptr->flags & UNIT_ATT) == 0)
+            return FALSE;
+        mikasa_ncr_write_be64 (&buf[0],
+            uptr->capac ? ((t_uint64) uptr->capac - 1) : 0);
+        mikasa_ncr_write_be32 (&buf[8], MIKASA_DKA_BLOCK_SIZE);
+        len = mikasa_ncr_min3 (data->bytes, mikasa_ncr_cdb_be32 (cdb, 10),
+            32);
+        mikasa_ncr_clear_sense (unit);
+        return mikasa_ncr_write_scsi_data (data, buf, len);
+
+    case 0xA0:                                              /* REPORT LUNS */
+        mikasa_ncr_write_be32 (&buf[0], 8);
+        len = mikasa_ncr_min3 (data->bytes, mikasa_ncr_cdb_be32 (cdb, 6),
+            16);
+        mikasa_ncr_clear_sense (unit);
+        return mikasa_ncr_write_scsi_data (data, buf, len);
 
     default:
         sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
