@@ -206,6 +206,9 @@
 #define MIKASA_NCR_BM_PHASE_MASK    0x07000000u
 #define MIKASA_NCR_BM_PHASE_SHIFT   24
 #define MIKASA_NCR_BM_COUNT_MASK    0x00FFFFFFu
+#define MIKASA_NCR_PHASE_DAT_OUT    0
+#define MIKASA_NCR_PHASE_DAT_IN     1
+#define MIKASA_NCR_PHASE_CMD        2
 #define MIKASA_NCR_PHASE_STS        3
 #define MIKASA_NCR_PHASE_MSG_IN     7
 #define MIKASA_ISA_DMA1             0x000
@@ -1687,13 +1690,55 @@ for (off = 0; off < 0x400; off += 8) {
 return FALSE;
 }
 
+static t_bool mikasa_ncr_find_table_move (uint32 dsp, uint32 phase,
+    uint32 *table_off)
+{
+uint32 off;
+
+for (off = 0; off < 0x400; off += 8) {
+    uint32 op;
+    uint32 arg;
+
+    if (!mikasa_pci_dma_read_long (dsp + off, &op) ||
+        !mikasa_pci_dma_read_long (dsp + off + 4, &arg))
+        return FALSE;
+    if (((op & MIKASA_NCR_BM_TYPE_MASK) == MIKASA_NCR_BM_TYPE) &&
+        ((op & MIKASA_NCR_BM_TABLE) != 0) &&
+        (((op & MIKASA_NCR_BM_PHASE_MASK) >>
+          MIKASA_NCR_BM_PHASE_SHIFT) == phase)) {
+        *table_off = arg;
+        return TRUE;
+        }
+    if ((op & MIKASA_NCR_BM_TYPE_MASK) == 0xC0000000u)
+        off += 4;
+    }
+return FALSE;
+}
+
+static t_bool mikasa_ncr_data_out_cmd (const uint8 *cdb)
+{
+switch (cdb[0]) {
+    case 0x0A:                                      /* WRITE(6) */
+    case 0x15:                                      /* MODE SELECT(6) */
+    case 0x2A:                                      /* WRITE(10) */
+    case 0x55:                                      /* MODE SELECT(10) */
+        return TRUE;
+
+    default:
+        return FALSE;
+        }
+}
+
 static void mikasa_ncr_write_status_msg (uint32 dsp, uint32 dsa,
     uint8 status)
 {
 uint32 count;
 uint32 addr;
+uint32 sts_off;
 
-if (mikasa_ncr_table_entry (dsa, 0x24, &count, &addr) && (count != 0))
+if (!mikasa_ncr_find_table_move (dsp, MIKASA_NCR_PHASE_STS, &sts_off))
+    sts_off = 0x24;
+if (mikasa_ncr_table_entry (dsa, sts_off, &count, &addr) && (count != 0))
     (void) mikasa_pci_dma_write_byte (addr, status);
 if (mikasa_ncr_find_direct_move (dsp, MIKASA_NCR_PHASE_MSG_IN, &count, &addr) &&
     (count != 0))
@@ -1811,6 +1856,8 @@ uint32 cmd_count;
 uint32 cmd_addr;
 uint32 data_count = 0;
 uint32 data_addr = 0;
+uint32 cmd_off;
+uint32 data_off;
 uint32 target;
 uint32 i;
 uint8 cdb[16];
@@ -1828,7 +1875,9 @@ if ((target >= MIKASA_DKA_UNITS) || ((dka_unit[target].flags & UNIT_ATT) == 0)) 
     mikasa_ncr_set_sip (0, MIKASA_NCR_SIST1_STO);
     return TRUE;
     }
-if (!mikasa_ncr_table_entry (dsa, 0x0C, &cmd_count, &cmd_addr) ||
+if (!mikasa_ncr_find_table_move (dsp, MIKASA_NCR_PHASE_CMD, &cmd_off))
+    cmd_off = 0x0C;
+if (!mikasa_ncr_table_entry (dsa, cmd_off, &cmd_count, &cmd_addr) ||
     (cmd_count == 0))
     return FALSE;
 if (cmd_count > sizeof (cdb))
@@ -1836,7 +1885,15 @@ if (cmd_count > sizeof (cdb))
 memset (cdb, 0, sizeof (cdb));
 if (!mikasa_ncr_read_dma_buf (cmd_addr, cdb, cmd_count))
     return FALSE;
-if (!mikasa_ncr_table_entry (dsa, 0x1C, &data_count, &data_addr))
+if (mikasa_ncr_data_out_cmd (cdb)) {
+    if (!mikasa_ncr_find_table_move (dsp, MIKASA_NCR_PHASE_DAT_OUT, &data_off))
+        data_off = 0x14;
+    }
+else {
+    if (!mikasa_ncr_find_table_move (dsp, MIKASA_NCR_PHASE_DAT_IN, &data_off))
+        data_off = 0x1C;
+    }
+if (!mikasa_ncr_table_entry (dsa, data_off, &data_count, &data_addr))
     data_count = data_addr = 0;
 
 sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
