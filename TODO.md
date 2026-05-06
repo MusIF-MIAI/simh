@@ -43,6 +43,8 @@
   state needed for conditions.
 - [x] Implement documented NCR SCRIPTS `SET`/`CLR` side effects for carry,
   `SOCL` ACK/ATN outputs, mirrored bus bits, and `SCNTL0` target mode.
+- [x] Latch NCR SCRIPTS `SELECT` destination, table-indirect `SXFER`/`SCNTL3`,
+  and select-with-ATN state into visible 53C810 registers.
 - [x] Start NCR SCRIPTS execution from `DCNTL.STD`, not only from writes to
   `DSP`, matching the normal 53C810 driver path.
 - [x] Preserve NCR read-only status registers on CPU writes and expose current
@@ -80,6 +82,8 @@
   it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after SCRIPTS `SET`/`CLR` ACK/ATN/target handling;
   it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after SCRIPTS `SELECT` register latching; it still
+  reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -152,6 +156,9 @@ the real path works.
     load/store, and memory-copy writes;
   - current branch handles documented `SET`/`CLR` side effects for carry,
     ACK/ATN output latches, sampled bus bits, and target-mode selection;
+  - current branch records SCRIPTS `SELECT` destination ID, table-indirect
+    transfer settings, and select-with-ATN state in `SDID`, `SXFER`, `SCNTL3`,
+    `SOCL`, and `SBCL`;
   - current branch starts SCRIPTS from `DCNTL.STD` as well as the firmware-style
     `DSP` high-byte write;
   - current branch preserves read-only NCR status registers and reports the

@@ -257,6 +257,9 @@
 #define MIKASA_NCR_BAR_MASK         0xFFFFFF00u
 #define MIKASA_NCR_REG_SCNTL0       0x00
 #define MIKASA_NCR_REG_SCNTL1       0x01
+#define MIKASA_NCR_REG_SCNTL3       0x03
+#define MIKASA_NCR_REG_SXFER        0x05
+#define MIKASA_NCR_REG_SDID         0x06
 #define MIKASA_NCR_REG_SFBR         0x08
 #define MIKASA_NCR_REG_SOCL         0x09
 #define MIKASA_NCR_REG_SBCL         0x0B
@@ -2908,6 +2911,26 @@ switch (group) {
 return TRUE;
 }
 
+static void mikasa_ncr_select_latches (uint32 op, uint32 sel, t_bool table)
+{
+uint8 target = (uint8) ((sel >> 16) & 0x0F);
+
+if (table) {
+    mikasa_ncr_reg[MIKASA_NCR_REG_SXFER] = (uint8) (sel >> 8);
+    mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL3] = (uint8) (sel >> 24);
+    }
+mikasa_ncr_reg[MIKASA_NCR_REG_SDID] = target;
+if (op & 0x01000000u) {
+    mikasa_ncr_reg[MIKASA_NCR_REG_SOCL] |= MIKASA_NCR_SOCL_ATN;
+    mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] |= MIKASA_NCR_SOCL_ATN;
+    }
+else {
+    mikasa_ncr_reg[MIKASA_NCR_REG_SOCL] &= ~MIKASA_NCR_SOCL_ATN;
+    mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] &= ~MIKASA_NCR_SOCL_ATN;
+    }
+return;
+}
+
 static t_bool mikasa_ncr_find_select (uint32 dsp, uint32 dsa, uint32 *target)
 {
 uint32 stack[MIKASA_NCR_SCRIPT_STACK];
@@ -2932,10 +2955,12 @@ for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
 
             if (!mikasa_pci_dma_read_long (table, &sel))
                 return FALSE;
+            mikasa_ncr_select_latches (op, sel, TRUE);
             *target = (sel >> 16) & 0x0Fu;
             return TRUE;
             }
         *target = (op >> 16) & 0x0Fu;
+        mikasa_ncr_select_latches (op, *target << 16, FALSE);
         return TRUE;
         }
     next = mikasa_ncr_next_script_addr (dsp, op);
