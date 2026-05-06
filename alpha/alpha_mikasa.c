@@ -166,6 +166,7 @@
 #define MIKASA_NCR_REG_DSTAT        0x0C
 #define MIKASA_NCR_REG_DSA          0x10
 #define MIKASA_NCR_REG_ISTAT        0x14
+#define MIKASA_NCR_REG_SFBR         0x08
 #define MIKASA_NCR_REG_DBC          0x24
 #define MIKASA_NCR_REG_DNAD         0x28
 #define MIKASA_NCR_REG_DSP          0x2C
@@ -225,6 +226,33 @@
 #define MIKASA_NCR_SCR_CALL         0x88080000u
 #define MIKASA_NCR_SCR_CALLR        0x88880000u
 #define MIKASA_NCR_SCR_RETURN       0x90080000u
+#define MIKASA_NCR_SCR_SET          0x58000000u
+#define MIKASA_NCR_SCR_CLR          0x60000000u
+#define MIKASA_NCR_SCR_CARRY        0x00000400u
+#define MIKASA_NCR_TC_GROUP_MASK    0xF8000000u
+#define MIKASA_NCR_TC_JUMP          0x80000000u
+#define MIKASA_NCR_TC_CALL          0x88000000u
+#define MIKASA_NCR_TC_RETURN        0x90000000u
+#define MIKASA_NCR_TC_INT           0x98000000u
+#define MIKASA_NCR_TC_REL           0x00800000u
+#define MIKASA_NCR_TC_CARRY         0x00200000u
+#define MIKASA_NCR_TC_JUMP_IF       0x00080000u
+#define MIKASA_NCR_TC_DATA          0x00040000u
+#define MIKASA_NCR_TC_PHASE         0x00020000u
+#define MIKASA_NCR_REGOP_GROUP_MASK 0xF8000000u
+#define MIKASA_NCR_SFBR_REG         0x68000000u
+#define MIKASA_NCR_REG_SFBR_OP      0x70000000u
+#define MIKASA_NCR_REG_REG          0x78000000u
+#define MIKASA_NCR_ALU_OP_MASK      0x07000000u
+#define MIKASA_NCR_ALU_LOAD         0x00000000u
+#define MIKASA_NCR_ALU_SHL          0x01000000u
+#define MIKASA_NCR_ALU_OR           0x02000000u
+#define MIKASA_NCR_ALU_XOR          0x03000000u
+#define MIKASA_NCR_ALU_AND          0x04000000u
+#define MIKASA_NCR_ALU_SHR          0x05000000u
+#define MIKASA_NCR_ALU_ADD          0x06000000u
+#define MIKASA_NCR_ALU_ADDC         0x07000000u
+#define MIKASA_NCR_SCRIPT_NO_PHASE  8
 #define MIKASA_ISA_DMA1             0x000
 #define MIKASA_ISA_PIC1             0x020
 #define MIKASA_ISA_CFG_INDEX        0x022
@@ -372,6 +400,12 @@ extern uint32 int_req[IPL_HLVL];
 extern uint32 ev5_ipl;
 extern t_uint64 ev5_palbase;
 extern UNIT dka_unit[];
+
+typedef struct {
+    uint8 sfbr;
+    uint32 phase;
+    t_bool carry;
+    } MIKASA_NCR_SCRIPT_STATE;
 
 uint32 mikasa_irq_mask = 0;
 uint32 mikasa_irq_summary = 0;
@@ -1725,48 +1759,200 @@ static uint32 mikasa_ncr_next_script_addr (uint32 dsp, uint32 op)
 return dsp + (((op & MIKASA_NCR_BM_TYPE_MASK) == 0xC0000000u) ? 12 : 8);
 }
 
-static void mikasa_ncr_advance_script (uint32 *dsp, uint32 op, uint32 arg,
-    uint32 next, uint32 *stack, uint32 *sp)
+static t_bool mikasa_ncr_script_copy (uint32 src, uint32 dst, uint32 count)
 {
-switch (op) {
-    case MIKASA_NCR_SCR_JUMP:
-        *dsp = arg;
-        return;
+uint32 i;
 
-    case MIKASA_NCR_SCR_JUMPR:
-        *dsp = next + mikasa_ncr_sext24 (arg);
-        return;
+for (i = 0; i < count; i++) {
+    uint8 val;
 
-    case MIKASA_NCR_SCR_CALL:
+    if (!mikasa_pci_dma_read_byte (src + i, &val) ||
+        !mikasa_pci_dma_write_byte (dst + i, val))
+        return FALSE;
+    }
+return TRUE;
+}
+
+static uint8 mikasa_ncr_script_alu (uint8 left, uint8 right, uint32 op,
+    MIKASA_NCR_SCRIPT_STATE *state)
+{
+uint32 val;
+
+switch (op & MIKASA_NCR_ALU_OP_MASK) {
+    case MIKASA_NCR_ALU_SHL:
+        state->carry = (left & 0x80) ? TRUE : FALSE;
+        return (uint8) (left << 1);
+
+    case MIKASA_NCR_ALU_OR:
+        return left | right;
+
+    case MIKASA_NCR_ALU_XOR:
+        return left ^ right;
+
+    case MIKASA_NCR_ALU_AND:
+        return left & right;
+
+    case MIKASA_NCR_ALU_SHR:
+        state->carry = (left & 1) ? TRUE : FALSE;
+        return (uint8) (left >> 1);
+
+    case MIKASA_NCR_ALU_ADD:
+        val = ((uint32) left) + right;
+        state->carry = (val > 0xFF) ? TRUE : FALSE;
+        return (uint8) val;
+
+    case MIKASA_NCR_ALU_ADDC:
+        val = ((uint32) left) + right + (state->carry ? 1 : 0);
+        state->carry = (val > 0xFF) ? TRUE : FALSE;
+        return (uint8) val;
+
+    case MIKASA_NCR_ALU_LOAD:
+    default:
+        return right;
+        }
+}
+
+static void mikasa_ncr_script_reg_op (uint32 op,
+    MIKASA_NCR_SCRIPT_STATE *state)
+{
+uint32 group = op & MIKASA_NCR_REGOP_GROUP_MASK;
+uint32 reg = (op >> 16) & 0x7F;
+uint8 data = (uint8) (op >> 8);
+uint8 old = mikasa_ncr_reg[reg & (MIKASA_NCR_REG_SIZE - 1)];
+uint8 val;
+
+switch (group) {
+    case MIKASA_NCR_SFBR_REG:
+        val = mikasa_ncr_script_alu (state->sfbr, data, op, state);
+        mikasa_ncr_reg[reg & (MIKASA_NCR_REG_SIZE - 1)] = val;
+        break;
+
+    case MIKASA_NCR_REG_SFBR_OP:
+        state->sfbr = mikasa_ncr_script_alu (old, data, op, state);
+        mikasa_ncr_reg[MIKASA_NCR_REG_SFBR] = state->sfbr;
+        break;
+
+    case MIKASA_NCR_REG_REG:
+        val = mikasa_ncr_script_alu (old, data, op, state);
+        mikasa_ncr_reg[reg & (MIKASA_NCR_REG_SIZE - 1)] = val;
+        if ((reg & (MIKASA_NCR_REG_SIZE - 1)) == MIKASA_NCR_REG_SFBR)
+            state->sfbr = val;
+        break;
+        }
+return;
+}
+
+static t_bool mikasa_ncr_script_condition (uint32 op,
+    MIKASA_NCR_SCRIPT_STATE *state)
+{
+t_bool jump_if = (op & MIKASA_NCR_TC_JUMP_IF) ? TRUE : FALSE;
+t_bool do_it;
+
+if (op & MIKASA_NCR_TC_CARRY)
+    return state->carry == jump_if;
+if ((op & (MIKASA_NCR_TC_DATA | MIKASA_NCR_TC_PHASE)) != 0) {
+    do_it = TRUE;
+    if (op & MIKASA_NCR_TC_DATA) {
+        uint8 mask = (uint8) (op >> 8);
+        uint8 data = (uint8) op;
+        t_bool match = ((state->sfbr & ~mask) == (data & ~mask));
+
+        if (match != jump_if)
+            do_it = FALSE;
+        }
+    if (op & MIKASA_NCR_TC_PHASE) {
+        t_bool match = (state->phase != MIKASA_NCR_SCRIPT_NO_PHASE) &&
+            (state->phase == (op & 7));
+
+        if (match != jump_if)
+            do_it = FALSE;
+        }
+    return do_it;
+    }
+return jump_if;
+}
+
+static t_bool mikasa_ncr_advance_script (uint32 *dsp, uint32 op, uint32 arg,
+    uint32 next, uint32 *stack, uint32 *sp, MIKASA_NCR_SCRIPT_STATE *state)
+{
+uint32 group = op & MIKASA_NCR_TC_GROUP_MASK;
+
+if ((op & MIKASA_NCR_BM_TYPE_MASK) == 0xC0000000u) {
+    uint32 dst;
+
+    if (!mikasa_pci_dma_read_long (next - 4, &dst))
+        return FALSE;
+    (void) mikasa_ncr_script_copy (arg, dst, op & MIKASA_NCR_BM_COUNT_MASK);
+    *dsp = next;
+    return TRUE;
+    }
+if ((op & 0xFF000000u) == MIKASA_NCR_SCR_SET) {
+    if (op & MIKASA_NCR_SCR_CARRY)
+        state->carry = TRUE;
+    *dsp = next;
+    return TRUE;
+    }
+if ((op & 0xFF000000u) == MIKASA_NCR_SCR_CLR) {
+    if (op & MIKASA_NCR_SCR_CARRY)
+        state->carry = FALSE;
+    *dsp = next;
+    return TRUE;
+    }
+if ((op & MIKASA_NCR_REGOP_GROUP_MASK) == MIKASA_NCR_SFBR_REG ||
+    (op & MIKASA_NCR_REGOP_GROUP_MASK) == MIKASA_NCR_REG_SFBR_OP ||
+    (op & MIKASA_NCR_REGOP_GROUP_MASK) == MIKASA_NCR_REG_REG) {
+    mikasa_ncr_script_reg_op (op, state);
+    *dsp = next;
+    return TRUE;
+    }
+if ((group != MIKASA_NCR_TC_JUMP) && (group != MIKASA_NCR_TC_CALL) &&
+    (group != MIKASA_NCR_TC_RETURN) && (group != MIKASA_NCR_TC_INT)) {
+    *dsp = next;
+    return TRUE;
+    }
+if (!mikasa_ncr_script_condition (op, state)) {
+    *dsp = next;
+    return TRUE;
+    }
+
+switch (group) {
+    case MIKASA_NCR_TC_JUMP:
+        *dsp = (op & MIKASA_NCR_TC_REL) ? next + mikasa_ncr_sext24 (arg) :
+            arg;
+        return TRUE;
+
+    case MIKASA_NCR_TC_CALL:
         if (*sp < MIKASA_NCR_SCRIPT_STACK)
             stack[(*sp)++] = next;
-        *dsp = arg;
-        return;
+        *dsp = (op & MIKASA_NCR_TC_REL) ? next + mikasa_ncr_sext24 (arg) :
+            arg;
+        return TRUE;
 
-    case MIKASA_NCR_SCR_CALLR:
-        if (*sp < MIKASA_NCR_SCRIPT_STACK)
-            stack[(*sp)++] = next;
-        *dsp = next + mikasa_ncr_sext24 (arg);
-        return;
-
-    case MIKASA_NCR_SCR_RETURN:
+    case MIKASA_NCR_TC_RETURN:
         if (*sp != 0) {
             *dsp = stack[--(*sp)];
-            return;
+            return TRUE;
             }
-        break;
+        *dsp = next;
+        return TRUE;
+
+    case MIKASA_NCR_TC_INT:
+        return FALSE;
         }
 
 *dsp = next;
-return;
+return TRUE;
 }
 
 static t_bool mikasa_ncr_find_select (uint32 dsp, uint32 dsa, uint32 *target)
 {
 uint32 stack[MIKASA_NCR_SCRIPT_STACK];
+MIKASA_NCR_SCRIPT_STATE state;
 uint32 sp = 0;
 uint32 i;
 
+memset (&state, 0, sizeof (state));
+state.phase = MIKASA_NCR_SCRIPT_NO_PHASE;
 for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
     uint32 op;
     uint32 arg;
@@ -1774,14 +1960,8 @@ for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
 
     if (!mikasa_ncr_read_script (dsp, &op, &arg))
         return FALSE;
-    switch (op & 0xFF000000u) {
-        case MIKASA_NCR_SCR_SEL_ABS:
-        case MIKASA_NCR_SCR_SEL_ABS_ATN:
-            *target = (op >> 16) & 0x0Fu;
-            return TRUE;
-
-        case MIKASA_NCR_SCR_SEL_TBL:
-        case MIKASA_NCR_SCR_SEL_TBL_ATN: {
+    if ((op & MIKASA_NCR_TC_GROUP_MASK) == MIKASA_NCR_SCR_SEL_ABS) {
+        if (op & 0x02000000u) {
             uint32 sel;
             uint32 table = (dsa + mikasa_ncr_sext24 (op)) & ~3u;
 
@@ -1790,9 +1970,13 @@ for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
             *target = (sel >> 16) & 0x0Fu;
             return TRUE;
             }
-            }
+        *target = (op >> 16) & 0x0Fu;
+        return TRUE;
+        }
     next = mikasa_ncr_next_script_addr (dsp, op);
-    mikasa_ncr_advance_script (&dsp, op, arg, next, stack, &sp);
+    if (!mikasa_ncr_advance_script (&dsp, op, arg, next, stack, &sp,
+        &state))
+        return FALSE;
     }
 return FALSE;
 }
@@ -1801,9 +1985,12 @@ static t_bool mikasa_ncr_find_direct_move (uint32 dsp, uint32 phase,
     uint32 *count, uint32 *addr)
 {
 uint32 stack[MIKASA_NCR_SCRIPT_STACK];
+MIKASA_NCR_SCRIPT_STATE state;
 uint32 sp = 0;
 uint32 i;
 
+memset (&state, 0, sizeof (state));
+state.phase = phase;
 for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
     uint32 op;
     uint32 arg;
@@ -1821,7 +2008,9 @@ for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
         return TRUE;
         }
     next = mikasa_ncr_next_script_addr (dsp, op);
-    mikasa_ncr_advance_script (&dsp, op, arg, next, stack, &sp);
+    if (!mikasa_ncr_advance_script (&dsp, op, arg, next, stack, &sp,
+        &state))
+        return FALSE;
     }
 return FALSE;
 }
@@ -1830,9 +2019,12 @@ static t_bool mikasa_ncr_find_table_move (uint32 dsp, uint32 phase,
     uint32 *table_off)
 {
 uint32 stack[MIKASA_NCR_SCRIPT_STACK];
+MIKASA_NCR_SCRIPT_STATE state;
 uint32 sp = 0;
 uint32 i;
 
+memset (&state, 0, sizeof (state));
+state.phase = phase;
 for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
     uint32 op;
     uint32 arg;
@@ -1848,7 +2040,9 @@ for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
         return TRUE;
         }
     next = mikasa_ncr_next_script_addr (dsp, op);
-    mikasa_ncr_advance_script (&dsp, op, arg, next, stack, &sp);
+    if (!mikasa_ncr_advance_script (&dsp, op, arg, next, stack, &sp,
+        &state))
+        return FALSE;
     }
 return FALSE;
 }
