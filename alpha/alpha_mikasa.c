@@ -2578,11 +2578,25 @@ switch (cdb[0]) {
 
     case 0x2B:                                              /* SEEK(10) */
     case 0x2F:                                              /* VERIFY(10) */
+    case 0x34:                                              /* PRE-FETCH(10) */
     case 0x35:                                              /* SYNCHRONIZE CACHE */
     case 0x3B:                                              /* WRITE BUFFER */
     case 0x55:                                              /* MODE SELECT(10) */
+    case 0x56:                                              /* RESERVE UNIT(10) */
+    case 0x57:                                              /* RELEASE UNIT(10) */
         mikasa_ncr_clear_sense (unit);
         return TRUE;
+
+    case 0x37:                                              /* READ DEFECT DATA */
+        len = mikasa_ncr_min3 (data_count, mikasa_ncr_alloc_len10 (cdb), 4);
+        mikasa_ncr_clear_sense (unit);
+        return mikasa_ncr_write_dma_buf (data_addr, buf, len);
+
+    case 0x3C:                                              /* READ BUFFER */
+        len = mikasa_ncr_min3 (data_count, mikasa_ncr_alloc_len10 (cdb),
+            sizeof (buf));
+        mikasa_ncr_clear_sense (unit);
+        return mikasa_ncr_write_dma_buf (data_addr, buf, len);
 
     case 0x3F:                                              /* WRITE LONG */
         if (uptr->flags & UNIT_RO) {
