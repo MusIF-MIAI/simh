@@ -105,6 +105,29 @@
 #define MIKASA_ROM_WORKSPACE_SIZE   0x01000000
 #define MIKASA_AXPBOX_ROM_MEMSIZE   0x00200000
 #define MIKASA_AXPBOX_ROM_SIZE      (16 + MIKASA_AXPBOX_ROM_MEMSIZE)
+#define MIKASA_COMANCHE_BASE        0x180000000ULL
+#define MIKASA_COMANCHE_SIZE        0x00001000
+#define MIKASA_COMANCHE_GCR         0x000
+#define MIKASA_COMANCHE_ED          0x040
+#define MIKASA_COMANCHE_TAGENB      0x060
+#define MIKASA_COMANCHE_ERR_LO      0x080
+#define MIKASA_COMANCHE_ERR_HI      0x0A0
+#define MIKASA_COMANCHE_LCK_LO      0x0C0
+#define MIKASA_COMANCHE_LCK_HI      0x0E0
+#define MIKASA_COMANCHE_GTIM        0x200
+#define MIKASA_COMANCHE_RTIM        0x220
+#define MIKASA_COMANCHE_VFP         0x240
+#define MIKASA_COMANCHE_PD_LO       0x260
+#define MIKASA_COMANCHE_PD_HI       0x280
+#define MIKASA_COMANCHE_B0_BAR      0x800
+#define MIKASA_COMANCHE_B0_CR       0xA00
+#define MIKASA_COMANCHE_B0_TRA      0xC00
+#define MIKASA_COMANCHE_B0_TRB      0xE00
+#define MIKASA_COMANCHE_BANKS       9
+#define MIKASA_COMANCHE_ED_PASS2    0x00002000u
+#define MIKASA_COMANCHE_GCR_WIDEMEM 0x00000010u
+#define MIKASA_COMANCHE_CR_VALID    0x00000001u
+#define MIKASA_COMANCHE_CR_SIZE_1G  0x0000001Eu
 #define MIKASA_EPIC_BASE            0x1A0000000ULL
 #define MIKASA_EPIC_SIZE            0x00001000
 #define MIKASA_APECS_PCI_IACK       0x1B0000000ULL
@@ -128,6 +151,7 @@
 #define MIKASA_EPIC_PCI_MASK_1      0x140
 #define MIKASA_EPIC_PCI_MASK_2      0x160
 #define MIKASA_EPIC_PCI_MASK_MASK   0xFFF00000u
+#define MIKASA_EPIC_DCSR_PASS2      0x80000000u
 /* On-board devices use raw APECS IDSEL slots; SRM prints virtual slots. */
 #define MIKASA_PCI_SLOT_SCSI        6
 /* SRM reports the EISA bridge as virtual slot 2; config cycles use IDSEL 7. */
@@ -182,7 +206,9 @@
 #define MIKASA_ISA_PORTB            0x061
 #define MIKASA_ISA_RTC_INDEX        0x070
 #define MIKASA_ISA_RTC_DATA         0x071
+#define MIKASA_ISA_DMA_PAGE         0x080
 #define MIKASA_ISA_PIC2             0x0A0
+#define MIKASA_ISA_DMA2             0x0C0
 #define MIKASA_ISA_COM2             0x2F8
 #define MIKASA_ISA_SIO_INDEX        0x398
 #define MIKASA_ISA_SIO_DATA         0x399
@@ -472,6 +498,9 @@ static uint8 mikasa_uart_read (uint32 port);
 static void mikasa_uart_write (uint32 port, uint8 val);
 static uint8 mikasa_isa_read (uint32 port);
 static void mikasa_isa_write (uint32 port, uint8 val);
+static t_uint64 mikasa_comanche_read (t_uint64 pa, uint32 lnt);
+static void mikasa_comanche_write (t_uint64 pa, t_uint64 val, uint32 lnt);
+static void mikasa_comanche_init_regs (void);
 static t_uint64 mikasa_sparse_read (t_uint64 pa, uint32 lnt);
 static void mikasa_sparse_write (t_uint64 pa, t_uint64 val, uint32 lnt);
 
@@ -509,6 +538,9 @@ static uint8 mikasa_pic_isr[2] = { 0 };
 static uint8 mikasa_pic_vec[2] = { 0, 8 };
 static uint8 mikasa_pic_init[2] = { 0 };
 static t_bool mikasa_pic_read_isr[2] = { FALSE, FALSE };
+static uint8 mikasa_dma1_reg[0x10] = { 0 };
+static uint8 mikasa_dma2_reg[0x20] = { 0 };
+static uint8 mikasa_dma_page_reg[0x10] = { 0 };
 static uint8 mikasa_cfg_index = 0;
 static uint8 mikasa_cfg_reg[256] = { 0 };
 static uint8 mikasa_pit_mode = 0;
@@ -521,6 +553,7 @@ static uint8 mikasa_sio_reg[256] = { 0 };
 static uint8 mikasa_nmi_ctrl = 0;
 static uint8 mikasa_eisa_cram_page = 0;
 static uint8 mikasa_eisa_cram[MIKASA_EISA_CRAM_PAGES][MIKASA_EISA_CRAM_SIZE];
+static uint32 mikasa_comanche_reg[MIKASA_COMANCHE_SIZE >> 5] = { 0 };
 static uint32 mikasa_epic_reg[MIKASA_EPIC_SIZE >> 5] = { 0 };
 static uint32 mikasa_ncr_cfg[MIKASA_PCI_CFG_DWORDS] = { 0 };
 static uint8 mikasa_ncr_reg[MIKASA_NCR_REG_SIZE] = { 0 };
@@ -537,7 +570,7 @@ uint32 mikasa_scc_scale = 1;
 UNIT mikasa_unit = { UDATA (&mikasa_svc, 0, 0) };
 
 DIB mikasa_dib = {
-    MIKASA_EPIC_BASE, MIKASA_APECS_PCI_DENSE + MIKASA_APECS_PCI_DENSE_SIZE,
+    MIKASA_COMANCHE_BASE, MIKASA_APECS_PCI_DENSE + MIKASA_APECS_PCI_DENSE_SIZE,
     &mikasa_io_rd, &mikasa_io_wr, 0
     };
 
@@ -1100,6 +1133,67 @@ uint32 index = (off & (MIKASA_EPIC_SIZE - 1)) >> 5;
 mikasa_epic_reg[index] = (uint32) val;
 sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "EPIC write %03X=%08X\n",
     off, (uint32) val);
+return;
+}
+
+static t_uint64 mikasa_comanche_read (t_uint64 pa, uint32 lnt)
+{
+uint32 off = (uint32) (pa - MIKASA_COMANCHE_BASE);
+uint32 index = (off & (MIKASA_COMANCHE_SIZE - 1)) >> 5;
+uint32 val = mikasa_comanche_reg[index];
+
+sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "COMANCHE read %03X=%08X\n",
+    off, val);
+return val;
+}
+
+static void mikasa_comanche_write (t_uint64 pa, t_uint64 val, uint32 lnt)
+{
+uint32 off = (uint32) (pa - MIKASA_COMANCHE_BASE);
+uint32 index = (off & (MIKASA_COMANCHE_SIZE - 1)) >> 5;
+
+if ((off & (MIKASA_COMANCHE_SIZE - 1)) == MIKASA_COMANCHE_ED)
+    mikasa_comanche_reg[index] =
+        (mikasa_comanche_reg[index] & ~((uint32) val)) |
+        MIKASA_COMANCHE_ED_PASS2;
+else
+    mikasa_comanche_reg[index] = (uint32) val;
+sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "COMANCHE write %03X=%08X\n",
+    off, (uint32) val);
+return;
+}
+
+static void mikasa_comanche_init_regs (void)
+{
+uint32 bank0_size;
+uint32 bank;
+
+memset (mikasa_comanche_reg, 0, sizeof (mikasa_comanche_reg));
+mikasa_comanche_reg[MIKASA_COMANCHE_GCR >> 5] = 0;
+mikasa_comanche_reg[MIKASA_COMANCHE_ED >> 5] = MIKASA_COMANCHE_ED_PASS2;
+mikasa_comanche_reg[MIKASA_COMANCHE_TAGENB >> 5] = 0;
+mikasa_comanche_reg[MIKASA_COMANCHE_ERR_LO >> 5] = 0;
+mikasa_comanche_reg[MIKASA_COMANCHE_ERR_HI >> 5] = 0;
+mikasa_comanche_reg[MIKASA_COMANCHE_LCK_LO >> 5] = 0;
+mikasa_comanche_reg[MIKASA_COMANCHE_LCK_HI >> 5] = 0;
+mikasa_comanche_reg[MIKASA_COMANCHE_GTIM >> 5] = 0;
+mikasa_comanche_reg[MIKASA_COMANCHE_RTIM >> 5] = 0;
+mikasa_comanche_reg[MIKASA_COMANCHE_VFP >> 5] = 0;
+mikasa_comanche_reg[MIKASA_COMANCHE_PD_LO >> 5] = 0;
+mikasa_comanche_reg[MIKASA_COMANCHE_PD_HI >> 5] = 0;
+
+for (bank = 0; bank < MIKASA_COMANCHE_BANKS; bank++) {
+    mikasa_comanche_reg[(MIKASA_COMANCHE_B0_BAR >> 5) + bank] = 0;
+    mikasa_comanche_reg[(MIKASA_COMANCHE_B0_CR >> 5) + bank] = 0;
+    mikasa_comanche_reg[(MIKASA_COMANCHE_B0_TRA >> 5) + bank] = 0;
+    mikasa_comanche_reg[(MIKASA_COMANCHE_B0_TRB >> 5) + bank] = 0;
+    }
+bank0_size = (MEMSIZE >= 0x40000000u) ? MIKASA_COMANCHE_CR_SIZE_1G : 0;
+mikasa_comanche_reg[MIKASA_COMANCHE_B0_BAR >> 5] = 0;
+mikasa_comanche_reg[MIKASA_COMANCHE_B0_CR >> 5] =
+    MIKASA_COMANCHE_CR_VALID | bank0_size;
+mikasa_comanche_reg[MIKASA_COMANCHE_B0_TRA >> 5] = 0;
+mikasa_comanche_reg[MIKASA_COMANCHE_B0_TRB >> 5] = 0;
 return;
 }
 
@@ -1922,7 +2016,7 @@ uint8 val;
 if (mikasa_ncr_io_read (port, &val))
     return val;
 if ((port >= MIKASA_ISA_DMA1) && (port < (MIKASA_ISA_DMA1 + 0x10)))
-    return 0;
+    return mikasa_dma1_reg[port - MIKASA_ISA_DMA1];
 if ((port == MIKASA_ISA_PIC1) || (port == (MIKASA_ISA_PIC1 + 1)) ||
     (port == MIKASA_ISA_PIC2) || (port == (MIKASA_ISA_PIC2 + 1)))
     return mikasa_pic_read (port);
@@ -1938,6 +2032,10 @@ if (port == MIKASA_ISA_RTC_INDEX)
     return mikasa_rtc_index;
 if (port == MIKASA_ISA_RTC_DATA)
     return mikasa_rtc_read_data ();
+if ((port >= MIKASA_ISA_DMA_PAGE) && (port < (MIKASA_ISA_DMA_PAGE + 0x10)))
+    return mikasa_dma_page_reg[port - MIKASA_ISA_DMA_PAGE];
+if ((port >= MIKASA_ISA_DMA2) && (port < (MIKASA_ISA_DMA2 + 0x20)))
+    return mikasa_dma2_reg[port - MIKASA_ISA_DMA2];
 if ((port >= MIKASA_ISA_COM2) && (port < (MIKASA_ISA_COM2 + 8)))
     return mikasa_com2_read (port);
 if (port == MIKASA_ISA_SIO_INDEX)
@@ -1977,8 +2075,10 @@ static void mikasa_isa_write (uint32 port, uint8 val)
 {
 if (mikasa_ncr_io_write (port, val))
     return;
-if ((port >= MIKASA_ISA_DMA1) && (port < (MIKASA_ISA_DMA1 + 0x10)))
+if ((port >= MIKASA_ISA_DMA1) && (port < (MIKASA_ISA_DMA1 + 0x10))) {
+    mikasa_dma1_reg[port - MIKASA_ISA_DMA1] = val;
     return;
+    }
 if ((port == MIKASA_ISA_PIC1) || (port == (MIKASA_ISA_PIC1 + 1)) ||
     (port == MIKASA_ISA_PIC2) || (port == (MIKASA_ISA_PIC2 + 1))) {
     mikasa_pic_write (port, val);
@@ -2006,6 +2106,14 @@ if (port == MIKASA_ISA_RTC_INDEX) {
     }
 if (port == MIKASA_ISA_RTC_DATA) {
     mikasa_rtc_write_data (val);
+    return;
+    }
+if ((port >= MIKASA_ISA_DMA_PAGE) && (port < (MIKASA_ISA_DMA_PAGE + 0x10))) {
+    mikasa_dma_page_reg[port - MIKASA_ISA_DMA_PAGE] = val;
+    return;
+    }
+if ((port >= MIKASA_ISA_DMA2) && (port < (MIKASA_ISA_DMA2 + 0x20))) {
+    mikasa_dma2_reg[port - MIKASA_ISA_DMA2] = val;
     return;
     }
 if ((port >= MIKASA_ISA_COM2) && (port < (MIKASA_ISA_COM2 + 8))) {
@@ -2197,7 +2305,11 @@ return;
 
 static t_bool mikasa_io_rd (t_uint64 pa, t_uint64 *val, uint32 lnt)
 {
-if ((pa >= MIKASA_EPIC_BASE) && (pa < (MIKASA_EPIC_BASE + MIKASA_EPIC_SIZE)))
+if ((pa >= MIKASA_COMANCHE_BASE) &&
+    (pa < (MIKASA_COMANCHE_BASE + MIKASA_COMANCHE_SIZE)))
+    *val = mikasa_comanche_read (pa, lnt);
+else if ((pa >= MIKASA_EPIC_BASE) &&
+    (pa < (MIKASA_EPIC_BASE + MIKASA_EPIC_SIZE)))
     *val = mikasa_epic_read (pa, lnt);
 else if (pa == MIKASA_APECS_PCI_IACK)
     *val = mikasa_pic_iack ();
@@ -2223,7 +2335,11 @@ return TRUE;
 
 static t_bool mikasa_io_wr (t_uint64 pa, t_uint64 val, uint32 lnt)
 {
-if ((pa >= MIKASA_EPIC_BASE) && (pa < (MIKASA_EPIC_BASE + MIKASA_EPIC_SIZE)))
+if ((pa >= MIKASA_COMANCHE_BASE) &&
+    (pa < (MIKASA_COMANCHE_BASE + MIKASA_COMANCHE_SIZE)))
+    mikasa_comanche_write (pa, val, lnt);
+else if ((pa >= MIKASA_EPIC_BASE) &&
+    (pa < (MIKASA_EPIC_BASE + MIKASA_EPIC_SIZE)))
     mikasa_epic_write (pa, val, lnt);
 else if ((pa >= MIKASA_APECS_PCI_SIO) &&
     (pa < (MIKASA_APECS_PCI_SIO + MIKASA_APECS_PCI_SIO_SIZE)))
@@ -4708,6 +4824,9 @@ mikasa_pic_init[0] = 0;
 mikasa_pic_init[1] = 0;
 mikasa_pic_read_isr[0] = FALSE;
 mikasa_pic_read_isr[1] = FALSE;
+memset (mikasa_dma1_reg, 0, sizeof (mikasa_dma1_reg));
+memset (mikasa_dma2_reg, 0, sizeof (mikasa_dma2_reg));
+memset (mikasa_dma_page_reg, 0, sizeof (mikasa_dma_page_reg));
 mikasa_irq_update ();
 mikasa_cfg_index = 0;
 memset (mikasa_cfg_reg, 0, sizeof (mikasa_cfg_reg));
@@ -4723,7 +4842,9 @@ memset (mikasa_sio_reg, 0, sizeof (mikasa_sio_reg));
 mikasa_nmi_ctrl = 0;
 mikasa_eisa_cram_page = 0;
 memset (mikasa_eisa_cram, 0, sizeof (mikasa_eisa_cram));
+mikasa_comanche_init_regs ();
 memset (mikasa_epic_reg, 0, sizeof (mikasa_epic_reg));
+mikasa_epic_reg[0] = MIKASA_EPIC_DCSR_PASS2;
 memset (mikasa_ncr_cfg, 0, sizeof (mikasa_ncr_cfg));
 mikasa_ncr_cfg[0x00 >> 2] = 0x00011000u;
 mikasa_ncr_cfg[0x04 >> 2] = 0x02000001u;
