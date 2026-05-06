@@ -136,6 +136,8 @@
   pka/ewa.
 - [x] Re-run SRM ROM smoke after EPIC absent-PCI-memory `NDEV` latching; it
   still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run direct APB smoke after EPIC `NDEV` latching; APB still loads from
+  DKA0 and reaches the known `PC: 200039E0` halt.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 

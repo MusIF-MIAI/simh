@@ -193,7 +193,9 @@ The APB now reads enough ODS-2 metadata to mount the system volume, find
 the implemented CRB callback counters move: `CALLBACKS`, `GETENVS`, `IOREADS`,
 and `IOWRITES` remain zero. The APB mailbox path performs 11 DKA0 reads before
 the stop. After the current SCSI/PCI hardware batch, the direct APB smoke still
-loads APB from DKA0 and reaches the same `PC: 200039E0` halt.
+loads APB from DKA0 and reaches the same `PC: 200039E0` halt. The same
+non-regression holds after EPIC `DCSR.NDEV` latching for absent PCI memory
+accesses.
 
 Earlier stops were `R0=0x124` (`SS$_INSFMEM`) while mapping bootstrap memory
 around the `0x40000000` boot page-table window, unsupported PAL calls such as
