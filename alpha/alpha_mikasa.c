@@ -321,6 +321,11 @@
 #define MIKASA_NCR_SDID_WRITABLE    0x0F
 #define MIKASA_NCR_GPREG_WRITABLE   0x1F
 #define MIKASA_NCR_SSID_VAL         0x80
+#define MIKASA_NCR_BUS_REQ          0x80
+#define MIKASA_NCR_BUS_ACK          0x40
+#define MIKASA_NCR_BUS_BSY          0x20
+#define MIKASA_NCR_BUS_SEL          0x10
+#define MIKASA_NCR_BUS_ATN          0x08
 #define MIKASA_NCR_SOCL_ACK         0x40
 #define MIKASA_NCR_SOCL_ATN         0x08
 #define MIKASA_NCR_DSTAT_DFE        0x80
@@ -2531,10 +2536,16 @@ if (connected) {
     mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL1] |= MIKASA_NCR_SCNTL1_ISCON;
     mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] |= MIKASA_NCR_ISTAT_CON;
     mikasa_ncr_reg[MIKASA_NCR_REG_SSTAT2] &= ~MIKASA_NCR_SSTAT2_LDSC;
+    mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] =
+        (mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] | MIKASA_NCR_BUS_BSY) &
+        ~MIKASA_NCR_BUS_SEL;
     }
 else {
     mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL1] &= ~MIKASA_NCR_SCNTL1_ISCON;
     mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &= ~MIKASA_NCR_ISTAT_CON;
+    mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] &=
+        ~(MIKASA_NCR_BUS_REQ | MIKASA_NCR_BUS_ACK |
+        MIKASA_NCR_BUS_BSY | MIKASA_NCR_BUS_SEL | MIKASA_NCR_BUS_ATN);
     }
 return;
 }

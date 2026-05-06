@@ -103,6 +103,8 @@
   MOVE phase through `SOCL`, `SBCL`, and `SSTAT1`.
 - [x] Track NCR connected state in `SCNTL1.ISCON`/`ISTAT.CON` across select,
   command, data, status/message, timeout, reset, and abort paths.
+- [x] Reflect NCR connected/bus-free state in low-level `SBCL` bus lines by
+  asserting `BSY` while connected and clearing bus control lines on bus free.
 - [x] Preserve pending NCR status/message completion in an explicit
   transaction state with target, `DSP`, `DSA`, data phase, status byte, and
   saved completion `DSPS`, instead of loose globals.
@@ -207,6 +209,8 @@
   still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after adding NCR interrupt stacking; it still
   reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after reflecting NCR connected/bus-free state in
+  `SBCL`; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -311,6 +315,8 @@ the real path works.
     active MOVE phase in the SCSI bus/status phase bits;
   - current branch tracks connected state in `SCNTL1.ISCON` and `ISTAT.CON`
     during the high-level 53C810 target transaction;
+  - current branch reflects connected/bus-free state in `SBCL` by asserting
+    `BSY` while connected and clearing bus control lines on bus free;
   - current branch latches `SIST0.MIA` for the handled case where a target
     returns STATUS instead of an expected DATA phase, while leaving
     STATUS/MESSAGE pending for the next script restart;

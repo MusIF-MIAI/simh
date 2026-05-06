@@ -153,9 +153,11 @@ Not implemented yet:
   MOVE phases are reflected in `SOCL`, `SBCL`, and `SSTAT1`. The high-level
   NCR path also exposes connected state through `SCNTL1.ISCON` and `ISTAT.CON`
   from successful select through status/message completion, and clears it on
-  timeout, reset, and abort. Pending status/message completion is retained in
-  an explicit NCR transaction state with target, `DSP`, `DSA`, data phase,
-  status byte, and saved completion `DSPS`. When a command has a pending DATA
+  timeout, reset, and abort. The low-level `SBCL` bus lines now assert `BSY`
+  while connected and clear bus-control lines when the bus becomes free.
+  Pending status/message completion is retained in an explicit NCR transaction
+  state with target, `DSP`, `DSA`, data phase, status byte, and saved
+  completion `DSPS`. When a command has a pending DATA
   phase but the target moves directly to STATUS, `SIST0.MIA` is latched with
   the expected and sampled phases visible through the SCSI phase registers,
   and STATUS/MESSAGE remain pending for the next script restart.
