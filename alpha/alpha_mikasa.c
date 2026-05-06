@@ -225,6 +225,8 @@
 #define MIKASA_ISA_FDC              0x3F0
 #define MIKASA_ISA_COM1             0x3F8
 #define MIKASA_ISA_NMI_CTRL         0x461
+#define MIKASA_ISA_ELCR1            0x4D0
+#define MIKASA_ISA_ELCR2            0x4D1
 #define MIKASA_ISA_OCP              0x530
 #define MIKASA_ISA_ICU_IRR          0x534
 #define MIKASA_ISA_ICU_IMR          0x536
@@ -551,6 +553,9 @@ static uint8 mikasa_pic_isr[2] = { 0 };
 static uint8 mikasa_pic_vec[2] = { 0, 8 };
 static uint8 mikasa_pic_init[2] = { 0 };
 static t_bool mikasa_pic_read_isr[2] = { FALSE, FALSE };
+static t_bool mikasa_pic_need_icw4[2] = { FALSE, FALSE };
+static t_bool mikasa_pic_auto_eoi[2] = { FALSE, FALSE };
+static uint8 mikasa_elcr[2] = { 0 };
 static uint8 mikasa_dma1_reg[0x10] = { 0 };
 static uint8 mikasa_dma2_reg[0x20] = { 0 };
 static uint8 mikasa_dma_page_reg[0x10] = { 0 };
@@ -892,10 +897,11 @@ if (port & 1) {
         break;
 
     case 2:
-        mikasa_pic_init[which] = 3;
+        mikasa_pic_init[which] = mikasa_pic_need_icw4[which] ? 3 : 0;
         break;
 
     case 3:
+        mikasa_pic_auto_eoi[which] = (val & 2) ? TRUE : FALSE;
         mikasa_pic_init[which] = 0;
         break;
 
@@ -907,8 +913,10 @@ if (port & 1) {
     }
 else {
     mikasa_pic_cmd[which] = val;
-    if (val & 0x10)                                   /* ICW1 */
+    if (val & 0x10) {                                 /* ICW1 */
         mikasa_pic_init[which] = 1;
+        mikasa_pic_need_icw4[which] = (val & 1) ? TRUE : FALSE;
+        }
     else if ((val & 0x18) == 0x08)                    /* OCW3 */
         mikasa_pic_read_isr[which] = (val & 1) ? TRUE : FALSE;
     else if ((val & 0x60) == 0x60) {                  /* specific EOI */
@@ -1499,8 +1507,10 @@ if (irq == 2) {
 
     if (sirq < 8) {
         mikasa_pic_irr[1] &= ~(1u << sirq);
-        mikasa_pic_isr[1] |= 1u << sirq;
-        mikasa_pic_isr[0] |= 1u << 2;
+        if (!mikasa_pic_auto_eoi[1])
+            mikasa_pic_isr[1] |= 1u << sirq;
+        if (!mikasa_pic_auto_eoi[0])
+            mikasa_pic_isr[0] |= 1u << 2;
         if (!(mikasa_pic_irr[1] & ~mikasa_pic_imr[1]))
             mikasa_pic_irr[0] &= ~(1u << 2);
         mikasa_irq_update ();
@@ -1512,7 +1522,8 @@ if (irq == 2) {
     }
 if (irq < 8) {
     mikasa_pic_irr[0] &= ~(1u << irq);
-    mikasa_pic_isr[0] |= 1u << irq;
+    if (!mikasa_pic_auto_eoi[0])
+        mikasa_pic_isr[0] |= 1u << irq;
     mikasa_irq_update ();
     sim_debug (MIKASA_DBG_IO, &mikasa_dev,
         "PIC IACK IRQ%u vector=%02X\n", irq, mikasa_pic_vec[0] + irq);
@@ -2108,6 +2119,10 @@ if ((port >= MIKASA_ISA_COM1) && (port < (MIKASA_ISA_COM1 + 8)))
     return mikasa_uart_read (port);
 if (port == MIKASA_ISA_NMI_CTRL)
     return mikasa_nmi_ctrl;
+if (port == MIKASA_ISA_ELCR1)
+    return mikasa_elcr[0];
+if (port == MIKASA_ISA_ELCR2)
+    return mikasa_elcr[1];
 if ((port >= MIKASA_ISA_OCP) && (port < (MIKASA_ISA_OCP + 4))) {
     uint32 reg = port - MIKASA_ISA_OCP;
     uint8 val;
@@ -2200,6 +2215,14 @@ if ((port >= MIKASA_ISA_COM1) && (port < (MIKASA_ISA_COM1 + 8))) {
     }
 if (port == MIKASA_ISA_NMI_CTRL) {
     mikasa_nmi_ctrl = val;
+    return;
+    }
+if (port == MIKASA_ISA_ELCR1) {
+    mikasa_elcr[0] = val;
+    return;
+    }
+if (port == MIKASA_ISA_ELCR2) {
+    mikasa_elcr[1] = val;
     return;
     }
 if ((port >= MIKASA_ISA_OCP) && (port < (MIKASA_ISA_OCP + 4))) {
@@ -4892,6 +4915,12 @@ mikasa_pic_init[0] = 0;
 mikasa_pic_init[1] = 0;
 mikasa_pic_read_isr[0] = FALSE;
 mikasa_pic_read_isr[1] = FALSE;
+mikasa_pic_need_icw4[0] = FALSE;
+mikasa_pic_need_icw4[1] = FALSE;
+mikasa_pic_auto_eoi[0] = FALSE;
+mikasa_pic_auto_eoi[1] = FALSE;
+mikasa_elcr[0] = 0;
+mikasa_elcr[1] = 0;
 memset (mikasa_dma1_reg, 0, sizeof (mikasa_dma1_reg));
 memset (mikasa_dma2_reg, 0, sizeof (mikasa_dma2_reg));
 memset (mikasa_dma_page_reg, 0, sizeof (mikasa_dma_page_reg));
