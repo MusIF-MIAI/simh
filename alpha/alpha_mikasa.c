@@ -2048,9 +2048,10 @@ return TRUE;
 
 static uint8 mikasa_ncr_read_b (uint32 reg)
 {
-uint8 val = mikasa_ncr_reg[reg & (MIKASA_NCR_REG_SIZE - 1)];
+uint8 val;
 
-reg = reg & (MIKASA_NCR_REG_SIZE - 1);
+reg = reg & 0x7Fu;
+val = mikasa_ncr_reg[reg];
 if (reg == MIKASA_NCR_REG_DSTAT) {
     mikasa_ncr_reg[MIKASA_NCR_REG_DSTAT] &= MIKASA_NCR_DSTAT_DFE;
     mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &= ~MIKASA_NCR_ISTAT_DIP;
@@ -4580,7 +4581,7 @@ return;
 
 static void mikasa_ncr_write_b (uint32 reg, uint8 val)
 {
-reg = reg & (MIKASA_NCR_REG_SIZE - 1);
+reg = reg & 0x7Fu;
 sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "NCR write %02X=%02X\n",
     reg, val);
 if (reg == MIKASA_NCR_REG_ISTAT) {

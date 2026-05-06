@@ -26,6 +26,8 @@
 - [x] Route COM1 receive interrupts through the SRM-programmed PIC path.
 - [x] Add NCR/Symbios 53C810 PCI config, I/O BAR, memory BAR, register shell,
   interrupt status, abort, reset, and select-timeout behavior.
+- [x] Mirror the NCR/Symbios 53C810 operating registers through both halves of
+  the 256-byte I/O and memory BAR windows (`0x00..0x7f` and `0x80..0xff`).
 - [x] Initialize the integrated NCR 53C810 PCI interrupt line as ICU IRQ 12,
   matching the AlphaServer 1000 platform route.
 - [x] Collapse auxiliary NCR SCRIPTS scans behind one shared pass for
@@ -223,6 +225,8 @@
   it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after making `DFIFO.BO[6:0]` match the empty-FIFO
   model; it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after mirroring NCR BAR register aliases; it still
+  reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -281,6 +285,8 @@ the real path works.
     phase mismatch handling, and memory moves;
   - current branch models the main `DSP`, `DSPS`, `DSTAT`, `SIST0`, `SIST1`,
     `ISTAT`, SIR/DIP/SIP, abort, and select-timeout paths used so far;
+  - current branch mirrors 53C810 operating registers through both documented
+    halves of the 256-byte I/O and memory BAR windows;
   - current branch latches `DSTAT`/`SIST` causes independently of
     `DIEN`/`SIEN` masks and only asserts IRQ for enabled causes;
   - current branch has a second-level interrupt stack behind `DSTAT`,

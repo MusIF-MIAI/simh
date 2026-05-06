@@ -94,7 +94,9 @@ Not implemented yet:
   REQUEST SENSE state. The integrated controller's PCI interrupt line is
   initialized to ICU IRQ 12, matching the AlphaServer 1000 platform route. Data
   payloads can now span multiple data-phase MOVE segments, but the frontend is
-  still not a complete SCRIPTS processor.
+  still not a complete SCRIPTS processor. The 256-byte I/O and memory BAR
+  windows mirror the operating registers through both `0x00..0x7f` and
+  `0x80..0xff`, matching the documented 53C810 register aliases.
   `DIEN`, `SIEN0`, and `SIEN1` now mask IRQ assertion while `DSTAT`/`SIST`
   status bits remain latched until read.
   Handled SCRIPTS fetches and command/data/status/message MOVE transfers now
