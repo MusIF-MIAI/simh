@@ -1854,6 +1854,21 @@ buf[3] = (uint8) val;
 return;
 }
 
+static void mikasa_ncr_write_be16 (uint8 *buf, uint32 val)
+{
+buf[0] = (uint8) (val >> 8);
+buf[1] = (uint8) val;
+return;
+}
+
+static void mikasa_ncr_write_be24 (uint8 *buf, uint32 val)
+{
+buf[0] = (uint8) (val >> 16);
+buf[1] = (uint8) (val >> 8);
+buf[2] = (uint8) val;
+return;
+}
+
 static uint32 mikasa_ncr_min3 (uint32 a, uint32 b, uint32 c)
 {
 uint32 m = (a < b) ? a : b;
@@ -2346,6 +2361,97 @@ mikasa_ncr_clear_sense (unit);
 return TRUE;
 }
 
+static uint32 mikasa_ncr_mode_page (uint32 unit, uint8 page_code, uint8 *buf,
+    uint32 max)
+{
+UNIT *uptr = &dka_unit[unit];
+uint32 heads = 16;
+uint32 sectors = 45;
+uint32 cylinders = 0;
+
+if ((uptr->capac != 0) && (heads * sectors != 0))
+    cylinders = ((uint32) uptr->capac) / (heads * sectors);
+switch (page_code) {
+    case 0x01:                                      /* error recovery */
+        if (max < 12)
+            return 0;
+        buf[0] = 0x01;
+        buf[1] = 0x0A;
+        buf[2] = 0x80;                              /* AWRE */
+        buf[3] = 0x0B;                              /* read retry count */
+        buf[8] = 0x0B;                              /* write retry count */
+        return 12;
+
+    case 0x04:                                      /* rigid geometry */
+        if (max < 24)
+            return 0;
+        buf[0] = 0x04;
+        buf[1] = 0x16;
+        mikasa_ncr_write_be24 (&buf[2], cylinders);
+        buf[5] = (uint8) heads;
+        mikasa_ncr_write_be24 (&buf[6], 0);
+        mikasa_ncr_write_be24 (&buf[9], 0);
+        mikasa_ncr_write_be16 (&buf[20], (uint32) sectors);
+        return 24;
+
+    case 0x08:                                      /* caching */
+        if (max < 20)
+            return 0;
+        buf[0] = 0x08;
+        buf[1] = 0x12;
+        buf[2] = 0x04;                              /* read cache enable */
+        return 20;
+
+    default:
+        return 0;
+        }
+}
+
+static uint32 mikasa_ncr_mode_pages (uint32 unit, uint8 page_code, uint8 *buf,
+    uint32 max)
+{
+uint32 off = 0;
+
+if (page_code == 0x3F) {
+    off += mikasa_ncr_mode_page (unit, 0x01, buf + off, max - off);
+    off += mikasa_ncr_mode_page (unit, 0x04, buf + off, max - off);
+    off += mikasa_ncr_mode_page (unit, 0x08, buf + off, max - off);
+    return off;
+    }
+return mikasa_ncr_mode_page (unit, page_code, buf, max);
+}
+
+static t_bool mikasa_ncr_scsi_mode_sense (uint32 unit, const uint8 *cdb,
+    uint32 data_addr, uint32 data_count, t_bool ten)
+{
+uint8 buf[256];
+UNIT *uptr = &dka_unit[unit];
+uint32 page_code = cdb[2] & 0x3F;
+uint32 alloc = ten ? mikasa_ncr_alloc_len10 (cdb) : cdb[4];
+uint32 header = ten ? 8 : 4;
+uint32 pages;
+uint32 total;
+uint32 len;
+
+memset (buf, 0, sizeof (buf));
+if (uptr->flags & UNIT_RO)
+    buf[ten ? 3 : 2] = 0x80;
+pages = mikasa_ncr_mode_pages (unit, page_code, buf + header,
+    sizeof (buf) - header);
+if ((pages == 0) && (page_code != 0x00)) {
+    mikasa_ncr_set_sense (unit, 0x05, 0x24, 0x00);
+    return FALSE;
+    }
+total = header + pages;
+if (ten)
+    mikasa_ncr_write_be16 (buf, total - 2);
+else
+    buf[0] = (uint8) (total - 1);
+len = mikasa_ncr_min3 (data_count, alloc, total);
+mikasa_ncr_clear_sense (unit);
+return mikasa_ncr_write_dma_buf (data_addr, buf, len);
+}
+
 static t_bool mikasa_ncr_scsi_cmd (uint32 unit, const uint8 *cdb,
     uint32 data_addr, uint32 data_count, uint8 *status)
 {
@@ -2428,12 +2534,11 @@ switch (cdb[0]) {
         return TRUE;
 
     case 0x1A:                                              /* MODE SENSE(6) */
-        buf[0] = 3;
-        if (uptr->flags & UNIT_RO)
-            buf[2] = 0x80;
-        len = mikasa_ncr_min3 (data_count, cdb[4], sizeof (buf));
-        mikasa_ncr_clear_sense (unit);
-        return mikasa_ncr_write_dma_buf (data_addr, buf, len);
+        if (mikasa_ncr_scsi_mode_sense (unit, cdb, data_addr, data_count,
+            FALSE))
+            return TRUE;
+        *status = 2;
+        return TRUE;
 
     case 0x25:                                              /* READ CAPACITY(10) */
         if ((uptr->flags & UNIT_ATT) == 0)
@@ -2490,13 +2595,11 @@ switch (cdb[0]) {
         return mikasa_ncr_write_dma_buf (data_addr, buf, len);
 
     case 0x5A:                                              /* MODE SENSE(10) */
-        buf[1] = 6;
-        if (uptr->flags & UNIT_RO)
-            buf[3] = 0x80;
-        len = mikasa_ncr_min3 (data_count, mikasa_ncr_alloc_len10 (cdb),
-            sizeof (buf));
-        mikasa_ncr_clear_sense (unit);
-        return mikasa_ncr_write_dma_buf (data_addr, buf, len);
+        if (mikasa_ncr_scsi_mode_sense (unit, cdb, data_addr, data_count,
+            TRUE))
+            return TRUE;
+        *status = 2;
+        return TRUE;
 
     default:
         sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
