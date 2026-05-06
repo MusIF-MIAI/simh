@@ -133,6 +133,14 @@
                                       MIKASA_COMANCHE_ED_PASS2)
 #define MIKASA_COMANCHE_ADDR_HI     0x00001FFFu
 #define MIKASA_COMANCHE_GCR_WIDEMEM 0x00000010u
+#define MIKASA_COMANCHE_GCR_MASK    0x00003FF6u
+#define MIKASA_COMANCHE_TAGENB_MASK 0x0000FFFEu
+#define MIKASA_COMANCHE_VFP_MASK    0x00007FFFu
+#define MIKASA_COMANCHE_BAR_MASK    0x0000FFE0u
+#define MIKASA_COMANCHE_CR_S0_MASK  0x000001FFu
+#define MIKASA_COMANCHE_CR_S8_MASK  0x000003FFu
+#define MIKASA_COMANCHE_TRA_MASK    0x00007FFFu
+#define MIKASA_COMANCHE_TRB_MASK    0x00003FFFu
 #define MIKASA_COMANCHE_CR_VALID    0x00000001u
 #define MIKASA_COMANCHE_CR_SIZE_1G  0x0000001Eu
 #define MIKASA_EPIC_BASE            0x1A0000000ULL
@@ -1727,22 +1735,68 @@ sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "COMANCHE read %03X=%08X\n",
 return val;
 }
 
+static t_bool mikasa_comanche_bank_reg (uint32 reg, uint32 base,
+    uint32 *bank)
+{
+if ((reg < base) || (reg >= (base + (MIKASA_COMANCHE_BANKS << 5))))
+    return FALSE;
+*bank = (reg - base) >> 5;
+return TRUE;
+}
+
 static void mikasa_comanche_write (t_uint64 pa, t_uint64 val, uint32 lnt)
 {
 uint32 off = (uint32) (pa - MIKASA_COMANCHE_BASE);
 uint32 reg = off & (MIKASA_COMANCHE_SIZE - 1);
 uint32 index = (off & (MIKASA_COMANCHE_SIZE - 1)) >> 5;
 uint32 data = (uint32) val;
+uint32 bank;
 
-if (reg == MIKASA_COMANCHE_ED)
-    mikasa_comanche_reg[index] =
-        (mikasa_comanche_reg[index] & ~(data & MIKASA_COMANCHE_ED_ERR)) |
-        MIKASA_COMANCHE_ED_PASS2;
-else if ((reg == MIKASA_COMANCHE_ERR_HI) ||
-    (reg == MIKASA_COMANCHE_LCK_HI))
-    mikasa_comanche_reg[index] = data & MIKASA_COMANCHE_ADDR_HI;
-else
-    mikasa_comanche_reg[index] = data;
+switch (reg) {
+    case MIKASA_COMANCHE_GCR:
+        data = data & MIKASA_COMANCHE_GCR_MASK;
+        break;
+
+    case MIKASA_COMANCHE_ED:
+        data = (mikasa_comanche_reg[index] &
+            ~(data & MIKASA_COMANCHE_ED_ERR)) |
+            MIKASA_COMANCHE_ED_PASS2;
+        break;
+
+    case MIKASA_COMANCHE_TAGENB:
+        data = data & MIKASA_COMANCHE_TAGENB_MASK;
+        break;
+
+    case MIKASA_COMANCHE_ERR_HI:
+    case MIKASA_COMANCHE_LCK_HI:
+        data = data & MIKASA_COMANCHE_ADDR_HI;
+        break;
+
+    case MIKASA_COMANCHE_VFP:
+        data = data & MIKASA_COMANCHE_VFP_MASK;
+        break;
+
+    case MIKASA_COMANCHE_PD_LO:
+    case MIKASA_COMANCHE_PD_HI:
+        data = mikasa_comanche_reg[index];
+        break;
+
+    default:
+        if (mikasa_comanche_bank_reg (reg, MIKASA_COMANCHE_B0_BAR, &bank))
+            data = data & MIKASA_COMANCHE_BAR_MASK;
+        else if (mikasa_comanche_bank_reg (reg, MIKASA_COMANCHE_B0_CR,
+            &bank))
+            data = data & ((bank == 8) ? MIKASA_COMANCHE_CR_S8_MASK :
+                MIKASA_COMANCHE_CR_S0_MASK);
+        else if (mikasa_comanche_bank_reg (reg, MIKASA_COMANCHE_B0_TRA,
+            &bank))
+            data = data & MIKASA_COMANCHE_TRA_MASK;
+        else if (mikasa_comanche_bank_reg (reg, MIKASA_COMANCHE_B0_TRB,
+            &bank))
+            data = data & MIKASA_COMANCHE_TRB_MASK;
+        break;
+        }
+mikasa_comanche_reg[index] = data;
 sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "COMANCHE write %03X=%08X\n",
     off, data);
 return;

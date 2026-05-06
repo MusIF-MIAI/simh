@@ -13,6 +13,9 @@
   PCI DMA translation through TBASE.
 - [x] Mask APECS Comanche/EPIC error/status writes and add write-one-to-clear
   behavior for documented error latches.
+- [x] Mask documented Comanche control, tag-enable, video-frame, bank base,
+  bank config, and memory-timing fields; keep presence-detect registers
+  read-only.
 - [x] Latch EPIC `NDEV` with PEAR/SEAR addresses for absent PCI sparse/dense
   memory accesses.
 - [x] Merge byte/word PCI config writes instead of replacing whole dwords.
@@ -451,8 +454,9 @@ the real path works.
   - current branch translates direct windows and SGMAP windows through TBASE
     by reading the programmed scatter/gather table and filling the EPIC TLB;
   - current branch masks Comanche/EPIC error registers and handles
-    write-one-to-clear error/status bits, but does not yet raise all real
-    error causes;
+    write-one-to-clear error/status bits, masks documented Comanche control
+    and memory-bank fields, and keeps presence-detect registers read-only, but
+    does not yet raise all real error causes;
   - current branch latches EPIC `DCSR.NDEV` plus PEAR/SEAR addresses for
     absent PCI sparse/dense memory accesses;
   - SRM smoke after EPIC `NDEV` latching still reaches `V5.4-101` and
