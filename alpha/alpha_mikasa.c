@@ -7130,7 +7130,7 @@ mikasa_ncr_cfg[0x00 >> 2] = 0x00011000u;
 mikasa_ncr_cfg[0x04 >> 2] = 0x02000001u;
 mikasa_ncr_cfg[0x08 >> 2] = 0x01000001u;
 mikasa_ncr_cfg[0x10 >> 2] = 0x00000001u;
-mikasa_ncr_cfg[0x3C >> 2] = 0x401101FFu;
+mikasa_ncr_cfg[0x3C >> 2] = 0x4011010Cu;
 mikasa_ncr_init_regs ();
 memset (mikasa_ncr_sense_key, 0, sizeof (mikasa_ncr_sense_key));
 memset (mikasa_ncr_sense_asc, 0, sizeof (mikasa_ncr_sense_asc));

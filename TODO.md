@@ -24,6 +24,8 @@
 - [x] Route COM1 receive interrupts through the SRM-programmed PIC path.
 - [x] Add NCR/Symbios 53C810 PCI config, I/O BAR, memory BAR, register shell,
   interrupt status, abort, reset, and select-timeout behavior.
+- [x] Initialize the integrated NCR 53C810 PCI interrupt line as ICU IRQ 12,
+  matching the AlphaServer 1000 platform route.
 - [x] Add NCR SCRIPTS scanning for select, table/direct/indirect moves,
   register ops, load/store, memory copy, and basic conditional flow.
 - [x] Collect multiple NCR data-phase MOVE entries and transfer SCSI payloads
@@ -113,6 +115,8 @@
   `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after honoring NCR `DCNTL.SSM` autostart gating;
   it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after initializing the integrated NCR PCI
+  interrupt line to IRQ 12; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -239,6 +243,10 @@ the real path works.
     hard-coded boot assumptions.
 - Tighten interrupt routing:
   - keep AS1000 ICU bit 12 -> EV4 hardware IRQ2 -> SRM vector `0x9C0` for NCR;
+  - current branch initializes the integrated NCR PCI interrupt-line register
+    to IRQ 12 instead of the generic `0xff` unassigned value;
+  - SRM smoke after the NCR PCI interrupt-line update still reaches
+    `V5.4-101` and enumerates `pka`/`ewa`;
   - keep COM1 IRQ4 through the 8259/PIC IACK path;
   - current branch handles PIC init sequencing, ICW4 auto-EOI, ELCR storage,
     mask/pending/in-service state, EOI, and cascade IACK paths;

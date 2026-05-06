@@ -89,8 +89,10 @@ Not implemented yet:
 - Full NCR/Symbios 53C810 SCRIPTS/DMA execution. The current frontend handles
   simple script walking, `SEL_ABS`/`SEL_TBL`, table-indirect command/data/status
   moves, controller interrupt status, common SCSI-2 disk commands, and per-target
-  REQUEST SENSE state. Data payloads can now span multiple data-phase MOVE
-  segments, but the frontend is still not a complete SCRIPTS processor.
+  REQUEST SENSE state. The integrated controller's PCI interrupt line is
+  initialized to ICU IRQ 12, matching the AlphaServer 1000 platform route. Data
+  payloads can now span multiple data-phase MOVE segments, but the frontend is
+  still not a complete SCRIPTS processor.
   `DIEN`, `SIEN0`, and `SIEN1` now mask IRQ assertion while `DSTAT`/`SIST`
   status bits remain latched until read.
   Handled SCRIPTS fetches and command/data/status/message MOVE transfers now
