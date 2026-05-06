@@ -45,6 +45,8 @@
   `SOCL` ACK/ATN outputs, mirrored bus bits, and `SCNTL0` target mode.
 - [x] Latch NCR SCRIPTS `SELECT` destination, table-indirect `SXFER`/`SCNTL3`,
   and select-with-ATN state into visible 53C810 registers.
+- [x] Model visible NCR SCRIPTS wait-state behavior for legal disconnect and
+  no-event wait-reselect paths.
 - [x] Start NCR SCRIPTS execution from `DCNTL.STD`, not only from writes to
   `DSP`, matching the normal 53C810 driver path.
 - [x] Preserve NCR read-only status registers on CPU writes and expose current
@@ -84,6 +86,8 @@
   it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after SCRIPTS `SELECT` register latching; it still
   reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after SCRIPTS wait-disconnect/wait-reselect
+  handling; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -159,6 +163,8 @@ the real path works.
   - current branch records SCRIPTS `SELECT` destination ID, table-indirect
     transfer settings, and select-with-ATN state in `SDID`, `SXFER`, `SCNTL3`,
     `SOCL`, and `SBCL`;
+  - current branch treats `WAIT DISCONNECT` as a legal bus-free transition and
+    stops script scans at `WAIT RESELECT` until real reselect events exist;
   - current branch starts SCRIPTS from `DCNTL.STD` as well as the firmware-style
     `DSP` high-byte write;
   - current branch preserves read-only NCR status registers and reports the

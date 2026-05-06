@@ -106,7 +106,9 @@ Not implemented yet:
   target-mode side effects in `SOCL`, `SBCL`, and `SCNTL0`.
   SCRIPTS `SELECT` now latches the destination ID, table-indirect `SXFER` and
   `SCNTL3` values, and select-with-ATN state into the visible controller
-  registers.
+  registers. `WAIT DISCONNECT` now clears connected state as a legal bus-free
+  transition, while `WAIT RESELECT` stops script scanning until real reselect
+  event support is added.
   SCRIPTS execution can now be started through `DCNTL.STD` as well as by
   writing `DSP`.
   CPU writes no longer overwrite read-only NCR status registers, and completed

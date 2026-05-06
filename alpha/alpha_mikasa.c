@@ -347,6 +347,8 @@
 #define MIKASA_NCR_SCR_SEL_ABS_ATN  0x41000000u
 #define MIKASA_NCR_SCR_SEL_TBL      0x42000000u
 #define MIKASA_NCR_SCR_SEL_TBL_ATN  0x43000000u
+#define MIKASA_NCR_SCR_WAIT_DISC    0x48000000u
+#define MIKASA_NCR_SCR_WAIT_RESEL   0x50000000u
 #define MIKASA_NCR_SCR_JUMP         0x80080000u
 #define MIKASA_NCR_SCR_JUMPR        0x80880000u
 #define MIKASA_NCR_SCR_CALL         0x88080000u
@@ -2846,6 +2848,14 @@ if ((op & MIKASA_NCR_LS_GROUP_MASK) == MIKASA_NCR_LS_GROUP) {
     *dsp = next;
     return TRUE;
     }
+if ((op & 0xFF000000u) == MIKASA_NCR_SCR_WAIT_DISC) {
+    if (state->side_effects)
+        mikasa_ncr_set_connected (FALSE);
+    *dsp = next;
+    return TRUE;
+    }
+if ((op & 0xFF000000u) == MIKASA_NCR_SCR_WAIT_RESEL)
+    return FALSE;
 if ((op & 0xFF000000u) == MIKASA_NCR_SCR_SET) {
     mikasa_ncr_script_set_clear (op, TRUE, state);
     *dsp = next;
