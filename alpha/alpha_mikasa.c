@@ -158,7 +158,11 @@
 #define MIKASA_PCI_SLOT_SCSI        6
 /* SRM reports the EISA bridge as virtual slot 2; config cycles use IDSEL 7. */
 #define MIKASA_PCI_SLOT_PCEB        7
+#define MIKASA_PCI_SLOT_TULIP       11
 #define MIKASA_PCI_CFG_DWORDS       64
+#define MIKASA_TULIP_REG_SIZE       0x80
+#define MIKASA_TULIP_BAR_SIZE       0x80
+#define MIKASA_TULIP_BAR_MASK       0xFFFFFF80u
 #define MIKASA_NCR_REG_SIZE         0x100
 #define MIKASA_NCR_BAR_SIZE         0x100
 #define MIKASA_NCR_BAR_MASK         0xFFFFFF00u
@@ -627,6 +631,8 @@ static uint32 mikasa_comanche_reg[MIKASA_COMANCHE_SIZE >> 5] = { 0 };
 static uint32 mikasa_epic_reg[MIKASA_EPIC_SIZE >> 5] = { 0 };
 static uint32 mikasa_ncr_cfg[MIKASA_PCI_CFG_DWORDS] = { 0 };
 static uint8 mikasa_ncr_reg[MIKASA_NCR_REG_SIZE] = { 0 };
+static uint32 mikasa_tulip_cfg[MIKASA_PCI_CFG_DWORDS] = { 0 };
+static uint8 mikasa_tulip_reg[MIKASA_TULIP_REG_SIZE] = { 0 };
 static uint32 mikasa_ncr_script_trace_count = 0;
 static uint32 mikasa_icu_int_req_bits = 0;
 static uint32 mikasa_pic_int_req_bits = 0;
@@ -1345,6 +1351,121 @@ switch (reg) {
     default:
         return 0;
         }
+}
+
+static uint32 mikasa_tulip_conf_mask (uint32 reg)
+{
+switch (reg) {
+    case 0x04:
+        return 0x00000157u;
+
+    case 0x0C:
+        return 0x0000FFFFu;
+
+    case 0x10:
+    case 0x14:
+        return MIKASA_TULIP_BAR_MASK;
+
+    case 0x3C:
+        return 0x000000FFu;
+
+    default:
+        return 0;
+        }
+}
+
+static t_bool mikasa_tulip_bar_reg (uint32 addr, uint32 bar, uint32 mask,
+    uint32 *reg)
+{
+uint32 base;
+
+base = mikasa_tulip_cfg[bar >> 2] & ~0x7Fu;
+base = base & mask;
+if (base == 0)
+    return FALSE;
+if ((addr < base) || (addr >= (base + MIKASA_TULIP_BAR_SIZE)))
+    return FALSE;
+*reg = addr - base;
+return TRUE;
+}
+
+static uint8 mikasa_tulip_read_b (uint32 reg)
+{
+uint8 val = mikasa_tulip_reg[reg & (MIKASA_TULIP_REG_SIZE - 1)];
+
+sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "TULIP read %02X=%02X\n",
+    reg, val);
+return val;
+}
+
+static uint32 mikasa_tulip_read_l (uint32 reg)
+{
+reg = reg & (MIKASA_TULIP_REG_SIZE - 1);
+return ((uint32) mikasa_tulip_read_b (reg)) |
+    (((uint32) mikasa_tulip_read_b (reg + 1)) << 8) |
+    (((uint32) mikasa_tulip_read_b (reg + 2)) << 16) |
+    (((uint32) mikasa_tulip_read_b (reg + 3)) << 24);
+}
+
+static t_uint64 mikasa_tulip_read_len (uint32 reg, uint32 lnt)
+{
+if (lnt == L_BYTE)
+    return mikasa_tulip_read_b (reg);
+if (lnt == L_WORD)
+    return ((uint32) mikasa_tulip_read_b (reg)) |
+        (((uint32) mikasa_tulip_read_b (reg + 1)) << 8);
+return mikasa_tulip_read_l (reg);
+}
+
+static void mikasa_tulip_write_b (uint32 reg, uint8 val)
+{
+reg = reg & (MIKASA_TULIP_REG_SIZE - 1);
+mikasa_tulip_reg[reg] = val;
+sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "TULIP write %02X=%02X\n",
+    reg, val);
+return;
+}
+
+static void mikasa_tulip_write_l (uint32 reg, uint32 val)
+{
+mikasa_tulip_write_b (reg, (uint8) val);
+mikasa_tulip_write_b (reg + 1, (uint8) (val >> 8));
+mikasa_tulip_write_b (reg + 2, (uint8) (val >> 16));
+mikasa_tulip_write_b (reg + 3, (uint8) (val >> 24));
+return;
+}
+
+static void mikasa_tulip_write_len (uint32 reg, t_uint64 val, uint32 lnt)
+{
+if (lnt == L_BYTE)
+    mikasa_tulip_write_b (reg, (uint8) val);
+else if (lnt == L_WORD) {
+    mikasa_tulip_write_b (reg, (uint8) val);
+    mikasa_tulip_write_b (reg + 1, (uint8) (val >> 8));
+    }
+else
+    mikasa_tulip_write_l (reg, (uint32) val);
+return;
+}
+
+static t_bool mikasa_tulip_io_read (uint32 port, uint8 *val)
+{
+uint32 reg;
+
+if (!mikasa_tulip_bar_reg (port, 0x10, 0xFFFFFFFFu, &reg))
+    return FALSE;
+*val = mikasa_tulip_read_b (reg);
+return TRUE;
+}
+
+static t_bool mikasa_tulip_io_write (uint32 port, uint8 val)
+{
+uint32 reg;
+
+if (!mikasa_tulip_bar_reg (port, 0x10, 0xFFFFFFFFu, &reg))
+    return FALSE;
+mikasa_tulip_write_b (reg, val);
+return TRUE;
 }
 
 static uint8 mikasa_ncr_read_b (uint32 reg)
@@ -2564,6 +2685,26 @@ if (mask != 0)
 return;
 }
 
+static uint32 mikasa_tulip_conf_read_l (uint32 func, uint32 reg)
+{
+if (func != 0)
+    return 0xFFFFFFFFu;
+return mikasa_tulip_cfg[reg >> 2];
+}
+
+static void mikasa_tulip_conf_write_l (uint32 func, uint32 reg, uint32 val)
+{
+uint32 mask;
+
+if (func != 0)
+    return;
+mask = mikasa_tulip_conf_mask (reg);
+if (mask != 0)
+    mikasa_tulip_cfg[reg >> 2] =
+        mikasa_masked_update (mikasa_tulip_cfg[reg >> 2], val, mask);
+return;
+}
+
 static uint32 mikasa_pci_conf_read_l (uint32 cfg)
 {
 uint32 bus = (cfg >> 16) & 0xFF;
@@ -2581,6 +2722,13 @@ if ((bus == 0) && (slot == MIKASA_PCI_SLOT_PCEB)) {
     }
 if ((bus == 0) && (slot == MIKASA_PCI_SLOT_SCSI)) {
     val = mikasa_ncr_conf_read_l (func, reg);
+    sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+        "PCI config read bus %u slot %u func %u reg %02X=%08X\n",
+        bus, slot, func, reg, val);
+    return val;
+    }
+if ((bus == 0) && (slot == MIKASA_PCI_SLOT_TULIP)) {
+    val = mikasa_tulip_conf_read_l (func, reg);
     sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
         "PCI config read bus %u slot %u func %u reg %02X=%08X\n",
         bus, slot, func, reg, val);
@@ -2612,6 +2760,13 @@ if ((bus == 0) && (slot == MIKASA_PCI_SLOT_PCEB) && (func == 0)) {
     }
 if ((bus == 0) && (slot == MIKASA_PCI_SLOT_SCSI)) {
     mikasa_ncr_conf_write_l (func, reg, val);
+    sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+        "PCI config write bus %u slot %u func %u reg %02X=%08X\n",
+        bus, slot, func, reg, val);
+    return;
+    }
+if ((bus == 0) && (slot == MIKASA_PCI_SLOT_TULIP)) {
+    mikasa_tulip_conf_write_l (func, reg, val);
     sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
         "PCI config write bus %u slot %u func %u reg %02X=%08X\n",
         bus, slot, func, reg, val);
@@ -2675,6 +2830,8 @@ uint32 imr = mikasa_irq_mask | MIKASA_ISA_ICU_PRESENT;
 uint8 val;
 
 if (mikasa_ncr_io_read (port, &val))
+    return val;
+if (mikasa_tulip_io_read (port, &val))
     return val;
 if ((port >= MIKASA_ISA_DMA1) && (port < (MIKASA_ISA_DMA1 + 0x10)))
     return mikasa_dma1_reg[port - MIKASA_ISA_DMA1];
@@ -2746,6 +2903,8 @@ return 0;
 static void mikasa_isa_write (uint32 port, uint8 val)
 {
 if (mikasa_ncr_io_write (port, val))
+    return;
+if (mikasa_tulip_io_write (port, val))
     return;
 if ((port >= MIKASA_ISA_DMA1) && (port < (MIKASA_ISA_DMA1 + 0x10))) {
     mikasa_dma1_reg[port - MIKASA_ISA_DMA1] = val;
@@ -2923,6 +3082,18 @@ if (mikasa_ncr_bar_reg (addr, 0x14, 0x07FFFFFFu, &reg)) {
         return val;
     return ((t_uint64) val) << (8 * (addr & 3));
     }
+if (mikasa_tulip_bar_reg (addr, 0x14, 0x07FFFFFFu, &reg)) {
+    if (mode == 3)
+        return mikasa_tulip_read_l (reg & ~3u);
+    if (mode == 1) {
+        val = (uint32) mikasa_tulip_read_len (reg & ~1u, L_WORD);
+        return ((t_uint64) val) << (8 * (addr & 2));
+        }
+    val = (uint32) mikasa_tulip_read_b (reg);
+    if (lnt == L_BYTE)
+        return val;
+    return ((t_uint64) val) << (8 * (addr & 3));
+    }
 sim_debug (MIKASA_DBG_IO, &mikasa_dev,
     "absent APECS sparse memory read %llX\n",
     (unsigned long long) pa);
@@ -2954,6 +3125,21 @@ if (mikasa_ncr_bar_reg (addr, 0x14, 0x07FFFFFFu, &reg)) {
         }
     return;
     }
+if (mikasa_tulip_bar_reg (addr, 0x14, 0x07FFFFFFu, &reg)) {
+    if (mode == 3)
+        mikasa_tulip_write_l (reg & ~3u, (uint32) val);
+    else if (mode == 1) {
+        data = (uint32) (val >> (8 * (addr & 2)));
+        mikasa_tulip_write_len (reg & ~1u, data, L_WORD);
+        }
+    else if (lnt == L_BYTE)
+        mikasa_tulip_write_b (reg, (uint8) val);
+    else {
+        data = (uint32) (val >> (8 * (addr & 3)));
+        mikasa_tulip_write_b (reg, (uint8) data);
+        }
+    return;
+    }
 sim_debug (MIKASA_DBG_IO, &mikasa_dev,
     "unhandled APECS sparse memory write %llX=%llX\n",
     (unsigned long long) pa, (unsigned long long) val);
@@ -2967,6 +3153,8 @@ uint32 reg;
 
 if (mikasa_ncr_bar_reg (addr, 0x14, 0xFFFFFFFFu, &reg))
     return mikasa_ncr_read_len (reg, lnt);
+if (mikasa_tulip_bar_reg (addr, 0x14, 0xFFFFFFFFu, &reg))
+    return mikasa_tulip_read_len (reg, lnt);
 sim_debug (MIKASA_DBG_IO, &mikasa_dev,
     "absent APECS dense memory read %llX\n",
     (unsigned long long) pa);
@@ -2981,6 +3169,10 @@ uint32 reg;
 
 if (mikasa_ncr_bar_reg (addr, 0x14, 0xFFFFFFFFu, &reg)) {
     mikasa_ncr_write_len (reg, val, lnt);
+    return;
+    }
+if (mikasa_tulip_bar_reg (addr, 0x14, 0xFFFFFFFFu, &reg)) {
+    mikasa_tulip_write_len (reg, val, lnt);
     return;
     }
 sim_debug (MIKASA_DBG_IO, &mikasa_dev,
@@ -5548,6 +5740,13 @@ mikasa_ncr_init_regs ();
 memset (mikasa_ncr_sense_key, 0, sizeof (mikasa_ncr_sense_key));
 memset (mikasa_ncr_sense_asc, 0, sizeof (mikasa_ncr_sense_asc));
 memset (mikasa_ncr_sense_ascq, 0, sizeof (mikasa_ncr_sense_ascq));
+memset (mikasa_tulip_cfg, 0, sizeof (mikasa_tulip_cfg));
+mikasa_tulip_cfg[0x00 >> 2] = 0x00021011u;
+mikasa_tulip_cfg[0x04 >> 2] = 0x02800001u;
+mikasa_tulip_cfg[0x08 >> 2] = 0x02000002u;
+mikasa_tulip_cfg[0x10 >> 2] = 0x00000001u;
+mikasa_tulip_cfg[0x3C >> 2] = 0x00000100u;
+memset (mikasa_tulip_reg, 0, sizeof (mikasa_tulip_reg));
 memset (mikasa_pceb_cfg, 0, sizeof (mikasa_pceb_cfg));
 mikasa_pceb_cfg[0x00 >> 2] = 0x04828086u;
 mikasa_pceb_cfg[0x04 >> 2] = 0x02000007u;
