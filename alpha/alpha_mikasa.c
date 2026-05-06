@@ -517,6 +517,7 @@ extern UNIT dka_unit[];
 typedef struct {
     uint8 sfbr;
     uint32 phase;
+    t_bool side_effects;
     t_bool carry;
     } MIKASA_NCR_SCRIPT_STATE;
 
@@ -2767,8 +2768,11 @@ switch (group) {
 
     case MIKASA_NCR_TC_INT:
         if (op & MIKASA_NCR_TC_INTFLY) {
-            mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] |= MIKASA_NCR_ISTAT_INTF;
-            mikasa_ncr_update_irq ();
+            if (state->side_effects) {
+                mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] |=
+                    MIKASA_NCR_ISTAT_INTF;
+                mikasa_ncr_update_irq ();
+                }
             *dsp = next;
             return TRUE;
             }
@@ -2788,6 +2792,7 @@ uint32 i;
 
 memset (&state, 0, sizeof (state));
 state.phase = MIKASA_NCR_SCRIPT_NO_PHASE;
+state.side_effects = TRUE;
 for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
     uint32 op;
     uint32 arg;

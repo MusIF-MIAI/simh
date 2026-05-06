@@ -36,6 +36,8 @@
   interrupts, with synthetic values only as fallback.
 - [x] Treat NCR SCRIPTS `INTFLY` as a non-halting interrupt-on-the-fly path and
   expose/clear `ISTAT.INTF`.
+- [x] Keep NCR `INTFLY` side effects out of auxiliary script scans so debug
+  searches do not reassert `ISTAT.INTF`.
 - [x] Start NCR SCRIPTS execution from `DCNTL.STD`, not only from writes to
   `DSP`, matching the normal 53C810 driver path.
 - [x] Preserve NCR read-only status registers on CPU writes and expose current
@@ -125,6 +127,7 @@ the real path works.
     synthetic phase markers;
   - current branch lets SCRIPTS `INTFLY` continue execution while setting
     `ISTAT.INTF`, which the CPU can clear with the documented write-one path;
+    auxiliary scans suppress those side effects;
   - current branch starts SCRIPTS from `DCNTL.STD` as well as the firmware-style
     `DSP` high-byte write;
   - current branch preserves read-only NCR status registers and reports the
