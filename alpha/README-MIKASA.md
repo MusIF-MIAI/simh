@@ -36,6 +36,10 @@ Implemented:
     V5.4-101, built on Mar 24 1999 at 13:58:27
     ```
 
+  - COM1 receive interrupts are now delivered through the SRM-programmed 8259
+    path. SRM enables COM1 `IER=0x0B`, unmasks PIC IRQ4, the APECS PCI IACK
+    cycle returns vector `0x04`, and the firmware reads the UART receive
+    buffer.
   - `DEP MIKASA SCCSCALE <n>` can be used as a debug accelerator for SRM
     delay loops. The default is `1`, which preserves the normal PAL `RSCC`
     counter behavior.
@@ -62,10 +66,11 @@ Implemented:
 Not implemented yet:
 
 - Complete real Mikasa 21071/CIA PCI host bridge behavior.
-- NCR/Symbios 53C810 SCRIPTS/DMA engine and SCSI bus transactions.
+- Complete NCR/Symbios 53C810 SCRIPTS/DMA engine and SCSI bus transactions.
 - Network, VGA, NVRAM, and multiprocessor support.
 - A complete SRM-compatible firmware execution environment. The real SRM image
-  now reaches the SRM banner, but it does not reach an SRM prompt yet.
+  now reaches the SRM banner and receives serial input, but it does not reach
+  an SRM prompt yet.
 
 So this is not yet a complete OpenVMS boot. It is a controlled first point:
 SIMH can identify the machine profile, attach all four recovered disks, load the
@@ -295,8 +300,11 @@ debug tracing, the PC cycles inside the ROM decompressor around `0x900301` and
 
 1. Advance the real SRM firmware path to the `P00>>>` prompt.
    The real `mksrmrom.exe` now prints the DEC/MIKASA SRM V5.4-101 banner. The
-   next work is to continue through console initialization and remaining
-   PAL/platform synchronization code until `BOOT DKA0` can be issued from SRM.
+   serial interrupt path is live, so the next work is the remaining post-banner
+   SCSI probe loop. PCI debug currently shows repeated `INQUIRY` commands to
+   targets 0-3, followed by select timeouts on targets 4-6, then another scan.
+   Continue tightening 53C810 SCRIPTS/data/status/message completion until the
+   probe finishes and `BOOT DKA0` can be issued from SRM.
 
 2. Understand the direct-APB `SYSBOOT.EXE` lookup failure.
    The APB now reaches the system root and reads `SYSEXE`-related ODS-2
@@ -316,8 +324,8 @@ debug tracing, the PC cycles inside the ROM decompressor around `0x900301` and
 5. Add more Mikasa platform I/O.
    The current model implements APECS sparse ISA I/O, EPIC register storage,
    PCI configuration cycles, the raw-IDSEL `7` Intel 82375EB PCI/EISA bridge,
-   and the raw-IDSEL `6` NCR 53C810 PCI configuration/register window. The SRM
-   now recognizes `pka`, then waits for real 53C810 SCRIPTS/DMA behavior.
+   the raw-IDSEL `6` NCR 53C810 PCI configuration/register window, and a
+   minimal 8259 PIC/COM1 receive interrupt path.
 
 6. Add a new NCR/Symbios 53C810 frontend.
    SIMH has a common SCSI backend, but no 53C810 PCI DMA frontend in this tree.

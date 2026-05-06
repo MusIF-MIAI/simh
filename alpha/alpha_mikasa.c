@@ -166,7 +166,8 @@
 #define MIKASA_NCR_INTBIT           (1u << MIKASA_NCR_IRQ)
 #define MIKASA_RTC_IRQ              8
 #define MIKASA_RTC_INTBIT           (1u << MIKASA_RTC_IRQ)
-#define MIKASA_IRQ_HWRE_LEVEL       2
+#define MIKASA_ICU_HWRE_LEVEL       2
+#define MIKASA_PIC_HWRE_LEVEL       1
 #define MIKASA_RTC_TICK             10000
 #define MIKASA_NCR_DSPS_OK          0
 #define MIKASA_NCR_DSPS_DAT_OUT     8
@@ -198,6 +199,9 @@
 #define MIKASA_EISA_SLOT_ID         0x0C80
 #define MIKASA_OCP_READY            0x80
 
+#define MIKASA_UART_IRQ             4
+#define MIKASA_UART_IER_RDA         0x01
+#define MIKASA_UART_IIR_RDA         0x04
 #define MIKASA_UART_LSR_DR          0x01
 #define MIKASA_UART_LSR_THRE        0x20
 #define MIKASA_UART_LSR_TEMT        0x40
@@ -448,6 +452,8 @@ static void mikasa_write_phys_byte (t_uint64 pa, uint8 dat);
 static uint8 mikasa_read_phys_byte (t_uint64 pa);
 static uint32 mikasa_read_phys_long (t_uint64 pa);
 static void mikasa_irq_update (void);
+static void mikasa_pic_set_irq (uint32 irq, t_bool state);
+static uint8 mikasa_pic_iack (void);
 static t_bool mikasa_apb_iobox_read (uint32 unit, t_uint64 lbn,
     t_uint64 addr);
 static t_bool mikasa_apb_iobox_write (uint32 unit, t_uint64 lbn,
@@ -460,6 +466,7 @@ static void mikasa_close_io (void);
 static void mikasa_read_io (void);
 static void mikasa_write_io (void);
 static t_stat mikasa_console_callback (void);
+static void mikasa_uart_update_irq (void);
 static void mikasa_uart_poll (void);
 static uint8 mikasa_uart_read (uint32 port);
 static void mikasa_uart_write (uint32 port, uint8 val);
@@ -497,6 +504,11 @@ static uint8 mikasa_com2_dll = 0;
 static uint8 mikasa_com2_dlm = 0;
 static uint8 mikasa_pic_cmd[2] = { 0 };
 static uint8 mikasa_pic_imr[2] = { 0xFF, 0xFF };
+static uint8 mikasa_pic_irr[2] = { 0 };
+static uint8 mikasa_pic_isr[2] = { 0 };
+static uint8 mikasa_pic_vec[2] = { 0, 8 };
+static uint8 mikasa_pic_init[2] = { 0 };
+static t_bool mikasa_pic_read_isr[2] = { FALSE, FALSE };
 static uint8 mikasa_cfg_index = 0;
 static uint8 mikasa_cfg_reg[256] = { 0 };
 static uint8 mikasa_pit_mode = 0;
@@ -513,7 +525,8 @@ static uint32 mikasa_epic_reg[MIKASA_EPIC_SIZE >> 5] = { 0 };
 static uint32 mikasa_ncr_cfg[MIKASA_PCI_CFG_DWORDS] = { 0 };
 static uint8 mikasa_ncr_reg[MIKASA_NCR_REG_SIZE] = { 0 };
 static uint32 mikasa_ncr_script_trace_count = 0;
-static uint32 mikasa_int_req_bits = 0;
+static uint32 mikasa_icu_int_req_bits = 0;
+static uint32 mikasa_pic_int_req_bits = 0;
 static t_bool mikasa_ncr_status_phase = FALSE;
 static uint8 mikasa_ncr_status_byte = 0;
 static t_bool mikasa_direct_apb = FALSE;
@@ -584,6 +597,13 @@ DEVICE mikasa_dev = {
     DEV_DIB|DEV_DEBUG, 0, mikasa_debug
     };
 
+static void mikasa_uart_update_irq (void)
+{
+mikasa_pic_set_irq (MIKASA_UART_IRQ,
+    (mikasa_uart_ier & MIKASA_UART_IER_RDA) && mikasa_uart_rbr_valid);
+return;
+}
+
 static void mikasa_uart_poll (void)
 {
 t_stat c;
@@ -594,6 +614,9 @@ c = sim_poll_kbd ();
 if (c >= SCPE_KFLAG) {
     mikasa_uart_rbr = (uint8) (c & M8);
     mikasa_uart_rbr_valid = TRUE;
+    sim_debug (MIKASA_DBG_UART, &mikasa_dev,
+        "COM1 receive %02X\n", mikasa_uart_rbr);
+    mikasa_uart_update_irq ();
     }
 return;
 }
@@ -610,6 +633,9 @@ switch (reg) {
         mikasa_uart_poll ();
         if (mikasa_uart_rbr_valid) {
             mikasa_uart_rbr_valid = FALSE;
+            sim_debug (MIKASA_DBG_UART, &mikasa_dev,
+                "COM1 read RBR %02X\n", mikasa_uart_rbr);
+            mikasa_uart_update_irq ();
             return mikasa_uart_rbr;
             }
         return 0;
@@ -620,6 +646,9 @@ switch (reg) {
         return mikasa_uart_ier;
 
     case 2:
+        mikasa_uart_poll ();
+        if ((mikasa_uart_ier & MIKASA_UART_IER_RDA) && mikasa_uart_rbr_valid)
+            return MIKASA_UART_IIR_RDA;
         return MIKASA_UART_IIR_NOPEND;
 
     case 3:
@@ -667,16 +696,24 @@ switch (reg) {
     case 1:
         if (mikasa_uart_lcr & MIKASA_UART_LCR_DLAB)
             mikasa_uart_dlm = val;
-        else
+        else {
             mikasa_uart_ier = val;
+            sim_debug (MIKASA_DBG_UART, &mikasa_dev,
+                "COM1 IER=%02X\n", val);
+            mikasa_uart_update_irq ();
+            }
         break;
 
     case 3:
         mikasa_uart_lcr = val;
+        sim_debug (MIKASA_DBG_UART, &mikasa_dev,
+            "COM1 LCR=%02X\n", val);
         break;
 
     case 4:
         mikasa_uart_mcr = val;
+        sim_debug (MIKASA_DBG_UART, &mikasa_dev,
+            "COM1 MCR=%02X\n", val);
         break;
 
     case 7:
@@ -773,10 +810,27 @@ return;
 static uint8 mikasa_pic_read (uint32 port)
 {
 uint32 which = (port >= MIKASA_ISA_PIC2) ? 1 : 0;
+uint8 val;
 
 if (port & 1)
-    return mikasa_pic_imr[which];
-return 0;
+    val = mikasa_pic_imr[which];
+else
+    val = mikasa_pic_read_isr[which] ? mikasa_pic_isr[which] :
+        mikasa_pic_irr[which];
+sim_debug (MIKASA_DBG_IO, &mikasa_dev, "PIC%u read %03X=%02X\n",
+    which + 1, port, val);
+return val;
+}
+
+static uint32 mikasa_pic_first (uint8 pending)
+{
+uint32 i;
+
+for (i = 0; i < 8; i++) {
+    if (pending & (1u << i))
+        return i;
+    }
+return 8;
 }
 
 static void mikasa_pic_write (uint32 port, uint8 val)
@@ -784,10 +838,49 @@ static void mikasa_pic_write (uint32 port, uint8 val)
 uint32 which = (port >= MIKASA_ISA_PIC2) ? 1 : 0;
 
 if (port & 1) {
-    mikasa_pic_imr[which] = val;
+    switch (mikasa_pic_init[which]) {
+    case 1:
+        mikasa_pic_vec[which] = val & 0xF8;
+        mikasa_pic_init[which] = 2;
+        break;
+
+    case 2:
+        mikasa_pic_init[which] = 3;
+        break;
+
+    case 3:
+        mikasa_pic_init[which] = 0;
+        break;
+
+    default:
+        mikasa_pic_imr[which] = val;
+        mikasa_irq_update ();
+        break;
+        }
     }
-else
+else {
     mikasa_pic_cmd[which] = val;
+    if (val & 0x10)                                   /* ICW1 */
+        mikasa_pic_init[which] = 1;
+    else if ((val & 0x18) == 0x08)                    /* OCW3 */
+        mikasa_pic_read_isr[which] = (val & 1) ? TRUE : FALSE;
+    else if ((val & 0x60) == 0x60) {                  /* specific EOI */
+        uint8 bit = 1u << (val & 7);
+
+        mikasa_pic_isr[which] &= ~bit;
+        mikasa_pic_irr[which] &= ~bit;
+        mikasa_irq_update ();
+        }
+    else if (val == 0x20) {                           /* non-specific EOI */
+        uint32 i = mikasa_pic_first (mikasa_pic_isr[which]);
+
+        if (i < 8)
+            mikasa_pic_isr[which] &= ~(1u << i);
+        mikasa_irq_update ();
+        }
+    }
+sim_debug (MIKASA_DBG_IO, &mikasa_dev, "PIC%u write %03X=%02X\n",
+    which + 1, port, val);
 return;
 }
 
@@ -1251,16 +1344,87 @@ mikasa_ncr_reg[(reg + 3) & (MIKASA_NCR_REG_SIZE - 1)] = (uint8) (val >> 24);
 return;
 }
 
+static t_bool mikasa_pic_pending (void)
+{
+uint8 master = mikasa_pic_irr[0] & ~mikasa_pic_imr[0];
+uint8 slave = mikasa_pic_irr[1] & ~mikasa_pic_imr[1];
+
+if (slave && !(mikasa_pic_imr[0] & (1u << 2)))
+    master |= 1u << 2;
+return master != 0;
+}
+
+static uint8 mikasa_pic_iack (void)
+{
+uint8 master = mikasa_pic_irr[0] & ~mikasa_pic_imr[0];
+uint8 slave = mikasa_pic_irr[1] & ~mikasa_pic_imr[1];
+uint32 irq;
+
+if (slave && !(mikasa_pic_imr[0] & (1u << 2)))
+    master |= 1u << 2;
+irq = mikasa_pic_first (master);
+if (irq == 2) {
+    uint32 sirq = mikasa_pic_first (slave);
+
+    if (sirq < 8) {
+        mikasa_pic_irr[1] &= ~(1u << sirq);
+        mikasa_pic_isr[1] |= 1u << sirq;
+        mikasa_pic_isr[0] |= 1u << 2;
+        if (!(mikasa_pic_irr[1] & ~mikasa_pic_imr[1]))
+            mikasa_pic_irr[0] &= ~(1u << 2);
+        mikasa_irq_update ();
+        sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+            "PIC IACK IRQ%u vector=%02X\n", sirq + 8,
+            mikasa_pic_vec[1] + sirq);
+        return mikasa_pic_vec[1] + sirq;
+        }
+    }
+if (irq < 8) {
+    mikasa_pic_irr[0] &= ~(1u << irq);
+    mikasa_pic_isr[0] |= 1u << irq;
+    mikasa_irq_update ();
+    sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+        "PIC IACK IRQ%u vector=%02X\n", irq, mikasa_pic_vec[0] + irq);
+    return mikasa_pic_vec[0] + irq;
+    }
+sim_debug (MIKASA_DBG_IO, &mikasa_dev, "PIC IACK spurious\n");
+return mikasa_pic_vec[0] + 7;
+}
+
+static void mikasa_pic_set_irq (uint32 irq, t_bool state)
+{
+uint32 which = (irq >= 8) ? 1 : 0;
+uint8 bit = 1u << (irq & 7);
+
+if (state)
+    mikasa_pic_irr[which] |= bit;
+else {
+    mikasa_pic_irr[which] &= ~bit;
+    mikasa_pic_isr[which] &= ~bit;
+    }
+mikasa_irq_update ();
+sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+    "PIC%u IRQ%u %s irr=%02X imr=%02X\n",
+    which + 1, irq, state ? "set" : "clear", mikasa_pic_irr[which],
+    mikasa_pic_imr[which]);
+return;
+}
+
 static void mikasa_irq_update (void)
 {
 uint32 active = mikasa_irq_summary & mikasa_irq_mask;
+uint32 pic = mikasa_pic_pending () ? 1u : 0;
 
-int_req[MIKASA_IRQ_HWRE_LEVEL] =
-    (int_req[MIKASA_IRQ_HWRE_LEVEL] & ~mikasa_int_req_bits) | active;
-mikasa_int_req_bits = active;
+int_req[MIKASA_ICU_HWRE_LEVEL] =
+    (int_req[MIKASA_ICU_HWRE_LEVEL] & ~mikasa_icu_int_req_bits) | active;
+mikasa_icu_int_req_bits = active;
+int_req[MIKASA_PIC_HWRE_LEVEL] =
+    (int_req[MIKASA_PIC_HWRE_LEVEL] & ~mikasa_pic_int_req_bits) | pic;
+mikasa_pic_int_req_bits = pic;
 sim_debug (MIKASA_DBG_IO, &mikasa_dev,
-    "ICU update summary=%04X mask=%04X active=%04X hwre=%u\n",
-    mikasa_irq_summary, mikasa_irq_mask, active, MIKASA_IRQ_HWRE_LEVEL);
+    "ICU update summary=%04X mask=%04X active=%04X pic=%u icu_hwre=%u pic_hwre=%u\n",
+    mikasa_irq_summary, mikasa_irq_mask, active, pic, MIKASA_ICU_HWRE_LEVEL,
+    MIKASA_PIC_HWRE_LEVEL);
 return;
 }
 
@@ -1429,7 +1593,7 @@ switch (cdb[0]) {
     case 0x03:                                              /* REQUEST SENSE */
         buf[0] = 0x70;
         buf[7] = 0x0A;
-        len = mikasa_ncr_min3 (data_count, cdb[4], 18);
+        len = mikasa_ncr_min3 (data_count, cdb[4], sizeof (buf));
         return mikasa_ncr_write_dma_buf (data_addr, buf, len);
 
     case 0x08:                                              /* READ(6) */
@@ -1446,12 +1610,12 @@ switch (cdb[0]) {
         memcpy (&buf[8], "DEC     ", 8);
         memcpy (&buf[16], "RZ58     (C) DEC", 16);
         memcpy (&buf[32], "2000", 4);
-        len = mikasa_ncr_min3 (data_count, cdb[4], 36);
+        len = mikasa_ncr_min3 (data_count, cdb[4], sizeof (buf));
         return mikasa_ncr_write_dma_buf (data_addr, buf, len);
 
     case 0x1A:                                              /* MODE SENSE(6) */
         buf[0] = 3;
-        len = mikasa_ncr_min3 (data_count, cdb[4], 4);
+        len = mikasa_ncr_min3 (data_count, cdb[4], sizeof (buf));
         return mikasa_ncr_write_dma_buf (data_addr, buf, len);
 
     case 0x25:                                              /* READ CAPACITY(10) */
@@ -1786,10 +1950,15 @@ if (port == MIKASA_ISA_NMI_CTRL)
     return mikasa_nmi_ctrl;
 if ((port >= MIKASA_ISA_OCP) && (port < (MIKASA_ISA_OCP + 4))) {
     uint32 reg = port - MIKASA_ISA_OCP;
+    uint8 val;
 
     if (reg == 1)
-        return mikasa_ocp_reg[reg] | MIKASA_OCP_READY;
-    return mikasa_ocp_reg[reg];
+        val = mikasa_ocp_reg[reg] | MIKASA_OCP_READY;
+    else
+        val = mikasa_ocp_reg[reg];
+    sim_debug (MIKASA_DBG_IO, &mikasa_dev, "OCP read %u=%02X\n",
+        reg, val);
+    return val;
     }
 if ((port == MIKASA_ISA_ICU_IRR) || (port == (MIKASA_ISA_ICU_IRR + 1)))
     return (uint8) (irr >> ((port - MIKASA_ISA_ICU_IRR) << 3));
@@ -1861,6 +2030,8 @@ if (port == MIKASA_ISA_NMI_CTRL) {
     }
 if ((port >= MIKASA_ISA_OCP) && (port < (MIKASA_ISA_OCP + 4))) {
     mikasa_ocp_reg[port - MIKASA_ISA_OCP] = val;
+    sim_debug (MIKASA_DBG_IO, &mikasa_dev, "OCP write %u=%02X\n",
+        port - MIKASA_ISA_OCP, val);
     return;
     }
 if (port == MIKASA_ISA_ICU_IMR) {
@@ -2029,7 +2200,7 @@ static t_bool mikasa_io_rd (t_uint64 pa, t_uint64 *val, uint32 lnt)
 if ((pa >= MIKASA_EPIC_BASE) && (pa < (MIKASA_EPIC_BASE + MIKASA_EPIC_SIZE)))
     *val = mikasa_epic_read (pa, lnt);
 else if (pa == MIKASA_APECS_PCI_IACK)
-    *val = 0;
+    *val = mikasa_pic_iack ();
 else if ((pa >= MIKASA_APECS_PCI_SIO) &&
     (pa < (MIKASA_APECS_PCI_SIO + MIKASA_APECS_PCI_SIO_SIZE)))
     *val = mikasa_sparse_read (pa, lnt);
@@ -4507,7 +4678,6 @@ t_stat mikasa_reset (DEVICE *dptr)
 {
 mikasa_irq_mask = 0;
 mikasa_irq_summary = 0;
-mikasa_irq_update ();
 sim_cancel (&mikasa_unit);
 mikasa_direct_apb = FALSE;
 mikasa_uart_lcr = 0;
@@ -4528,6 +4698,17 @@ mikasa_pic_cmd[0] = 0;
 mikasa_pic_cmd[1] = 0;
 mikasa_pic_imr[0] = 0;
 mikasa_pic_imr[1] = 0;
+mikasa_pic_irr[0] = 0;
+mikasa_pic_irr[1] = 0;
+mikasa_pic_isr[0] = 0;
+mikasa_pic_isr[1] = 0;
+mikasa_pic_vec[0] = 0;
+mikasa_pic_vec[1] = 8;
+mikasa_pic_init[0] = 0;
+mikasa_pic_init[1] = 0;
+mikasa_pic_read_isr[0] = FALSE;
+mikasa_pic_read_isr[1] = FALSE;
+mikasa_irq_update ();
 mikasa_cfg_index = 0;
 memset (mikasa_cfg_reg, 0, sizeof (mikasa_cfg_reg));
 mikasa_pit_mode = 0;
