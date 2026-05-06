@@ -32,6 +32,8 @@
   and data MOVE transfers progress.
 - [x] Prefer real NCR SCRIPTS `INT` second-word values for `DSPS` completion
   interrupts, with synthetic values only as fallback.
+- [x] Treat NCR SCRIPTS `INTFLY` as a non-halting interrupt-on-the-fly path and
+  expose/clear `ISTAT.INTF`.
 - [x] Preserve NCR read-only status registers on CPU writes and expose current
   MOVE phase through `SOCL`, `SBCL`, and `SSTAT1`.
 - [x] Honor NCR `DIEN`, `SIEN0`, and `SIEN1` interrupt masks while preserving
@@ -112,6 +114,8 @@ the real path works.
   - current branch uses SCRIPTS `INT` instruction arguments for `DSPS`
     completion values when they can be found, rather than always returning
     synthetic phase markers;
+  - current branch lets SCRIPTS `INTFLY` continue execution while setting
+    `ISTAT.INTF`, which the CPU can clear with the documented write-one path;
   - current branch preserves read-only NCR status registers and reports the
     active MOVE phase in the SCSI bus/status phase bits;
   - current branch returns common SCSI-2 disk responses, write-protect check
