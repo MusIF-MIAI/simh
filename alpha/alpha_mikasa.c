@@ -3222,6 +3222,7 @@ switch (cdb[0]) {
     case 0x08:                                      /* READ(6) */
     case 0x12:                                      /* INQUIRY */
     case 0x1A:                                      /* MODE SENSE(6) */
+    case 0x23:                                      /* READ FORMAT CAPACITIES */
     case 0x25:                                      /* READ CAPACITY(10) */
     case 0x28:                                      /* READ(10) */
     case 0x37:                                      /* READ DEFECT DATA */
@@ -3231,6 +3232,7 @@ switch (cdb[0]) {
     case 0x9E:                                      /* SERVICE ACTION IN(16) */
     case 0xA0:                                      /* REPORT LUNS */
     case 0xA8:                                      /* READ(12) */
+    case 0xB7:                                      /* READ DEFECT DATA(12) */
         *phase = MIKASA_NCR_PHASE_DAT_IN;
         return TRUE;
 
@@ -3502,6 +3504,41 @@ mikasa_ncr_clear_sense (unit);
 return mikasa_ncr_write_scsi_data (data, buf, len);
 }
 
+static t_bool mikasa_ncr_scsi_read_format_capacities (uint32 unit,
+    const uint8 *cdb, const MIKASA_NCR_DMA_LIST *data)
+{
+uint8 buf[12];
+UNIT *uptr = &dka_unit[unit];
+uint32 blocks = (uptr->capac > M32) ? M32 : (uint32) uptr->capac;
+uint32 len;
+
+memset (buf, 0, sizeof (buf));
+buf[3] = 8;
+mikasa_ncr_write_be32 (&buf[4], blocks);
+buf[8] = 0x02;                                      /* formatted media */
+mikasa_ncr_write_be24 (&buf[9], MIKASA_DKA_BLOCK_SIZE);
+len = mikasa_ncr_min3 (data->bytes, mikasa_ncr_alloc_len10 (cdb),
+    sizeof (buf));
+mikasa_ncr_clear_sense (unit);
+return mikasa_ncr_write_scsi_data (data, buf, len);
+}
+
+static t_bool mikasa_ncr_scsi_read_defect_data (uint32 unit, const uint8 *cdb,
+    const MIKASA_NCR_DMA_LIST *data, t_bool twelve)
+{
+uint8 buf[8];
+uint32 alloc = twelve ? mikasa_ncr_cdb_be32 (cdb, 7) :
+    mikasa_ncr_alloc_len10 (cdb);
+uint32 total = twelve ? 6 : 4;
+uint32 len;
+
+memset (buf, 0, sizeof (buf));
+buf[1] = cdb[2] & 0x1F;                             /* requested list/format */
+len = mikasa_ncr_min3 (data->bytes, alloc, total);
+mikasa_ncr_clear_sense (unit);
+return mikasa_ncr_write_scsi_data (data, buf, len);
+}
+
 static t_bool mikasa_ncr_scsi_inquiry_vpd (uint32 unit, const uint8 *cdb,
     const MIKASA_NCR_DMA_LIST *data, uint8 *status)
 {
@@ -3638,6 +3675,9 @@ switch (cdb[0]) {
         *status = 2;
         return TRUE;
 
+    case 0x23:                                              /* READ FORMAT CAPACITIES */
+        return mikasa_ncr_scsi_read_format_capacities (unit, cdb, data);
+
     case 0x25:                                              /* READ CAPACITY(10) */
         if ((uptr->flags & UNIT_ATT) == 0)
             return FALSE;
@@ -3690,6 +3730,7 @@ switch (cdb[0]) {
     case 0x35:                                              /* SYNCHRONIZE CACHE */
     case 0x56:                                              /* RESERVE UNIT(10) */
     case 0x57:                                              /* RELEASE UNIT(10) */
+    case 0xAF:                                              /* VERIFY(12) */
         mikasa_ncr_clear_sense (unit);
         return TRUE;
 
@@ -3700,10 +3741,8 @@ switch (cdb[0]) {
         mikasa_ncr_clear_sense (unit);
         return TRUE;
 
-    case 0x37:                                              /* READ DEFECT DATA */
-        len = mikasa_ncr_min3 (data->bytes, mikasa_ncr_alloc_len10 (cdb), 4);
-        mikasa_ncr_clear_sense (unit);
-        return mikasa_ncr_write_scsi_data (data, buf, len);
+    case 0x37:                                              /* READ DEFECT DATA(10) */
+        return mikasa_ncr_scsi_read_defect_data (unit, cdb, data, FALSE);
 
     case 0x3C:                                              /* READ BUFFER */
         len = mikasa_ncr_min3 (data->bytes, mikasa_ncr_alloc_len10 (cdb),
@@ -3757,6 +3796,9 @@ switch (cdb[0]) {
             16);
         mikasa_ncr_clear_sense (unit);
         return mikasa_ncr_write_scsi_data (data, buf, len);
+
+    case 0xB7:                                              /* READ DEFECT DATA(12) */
+        return mikasa_ncr_scsi_read_defect_data (unit, cdb, data, TRUE);
 
     default:
         sim_debug (MIKASA_DBG_PCI, &mikasa_dev,

@@ -131,13 +131,14 @@ Not implemented yet:
   remain pending for the next script restart.
   The local SCSI disk path also handles extended probe/read commands such as
   `READ(12)`, `WRITE(12)`, `REPORT LUNS`, `READ CAPACITY(16)`, and basic
-  INQUIRY EVPD pages 0x00/0x80/0x83. CDBs now drive explicit DATA IN, DATA
-  OUT, or no-data phase selection, and harmless DATA OUT parameter lists are
-  consumed instead of leaving stale DMA progress. MODE SENSE replies include a
-  direct-access block descriptor unless the CDB sets DBD, and include common
-  disconnect/reconnect, format-device, and control pages. Changeable-page
-  MODE SENSE probes (`PC=1`) keep the page layouts but return zeroed value
-  fields.
+  INQUIRY EVPD pages 0x00/0x80/0x83. It reports formatted 512-byte media for
+  `READ FORMAT CAPACITIES` and empty defect lists for `READ DEFECT DATA(10/12)`.
+  CDBs now drive explicit DATA IN, DATA OUT, or no-data phase selection, and
+  harmless DATA OUT parameter lists are consumed instead of leaving stale DMA
+  progress. MODE SENSE replies include a direct-access block descriptor unless
+  the CDB sets DBD, and include common disconnect/reconnect, format-device, and
+  control pages. Changeable-page MODE SENSE probes (`PC=1`) keep the page
+  layouts but return zeroed value fields.
 - Full Ethernet, VGA, full NVRAM, and multiprocessor support. A DECchip 21040
   PCI/CSR shell exists so firmware and OS probes see a plausible DEC Ethernet
   device, including basic reset/status/run-state behavior, but packet I/O is

@@ -80,6 +80,8 @@
   non-changeable fields zeroed.
 - [x] Add common extended SCSI disk probes: `READ(12)`, `WRITE(12)`,
   `REPORT LUNS`, and `READ CAPACITY(16)`.
+- [x] Add SCSI `READ FORMAT CAPACITIES` and `READ DEFECT DATA(12)` responses
+  for older disk geometry/defect-list probes.
 - [x] Add INQUIRY EVPD pages 0x00, 0x80, and 0x83 for supported-page,
   per-target serial, and device-identification probes.
 - [x] Classify SCSI CDB data phases explicitly so no-data commands no longer
@@ -127,6 +129,9 @@
   it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run direct APB smoke after the SCSI/PCI hardware batch; APB still
   loads from DKA0 and reaches the known `PC: 200039E0` halt.
+- [x] Re-run SRM ROM smoke after `READ FORMAT CAPACITIES` and
+  `READ DEFECT DATA(12)` support; it still reaches `V5.4-101` and detects
+  pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -241,6 +246,10 @@ the real path works.
     enumerates `pka`/`ewa`;
   - current branch returns basic INQUIRY EVPD supported-page, unit-serial, and
     device-identification data for generic SCSI probes;
+  - current branch reports formatted 512-byte media for `READ FORMAT
+    CAPACITIES` and empty defect lists for `READ DEFECT DATA(10/12)`;
+  - SRM smoke after the SCSI capacity/defect-list probe responses still
+    reaches `V5.4-101` and enumerates `pka`/`ewa`;
   - current branch classifies CDB data phases explicitly and consumes
     data-out parameter lists for harmless no-op disk commands;
   - use SIMH `sim_scsi` as the backing SCSI command/device layer where it fits;
