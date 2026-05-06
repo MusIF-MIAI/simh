@@ -98,6 +98,9 @@
 - [x] Preserve read-only NCR low-level bus/latch registers (`SSID`, `SBCL`,
   `SIDL`, and `SBDL`) on host/SCRIPTS writes, while routing `SODL` writes to
   the output/bus data latches.
+- [x] Tighten documented NCR register masks for `SCNTL3`, `SCID`, `SDID`,
+  `GPREG`, `GPCNTL`, and `STEST3`, and implement self-clearing
+  `STEST3.CSF` SCSI FIFO/latch-full flag clear.
 - [x] Reflect successful NCR SCRIPTS arbitration/select attempts in
   `SSTAT0.WOA`.
 - [x] Honor NCR `DMODE.MAN` manual-start mode so `DSP` writes do not start
@@ -233,6 +236,8 @@
 - [x] Re-run SRM ROM smoke after preserving NCR low-level read-only bus/latch
   registers and routing `SODL` writes; it still reaches `V5.4-101` and detects
   pka/ewa.
+- [x] Re-run SRM ROM smoke after tightening NCR register masks and
+  `STEST3.CSF`; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -332,6 +337,9 @@ the real path works.
   - current branch preserves read-only low-level bus/latch registers (`SSID`,
     `SBCL`, `SIDL`, and `SBDL`) on host/SCRIPTS writes, while `SODL` writes
     update the output and bus data latches;
+  - current branch masks `SCNTL3`, `SCID`, `SDID`, `GPREG`, `GPCNTL`, and
+    `STEST3` writes to documented 53C810 fields and treats `STEST3.CSF` as a
+    self-clearing SCSI FIFO/latch-full flag clear;
   - current branch exposes the won-arbitration status bit after SCRIPTS
     selection attempts;
   - current branch honors `DMODE.MAN`, requiring `DCNTL.STD` to start SCRIPTS
