@@ -112,7 +112,8 @@ Not implemented yet:
   execution and ATN is cleared after the message-out handshake. `CTEST3` now
   preserves the 53C810 revision nibble and handles FIFO clear/flush writes
   against the local FIFO-empty model. `SFBR` is updated with the first byte of
-  handled data-in, status, and message-in phases.
+  handled data-in, status, and message-in phases. SCRIPTS selection attempts
+  now expose the won-arbitration status bit in `SSTAT0`.
   SCRIPTS execution can now be started through `DCNTL.STD` as well as by
   writing `DSP`.
   CPU writes no longer overwrite read-only NCR status registers, and completed

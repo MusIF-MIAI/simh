@@ -295,6 +295,7 @@
 #define MIKASA_NCR_DSTAT_SIR        0x04
 #define MIKASA_NCR_DSTAT_ABRT       0x10
 #define MIKASA_NCR_DSTAT_IRQS       0x7Du
+#define MIKASA_NCR_SSTAT0_WOA       0x04
 #define MIKASA_NCR_DCNTL_STD        0x04
 #define MIKASA_NCR_ISTAT_SRST       0x40
 #define MIKASA_NCR_ISTAT_SIGP       0x20
@@ -2943,6 +2944,7 @@ if (table) {
     mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL3] = (uint8) (sel >> 24);
     }
 mikasa_ncr_reg[MIKASA_NCR_REG_SDID] = target;
+mikasa_ncr_reg[MIKASA_NCR_REG_SSTAT0] |= MIKASA_NCR_SSTAT0_WOA;
 if (op & 0x01000000u) {
     mikasa_ncr_reg[MIKASA_NCR_REG_SOCL] |= MIKASA_NCR_SOCL_ATN;
     mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] |= MIKASA_NCR_SOCL_ATN;
