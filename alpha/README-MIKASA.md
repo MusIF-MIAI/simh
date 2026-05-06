@@ -131,9 +131,10 @@ Not implemented yet:
   clearing latched status. `MESSAGE OUT` buffers are now consumed before
   command execution and ATN is cleared after the message-out handshake.
   `CTEST3` now preserves the 53C810 revision nibble and handles FIFO
-  clear/flush writes against the local FIFO-empty model. `SFBR` is updated with
-  the first byte of handled data-in, status, and message-in phases. SCRIPTS
-  selection attempts now expose the won-arbitration status bit in `SSTAT0`.
+  clear/flush writes against the local FIFO-empty model. `SFBR`, `SIDL`, and
+  `SBDL` are updated with the first byte of handled input phases, while
+  command/data/message output phases update `SODL`/`SBDL`. SCRIPTS selection
+  attempts now expose the won-arbitration status bit in `SSTAT0`.
   `DMODE.MAN`
   manual-start mode is honored, so `DSP` writes only auto-start SCRIPTS when
   manual-start is clear; `DCNTL.SSM` single-step mode also requires

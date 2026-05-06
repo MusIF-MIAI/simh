@@ -76,6 +76,8 @@
   effects with the local FIFO-empty state.
 - [x] Update NCR `SFBR` with the first byte of handled input phases including
   data-in, status, and message-in transfers.
+- [x] Reflect first-byte SCSI bus data in low-level NCR latches: input phases
+  update `SIDL`/`SBDL`, and output phases update `SODL`/`SBDL`.
 - [x] Reflect successful NCR SCRIPTS arbitration/select attempts in
   `SSTAT0.WOA`.
 - [x] Honor NCR `DMODE.MAN` manual-start mode so `DSP` writes do not start
@@ -179,6 +181,8 @@
   pka/ewa.
 - [x] Re-run SRM ROM smoke after adding more NCR writable register masks and
   `DCNTL.IRQD`; it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after exposing low-level NCR data latches
+  (`SIDL`/`SODL`/`SBDL`); it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 

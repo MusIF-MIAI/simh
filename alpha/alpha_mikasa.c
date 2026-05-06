@@ -302,6 +302,11 @@
 #define MIKASA_NCR_REG_STEST1       0x4D
 #define MIKASA_NCR_REG_STEST2       0x4E
 #define MIKASA_NCR_REG_STEST3       0x4F
+#define MIKASA_NCR_REG_SIDL         0x50
+#define MIKASA_NCR_REG_STEST4       0x52
+#define MIKASA_NCR_REG_SODL         0x54
+#define MIKASA_NCR_REG_SBDL         0x58
+#define MIKASA_NCR_REG_SCRATCHB     0x5C
 #define MIKASA_NCR_SCNTL0_ARB       0xC0
 #define MIKASA_NCR_SCNTL0_TRG       0x01
 #define MIKASA_NCR_SCNTL0_WRITABLE  0xFB
@@ -2484,6 +2489,15 @@ return;
 static void mikasa_ncr_set_sfbr (uint8 val)
 {
 mikasa_ncr_reg[MIKASA_NCR_REG_SFBR] = val;
+mikasa_ncr_reg[MIKASA_NCR_REG_SIDL] = val;
+mikasa_ncr_reg[MIKASA_NCR_REG_SBDL] = val;
+return;
+}
+
+static void mikasa_ncr_set_output_latch (uint8 val)
+{
+mikasa_ncr_reg[MIKASA_NCR_REG_SODL] = val;
+mikasa_ncr_reg[MIKASA_NCR_REG_SBDL] = val;
 return;
 }
 
@@ -2635,6 +2649,7 @@ static t_bool mikasa_ncr_discard_scsi_data (const MIKASA_NCR_DMA_LIST *list)
 {
 uint8 buf[MIKASA_IO_BUFSIZE];
 uint32 done = 0;
+t_bool latch = TRUE;
 
 while (done < list->bytes) {
     uint32 chunk = list->bytes - done;
@@ -2643,6 +2658,10 @@ while (done < list->bytes) {
         chunk = sizeof (buf);
     if (!mikasa_ncr_read_dma_list_offset (list, done, buf, chunk))
         return FALSE;
+    if (latch && (chunk != 0)) {
+        mikasa_ncr_set_output_latch (buf[0]);
+        latch = FALSE;
+        }
     done = done + chunk;
     }
 mikasa_ncr_finish_dma_list (list, done);
@@ -3530,6 +3549,7 @@ uint8 buf[MIKASA_IO_BUFSIZE];
 UNIT *uptr = &dka_unit[unit];
 t_uint64 bytes_left = ((t_uint64) blocks) * MIKASA_DKA_BLOCK_SIZE;
 uint32 done = 0;
+t_bool latch = TRUE;
 
 if (bytes_left > data->bytes)
     bytes_left = data->bytes;
@@ -3557,6 +3577,10 @@ while (bytes_left != 0) {
 
     if (!mikasa_ncr_read_dma_list_offset (data, done, buf, chunk))
         return FALSE;
+    if (latch && (chunk != 0)) {
+        mikasa_ncr_set_output_latch (buf[0]);
+        latch = FALSE;
+        }
     if (sim_fwrite (buf, 1, chunk, uptr->fileref) != chunk)
         return FALSE;
     done = done + chunk;
@@ -4071,6 +4095,8 @@ if (!mikasa_ncr_read_dma_buf (cmd_addr, cdb, cmd_count)) {
     mikasa_ncr_set_connected (FALSE);
     return FALSE;
     }
+if (cmd_count != 0)
+    mikasa_ncr_set_output_latch (cdb[0]);
 mikasa_ncr_finish_move (mikasa_ncr_move_op_for_phase (MIKASA_NCR_PHASE_CMD),
     cmd_addr, cmd_move_count, cmd_count);
 has_data = mikasa_ncr_cmd_data_phase (cdb, &data_phase);
