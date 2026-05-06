@@ -2488,6 +2488,24 @@ for (i = 0; (i < list->count) && (done < len); i++) {
 return done == len;
 }
 
+static t_bool mikasa_ncr_discard_scsi_data (const MIKASA_NCR_DMA_LIST *list)
+{
+uint8 buf[MIKASA_IO_BUFSIZE];
+uint32 done = 0;
+
+while (done < list->bytes) {
+    uint32 chunk = list->bytes - done;
+
+    if (chunk > sizeof (buf))
+        chunk = sizeof (buf);
+    if (!mikasa_ncr_read_dma_list_offset (list, done, buf, chunk))
+        return FALSE;
+    done = done + chunk;
+    }
+mikasa_ncr_finish_dma_list (list, done);
+return TRUE;
+}
+
 static t_bool mikasa_ncr_write_dma_list_zero (
     const MIKASA_NCR_DMA_LIST *list)
 {
@@ -3037,7 +3055,7 @@ if (mikasa_ncr_find_phase_int (dsp, MIKASA_NCR_SCRIPT_NO_PHASE, FALSE, dsps))
 return FALSE;
 }
 
-static t_bool mikasa_ncr_data_out_cmd (const uint8 *cdb)
+static t_bool mikasa_ncr_cmd_data_phase (const uint8 *cdb, uint32 *phase)
 {
 switch (cdb[0]) {
     case 0x07:                                      /* REASSIGN BLOCKS */
@@ -3051,6 +3069,23 @@ switch (cdb[0]) {
     case 0x55:                                      /* MODE SELECT(10) */
     case 0xAA:                                      /* WRITE(12) */
     case 0xAE:                                      /* WRITE AND VERIFY(12) */
+        *phase = MIKASA_NCR_PHASE_DAT_OUT;
+        return TRUE;
+
+    case 0x03:                                      /* REQUEST SENSE */
+    case 0x08:                                      /* READ(6) */
+    case 0x12:                                      /* INQUIRY */
+    case 0x1A:                                      /* MODE SENSE(6) */
+    case 0x25:                                      /* READ CAPACITY(10) */
+    case 0x28:                                      /* READ(10) */
+    case 0x37:                                      /* READ DEFECT DATA */
+    case 0x3C:                                      /* READ BUFFER */
+    case 0x4D:                                      /* LOG SENSE */
+    case 0x5A:                                      /* MODE SENSE(10) */
+    case 0x9E:                                      /* SERVICE ACTION IN(16) */
+    case 0xA0:                                      /* REPORT LUNS */
+    case 0xA8:                                      /* READ(12) */
+        *phase = MIKASA_NCR_PHASE_DAT_IN;
         return TRUE;
 
     default:
@@ -3369,12 +3404,22 @@ switch (cdb[0]) {
         mikasa_ncr_clear_sense (unit);
         return mikasa_ncr_write_scsi_data (data, buf, len);
 
-    case 0x07:                                              /* REASSIGN BLOCKS */
     case 0x15:                                              /* MODE SELECT(6) */
+    case 0x1D:                                              /* SEND DIAGNOSTIC */
+        if (!mikasa_ncr_discard_scsi_data (data))
+            return FALSE;
+        mikasa_ncr_clear_sense (unit);
+        return TRUE;
+
+    case 0x07:                                              /* REASSIGN BLOCKS */
+        if (!mikasa_ncr_discard_scsi_data (data))
+            return FALSE;
+        mikasa_ncr_clear_sense (unit);
+        return TRUE;
+
     case 0x16:                                              /* RESERVE UNIT */
     case 0x17:                                              /* RELEASE UNIT */
     case 0x1B:                                              /* START STOP UNIT */
-    case 0x1D:                                              /* SEND DIAGNOSTIC */
     case 0x1E:                                              /* PREVENT/ALLOW */
         mikasa_ncr_clear_sense (unit);
         return TRUE;
@@ -3435,10 +3480,15 @@ switch (cdb[0]) {
     case 0x2F:                                              /* VERIFY(10) */
     case 0x34:                                              /* PRE-FETCH(10) */
     case 0x35:                                              /* SYNCHRONIZE CACHE */
-    case 0x3B:                                              /* WRITE BUFFER */
-    case 0x55:                                              /* MODE SELECT(10) */
     case 0x56:                                              /* RESERVE UNIT(10) */
     case 0x57:                                              /* RELEASE UNIT(10) */
+        mikasa_ncr_clear_sense (unit);
+        return TRUE;
+
+    case 0x3B:                                              /* WRITE BUFFER */
+    case 0x55:                                              /* MODE SELECT(10) */
+        if (!mikasa_ncr_discard_scsi_data (data))
+            return FALSE;
         mikasa_ncr_clear_sense (unit);
         return TRUE;
 
@@ -3460,6 +3510,8 @@ switch (cdb[0]) {
             return TRUE;
             }
         mikasa_ncr_clear_sense (unit);
+        if (!mikasa_ncr_discard_scsi_data (data))
+            return FALSE;
         return TRUE;
 
     case 0x4D:                                              /* LOG SENSE */
@@ -3516,12 +3568,12 @@ uint32 cmd_move_count;
 uint32 cmd_addr;
 uint32 cmd_off;
 uint32 data_off;
-uint32 data_phase;
+uint32 data_phase = MIKASA_NCR_PHASE_DAT_IN;
 uint32 target;
 uint32 i;
 uint32 data_dsps;
 MIKASA_NCR_DMA_LIST data;
-t_bool data_out;
+t_bool has_data;
 uint8 cdb[16];
 uint8 status;
 
@@ -3553,15 +3605,15 @@ if (!mikasa_ncr_read_dma_buf (cmd_addr, cdb, cmd_count)) {
     }
 mikasa_ncr_finish_move (mikasa_ncr_move_op_for_phase (MIKASA_NCR_PHASE_CMD),
     cmd_addr, cmd_move_count, cmd_count);
-data_out = mikasa_ncr_data_out_cmd (cdb);
-data_phase = data_out ? MIKASA_NCR_PHASE_DAT_OUT : MIKASA_NCR_PHASE_DAT_IN;
-if (!mikasa_ncr_collect_moves (dsp, dsa, data_phase, &data)) {
+has_data = mikasa_ncr_cmd_data_phase (cdb, &data_phase);
+mikasa_ncr_dma_list_init (&data);
+if (has_data && !mikasa_ncr_collect_moves (dsp, dsa, data_phase, &data)) {
     uint32 data_count = 0;
     uint32 data_addr = 0;
 
     mikasa_ncr_dma_list_init (&data);
     if (!mikasa_ncr_find_table_move (dsp, data_phase, &data_off))
-        data_off = data_out ? 0x14 : 0x1C;
+        data_off = (data_phase == MIKASA_NCR_PHASE_DAT_OUT) ? 0x14 : 0x1C;
     if (mikasa_ncr_table_entry (dsa, data_off, &data_count, &data_addr))
         (void) mikasa_ncr_dma_list_append (&data, data_count, data_addr,
             mikasa_ncr_move_op_for_phase (data_phase));

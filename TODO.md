@@ -52,6 +52,8 @@
   `REPORT LUNS`, and `READ CAPACITY(16)`.
 - [x] Add INQUIRY EVPD pages 0x00, 0x80, and 0x83 for supported-page,
   per-target serial, and device-identification probes.
+- [x] Classify SCSI CDB data phases explicitly so no-data commands no longer
+  get a synthetic DATA IN phase, and consume harmless DATA OUT parameter lists.
 - [x] Add DECchip 21040/Tulip PCI/CSR shell.
 - [x] Add DECchip 21040 software reset, CSR5 write-one-to-clear status,
   CSR6 run-state reporting, and byte/word CSR write merging.
@@ -63,6 +65,8 @@
   probe batch; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after the NCR connected-state update; it still
   reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after explicit SCSI CDB data-phase classification;
+  it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -142,6 +146,8 @@ the real path works.
     conditions, and per-target REQUEST SENSE state;
   - current branch returns basic INQUIRY EVPD supported-page, unit-serial, and
     device-identification data for generic SCSI probes;
+  - current branch classifies CDB data phases explicitly and consumes
+    data-out parameter lists for harmless no-op disk commands;
   - use SIMH `sim_scsi` as the backing SCSI command/device layer where it fits;
   - keep target-absent timeout behavior clean with and without attached disks.
 - Complete the APECS/DECchip 21071 base enough for firmware and operating

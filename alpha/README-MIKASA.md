@@ -109,7 +109,9 @@ Not implemented yet:
   timeout, reset, and abort.
   The local SCSI disk path also handles extended probe/read commands such as
   `READ(12)`, `WRITE(12)`, `REPORT LUNS`, `READ CAPACITY(16)`, and basic
-  INQUIRY EVPD pages 0x00/0x80/0x83.
+  INQUIRY EVPD pages 0x00/0x80/0x83. CDBs now drive explicit DATA IN, DATA
+  OUT, or no-data phase selection, and harmless DATA OUT parameter lists are
+  consumed instead of leaving stale DMA progress.
 - Full Ethernet, VGA, full NVRAM, and multiprocessor support. A DECchip 21040
   PCI/CSR shell exists so firmware and OS probes see a plausible DEC Ethernet
   device, including basic reset/status/run-state behavior, but packet I/O is
