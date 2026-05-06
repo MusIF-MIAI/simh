@@ -44,6 +44,8 @@
   MOVE phase through `SOCL`, `SBCL`, and `SSTAT1`.
 - [x] Track NCR connected state in `SCNTL1.ISCON`/`ISTAT.CON` across select,
   command, data, status/message, timeout, reset, and abort paths.
+- [x] Latch NCR `SIST0.MIA` phase mismatch when a pending DATA phase is skipped
+  by the target in favor of STATUS.
 - [x] Honor NCR `DIEN`, `SIEN0`, and `SIEN1` interrupt masks while preserving
   latched `DSTAT`/`SIST` status.
 - [x] Add common SCSI-2 disk responses, per-target REQUEST SENSE, MODE SENSE
@@ -67,6 +69,8 @@
   reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after explicit SCSI CDB data-phase classification;
   it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after the first NCR `SIST0.MIA` phase-mismatch
+  path; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -142,6 +146,9 @@ the real path works.
     active MOVE phase in the SCSI bus/status phase bits;
   - current branch tracks connected state in `SCNTL1.ISCON` and `ISTAT.CON`
     during the high-level 53C810 target transaction;
+  - current branch latches `SIST0.MIA` for the handled case where a target
+    returns STATUS instead of an expected DATA phase, while leaving
+    STATUS/MESSAGE pending for the next script restart;
   - current branch returns common SCSI-2 disk responses, write-protect check
     conditions, and per-target REQUEST SENSE state;
   - current branch returns basic INQUIRY EVPD supported-page, unit-serial, and

@@ -2367,6 +2367,27 @@ mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DNAD, addr + done);
 return;
 }
 
+static void mikasa_ncr_phase_mismatch (const MIKASA_NCR_DMA_LIST *list,
+    uint32 expected, uint32 sampled)
+{
+if (list->count != 0) {
+    mikasa_ncr_finish_move (list->seg[0].op, list->seg[0].addr,
+        list->seg[0].count, 0);
+    expected = mikasa_ncr_op_phase (list->seg[0].op);
+    }
+mikasa_ncr_latch_phase (expected, sampled);
+mikasa_ncr_set_sip (MIKASA_NCR_SIST0_MIA, 0);
+sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+    "NCR phase mismatch expected=%u sampled=%u\n", expected, sampled);
+return;
+}
+
+static t_bool mikasa_ncr_last_move_phase (uint32 phase)
+{
+return mikasa_ncr_op_phase (mikasa_ncr_reg_l (MIKASA_NCR_REG_DBC)) ==
+    (phase & 7u);
+}
+
 static void mikasa_ncr_finish_dma_list (const MIKASA_NCR_DMA_LIST *list,
     uint32 bytes)
 {
@@ -3055,6 +3076,17 @@ if (mikasa_ncr_find_phase_int (dsp, MIKASA_NCR_SCRIPT_NO_PHASE, FALSE, dsps))
 return FALSE;
 }
 
+static void mikasa_ncr_defer_status_phase (uint32 dsp, uint8 status)
+{
+mikasa_ncr_status_phase = TRUE;
+mikasa_ncr_status_byte = status;
+mikasa_ncr_status_dsps_valid =
+    mikasa_ncr_find_status_int_dsps (dsp, &mikasa_ncr_status_dsps);
+if (!mikasa_ncr_status_dsps_valid)
+    mikasa_ncr_status_dsps = MIKASA_NCR_DSPS_OK;
+return;
+}
+
 static t_bool mikasa_ncr_cmd_data_phase (const uint8 *cdb, uint32 *phase)
 {
 switch (cdb[0]) {
@@ -3631,12 +3663,12 @@ if (!mikasa_ncr_scsi_cmd (target, cdb, &data, &status)) {
     (void) mikasa_ncr_write_dma_list_zero (&data);
     }
 if (data.bytes != 0) {
-    mikasa_ncr_status_phase = TRUE;
-    mikasa_ncr_status_byte = status;
-    mikasa_ncr_status_dsps_valid =
-        mikasa_ncr_find_status_int_dsps (dsp, &mikasa_ncr_status_dsps);
-    if (!mikasa_ncr_status_dsps_valid)
-        mikasa_ncr_status_dsps = MIKASA_NCR_DSPS_OK;
+    mikasa_ncr_defer_status_phase (dsp, status);
+    if (!mikasa_ncr_last_move_phase (data_phase)) {
+        mikasa_ncr_phase_mismatch (&data, data_phase,
+            MIKASA_NCR_PHASE_STS);
+        return TRUE;
+        }
     data_dsps = mikasa_ncr_data_int_dsps (dsp, data_phase);
     mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SIR, data_dsps);
     }
