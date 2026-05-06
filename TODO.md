@@ -28,6 +28,8 @@
   register ops, load/store, memory copy, and basic conditional flow.
 - [x] Collect multiple NCR data-phase MOVE entries and transfer SCSI payloads
   across scatter/gather DMA segment lists.
+- [x] Update NCR `DBC`, `DNAD`, `DSP`, and `DSPS` as handled SCRIPTS fetches
+  and data MOVE transfers progress.
 - [x] Honor NCR `DIEN`, `SIEN0`, and `SIEN1` interrupt masks while preserving
   latched `DSTAT`/`SIST` status.
 - [x] Add common SCSI-2 disk responses, per-target REQUEST SENSE, MODE SENSE
@@ -95,6 +97,8 @@ the real path works.
     `DIEN`/`SIEN` masks and only asserts IRQ for enabled causes;
   - current branch collects multiple data-phase MOVE entries and reads/writes
     SCSI payloads across scatter/gather segment lists;
+  - current branch updates visible SCRIPTS/DMA progress registers for handled
+    instruction fetches and completed MOVE segments;
   - current branch returns common SCSI-2 disk responses, write-protect check
     conditions, and per-target REQUEST SENSE state;
   - use SIMH `sim_scsi` as the backing SCSI command/device layer where it fits;

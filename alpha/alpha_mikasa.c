@@ -482,6 +482,7 @@ typedef struct {
 typedef struct {
     uint32 count;
     uint32 addr;
+    uint32 op;
     } MIKASA_NCR_DMA_SEG;
 
 typedef struct {
@@ -635,6 +636,7 @@ static void mikasa_irq_update (void);
 static void mikasa_pic_set_irq (uint32 irq, t_bool state);
 static uint8 mikasa_pic_iack (void);
 static uint32 mikasa_ncr_sext24 (uint32 val);
+static uint32 mikasa_ncr_next_script_addr (uint32 dsp, uint32 op);
 static void mikasa_ncr_update_irq (void);
 static t_bool mikasa_apb_iobox_read (uint32 unit, t_uint64 lbn,
     t_uint64 addr);
@@ -2096,8 +2098,46 @@ memset (list, 0, sizeof (*list));
 return;
 }
 
+static uint32 mikasa_ncr_move_op_for_phase (uint32 phase)
+{
+return (phase << MIKASA_NCR_BM_PHASE_SHIFT) & MIKASA_NCR_BM_PHASE_MASK;
+}
+
+static void mikasa_ncr_finish_move (uint32 op, uint32 addr, uint32 count,
+    uint32 done)
+{
+uint32 resid = (done < count) ? count - done : 0;
+
+mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DBC,
+    (op & 0xFF000000u) | (resid & MIKASA_NCR_BM_COUNT_MASK));
+mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DNAD, addr + done);
+return;
+}
+
+static void mikasa_ncr_finish_dma_list (const MIKASA_NCR_DMA_LIST *list,
+    uint32 bytes)
+{
+uint32 done = 0;
+uint32 i;
+
+for (i = 0; i < list->count; i++) {
+    uint32 chunk = list->seg[i].count;
+
+    if (bytes <= done)
+        chunk = 0;
+    else if (chunk > (bytes - done))
+        chunk = bytes - done;
+    mikasa_ncr_finish_move (list->seg[i].op, list->seg[i].addr,
+        list->seg[i].count, chunk);
+    done = done + chunk;
+    if (done >= bytes)
+        break;
+    }
+return;
+}
+
 static t_bool mikasa_ncr_dma_list_append (MIKASA_NCR_DMA_LIST *list,
-    uint32 count, uint32 addr)
+    uint32 count, uint32 addr, uint32 op)
 {
 if (count == 0)
     return TRUE;
@@ -2105,6 +2145,7 @@ if (list->count >= MIKASA_NCR_DMA_SEGS)
     return FALSE;
 list->seg[list->count].count = count;
 list->seg[list->count].addr = addr;
+list->seg[list->count].op = op;
 list->count++;
 list->bytes = ((M32 - list->bytes) < count) ? M32 : list->bytes + count;
 return TRUE;
@@ -2126,6 +2167,15 @@ for (i = 0; (i < list->count) && (done < len); i++) {
     done = done + chunk;
     }
 return done == len;
+}
+
+static t_bool mikasa_ncr_write_scsi_data (const MIKASA_NCR_DMA_LIST *list,
+    const uint8 *buf, uint32 len)
+{
+if (!mikasa_ncr_write_dma_list (list, buf, len))
+    return FALSE;
+mikasa_ncr_finish_dma_list (list, len);
+return TRUE;
 }
 
 static t_bool mikasa_ncr_write_dma_list_offset (
@@ -2261,8 +2311,14 @@ return (val & 0x00800000u) ? (val | 0xFF000000u) : val;
 
 static t_bool mikasa_ncr_read_script (uint32 dsp, uint32 *op, uint32 *arg)
 {
-return mikasa_pci_dma_read_long (dsp, op) &&
-    mikasa_pci_dma_read_long (dsp + 4, arg);
+if (!mikasa_pci_dma_read_long (dsp, op) ||
+    !mikasa_pci_dma_read_long (dsp + 4, arg))
+    return FALSE;
+mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DBC, *op);
+mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DSPS, *arg);
+mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DSP,
+    mikasa_ncr_next_script_addr (dsp, *op));
+return TRUE;
 }
 
 static uint32 mikasa_ncr_next_script_addr (uint32 dsp, uint32 op)
@@ -2624,7 +2680,7 @@ for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
 
         if (!mikasa_ncr_resolve_move (dsa, op, arg, &count, &addr))
             return FALSE;
-        if (!mikasa_ncr_dma_list_append (list, count, addr))
+        if (!mikasa_ncr_dma_list_append (list, count, addr, op))
             return FALSE;
         }
     next = mikasa_ncr_next_script_addr (dsp, op);
@@ -2708,6 +2764,7 @@ while (bytes_left != 0) {
     done = done + chunk;
     bytes_left = bytes_left - chunk;
     }
+mikasa_ncr_finish_dma_list (data, done);
 return TRUE;
 }
 
@@ -2750,6 +2807,7 @@ while (bytes_left != 0) {
     done = done + chunk;
     bytes_left = bytes_left - chunk;
     }
+mikasa_ncr_finish_dma_list (data, done);
 mikasa_ncr_clear_sense (unit);
 return TRUE;
 }
@@ -2842,7 +2900,7 @@ else
     buf[0] = (uint8) (total - 1);
 len = mikasa_ncr_min3 (data->bytes, alloc, total);
 mikasa_ncr_clear_sense (unit);
-return mikasa_ncr_write_dma_list (data, buf, len);
+return mikasa_ncr_write_scsi_data (data, buf, len);
 }
 
 static t_bool mikasa_ncr_scsi_cmd (uint32 unit, const uint8 *cdb,
@@ -2868,7 +2926,7 @@ switch (cdb[0]) {
         buf[12] = mikasa_ncr_sense_asc[unit];
         buf[13] = mikasa_ncr_sense_ascq[unit];
         len = mikasa_ncr_min3 (data->bytes, cdb[4], sizeof (buf));
-        if (!mikasa_ncr_write_dma_list (data, buf, len))
+        if (!mikasa_ncr_write_scsi_data (data, buf, len))
             return FALSE;
         mikasa_ncr_clear_sense (unit);
         return TRUE;
@@ -2903,7 +2961,7 @@ switch (cdb[0]) {
             buf[4] = 0;
             len = mikasa_ncr_min3 (data->bytes, cdb[4], sizeof (buf));
             mikasa_ncr_clear_sense (unit);
-            return mikasa_ncr_write_dma_list (data, buf, len);
+            return mikasa_ncr_write_scsi_data (data, buf, len);
             }
         buf[2] = 2;
         buf[3] = 2;
@@ -2913,7 +2971,7 @@ switch (cdb[0]) {
         memcpy (&buf[32], "2000", 4);
         len = mikasa_ncr_min3 (data->bytes, cdb[4], sizeof (buf));
         mikasa_ncr_clear_sense (unit);
-        return mikasa_ncr_write_dma_list (data, buf, len);
+        return mikasa_ncr_write_scsi_data (data, buf, len);
 
     case 0x07:                                              /* REASSIGN BLOCKS */
     case 0x15:                                              /* MODE SELECT(6) */
@@ -2939,7 +2997,7 @@ switch (cdb[0]) {
         mikasa_ncr_write_be32 (&buf[4], MIKASA_DKA_BLOCK_SIZE);
         len = (data->bytes < 8) ? data->bytes : 8;
         mikasa_ncr_clear_sense (unit);
-        return mikasa_ncr_write_dma_list (data, buf, len);
+        return mikasa_ncr_write_scsi_data (data, buf, len);
 
     case 0x28:                                              /* READ(10) */
         lbn = (((uint32) cdb[2]) << 24) | (((uint32) cdb[3]) << 16) |
@@ -2974,13 +3032,13 @@ switch (cdb[0]) {
     case 0x37:                                              /* READ DEFECT DATA */
         len = mikasa_ncr_min3 (data->bytes, mikasa_ncr_alloc_len10 (cdb), 4);
         mikasa_ncr_clear_sense (unit);
-        return mikasa_ncr_write_dma_list (data, buf, len);
+        return mikasa_ncr_write_scsi_data (data, buf, len);
 
     case 0x3C:                                              /* READ BUFFER */
         len = mikasa_ncr_min3 (data->bytes, mikasa_ncr_alloc_len10 (cdb),
             sizeof (buf));
         mikasa_ncr_clear_sense (unit);
-        return mikasa_ncr_write_dma_list (data, buf, len);
+        return mikasa_ncr_write_scsi_data (data, buf, len);
 
     case 0x3F:                                              /* WRITE LONG */
         if (uptr->flags & UNIT_RO) {
@@ -2996,7 +3054,7 @@ switch (cdb[0]) {
         len = mikasa_ncr_min3 (data->bytes, mikasa_ncr_alloc_len10 (cdb),
             sizeof (buf));
         mikasa_ncr_clear_sense (unit);
-        return mikasa_ncr_write_dma_list (data, buf, len);
+        return mikasa_ncr_write_scsi_data (data, buf, len);
 
     case 0x5A:                                              /* MODE SENSE(10) */
         if (mikasa_ncr_scsi_mode_sense (unit, cdb, data, TRUE))
@@ -3059,7 +3117,8 @@ if (!mikasa_ncr_collect_moves (dsp, dsa, data_phase, &data)) {
     if (!mikasa_ncr_find_table_move (dsp, data_phase, &data_off))
         data_off = data_out ? 0x14 : 0x1C;
     if (mikasa_ncr_table_entry (dsa, data_off, &data_count, &data_addr))
-        (void) mikasa_ncr_dma_list_append (&data, data_count, data_addr);
+        (void) mikasa_ncr_dma_list_append (&data, data_count, data_addr,
+            mikasa_ncr_move_op_for_phase (data_phase));
     }
 
 sim_debug (MIKASA_DBG_PCI, &mikasa_dev,

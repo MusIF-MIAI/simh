@@ -93,6 +93,8 @@ Not implemented yet:
   segments, but the frontend is still not a complete SCRIPTS processor.
   `DIEN`, `SIEN0`, and `SIEN1` now mask IRQ assertion while `DSTAT`/`SIST`
   status bits remain latched until read.
+  Handled SCRIPTS fetches and data MOVE transfers now update visible
+  `DBC`, `DNAD`, `DSP`, and `DSPS` progress registers.
 - Full Ethernet, VGA, full NVRAM, and multiprocessor support. A DECchip 21040
   PCI/CSR shell exists so firmware and OS probes see a plausible DEC Ethernet
   device, but packet I/O is not implemented yet.
