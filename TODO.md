@@ -55,6 +55,8 @@
   data-in, status, and message-in transfers.
 - [x] Reflect successful NCR SCRIPTS arbitration/select attempts in
   `SSTAT0.WOA`.
+- [x] Honor NCR `DMODE.MAN` manual-start mode so `DSP` writes do not start
+  SCRIPTS until `DCNTL.STD` is set.
 - [x] Start NCR SCRIPTS execution from `DCNTL.STD`, not only from writes to
   `DSP`, matching the normal 53C810 driver path.
 - [x] Preserve NCR read-only status registers on CPU writes and expose current
@@ -103,6 +105,8 @@
 - [x] Re-run SRM ROM smoke after NCR `SFBR` input-phase updates; it still
   reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after exposing NCR `SSTAT0.WOA`; it still reaches
+  `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after honoring NCR `DMODE.MAN`; it still reaches
   `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
@@ -189,6 +193,8 @@ the real path works.
     phases so SCRIPTS tests see the first received byte;
   - current branch exposes the won-arbitration status bit after SCRIPTS
     selection attempts;
+  - current branch honors `DMODE.MAN`, requiring `DCNTL.STD` to start SCRIPTS
+    when manual-start mode is enabled;
   - current branch starts SCRIPTS from `DCNTL.STD` as well as the firmware-style
     `DSP` high-byte write;
   - current branch preserves read-only NCR status registers and reports the

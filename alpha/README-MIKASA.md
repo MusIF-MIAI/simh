@@ -113,7 +113,9 @@ Not implemented yet:
   preserves the 53C810 revision nibble and handles FIFO clear/flush writes
   against the local FIFO-empty model. `SFBR` is updated with the first byte of
   handled data-in, status, and message-in phases. SCRIPTS selection attempts
-  now expose the won-arbitration status bit in `SSTAT0`.
+  now expose the won-arbitration status bit in `SSTAT0`. `DMODE.MAN`
+  manual-start mode is honored, so `DSP` writes only auto-start SCRIPTS when
+  manual-start is clear.
   SCRIPTS execution can now be started through `DCNTL.STD` as well as by
   writing `DSP`.
   CPU writes no longer overwrite read-only NCR status registers, and completed
