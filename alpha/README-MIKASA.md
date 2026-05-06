@@ -27,6 +27,8 @@ Implemented:
   - EPIC now models `HAXR0`, `HAXR2`, `PMLT`, the eight TLB tag/data entries,
     `TBIA`, direct PCI DMA windows, and SGMAP DMA windows backed by the
     programmed TBASE scatter/gather table.
+  - Comanche and EPIC status/error register writes are masked to documented
+    fields, with write-one-to-clear behavior for error latches.
   - ISA legacy DMA controller registers, ISA DMA page registers, and a minimal
     floppy-controller shell are present so standard I/O probes do not fall
     through to unhandled ports.
@@ -82,8 +84,8 @@ Not implemented yet:
 
 - Complete real Mikasa 21071 PCI host bridge behavior. The current Comanche
   and EPIC models cover the register and DMA paths reached so far, but error
-  reporting, remaining HAE/config details, and PCI corner cases are still
-  incomplete.
+  cause generation, remaining HAE/config details, and PCI corner cases are
+  still incomplete.
 - Full NCR/Symbios 53C810 SCRIPTS/DMA execution. The current frontend handles
   simple script walking, `SEL_ABS`/`SEL_TBL`, table-indirect command/data/status
   moves, controller interrupt status, common SCSI-2 disk commands, and per-target

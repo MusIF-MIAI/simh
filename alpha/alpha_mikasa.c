@@ -124,7 +124,11 @@
 #define MIKASA_COMANCHE_B0_TRA      0xC00
 #define MIKASA_COMANCHE_B0_TRB      0xE00
 #define MIKASA_COMANCHE_BANKS       9
+#define MIKASA_COMANCHE_ED_ERR      0x000001FFu
 #define MIKASA_COMANCHE_ED_PASS2    0x00002000u
+#define MIKASA_COMANCHE_ED_STICKY   (MIKASA_COMANCHE_ED_ERR | \
+                                      MIKASA_COMANCHE_ED_PASS2)
+#define MIKASA_COMANCHE_ADDR_HI     0x00001FFFu
 #define MIKASA_COMANCHE_GCR_WIDEMEM 0x00000010u
 #define MIKASA_COMANCHE_CR_VALID    0x00000001u
 #define MIKASA_COMANCHE_CR_SIZE_1G  0x0000001Eu
@@ -139,6 +143,42 @@
 #define MIKASA_APECS_PCI_SPARSE_SIZE 0x100000000ULL
 #define MIKASA_APECS_PCI_DENSE      0x300000000ULL
 #define MIKASA_APECS_PCI_DENSE_SIZE 0x100000000ULL
+#define MIKASA_EPIC_DCSR            0x000
+#define MIKASA_EPIC_PEAR            0x020
+#define MIKASA_EPIC_SEAR            0x040
+#define MIKASA_EPIC_DCSR_TENB       0x00000001u
+#define MIKASA_EPIC_DCSR_PENB       0x00000004u
+#define MIKASA_EPIC_DCSR_DCEI       0x00000008u
+#define MIKASA_EPIC_DCSR_DPEC       0x00000010u
+#define MIKASA_EPIC_DCSR_IORT       0x00000020u
+#define MIKASA_EPIC_DCSR_LOST       0x00000040u
+#define MIKASA_EPIC_DCSR_DDPE       0x00000100u
+#define MIKASA_EPIC_DCSR_IOPE       0x00000200u
+#define MIKASA_EPIC_DCSR_TABT       0x00000400u
+#define MIKASA_EPIC_DCSR_NDEV       0x00000800u
+#define MIKASA_EPIC_DCSR_CMRD       0x00001000u
+#define MIKASA_EPIC_DCSR_UMRD       0x00002000u
+#define MIKASA_EPIC_DCSR_IPTL       0x00004000u
+#define MIKASA_EPIC_DCSR_MERR       0x00008000u
+#define MIKASA_EPIC_DCSR_DBYP       0x00030000u
+#define MIKASA_EPIC_DCSR_PCMD       0x003C0000u
+#define MIKASA_EPIC_DCSR_CTL        (MIKASA_EPIC_DCSR_TENB | \
+                                      MIKASA_EPIC_DCSR_PENB | \
+                                      MIKASA_EPIC_DCSR_DCEI | \
+                                      MIKASA_EPIC_DCSR_IORT | \
+                                      MIKASA_EPIC_DCSR_DBYP | \
+                                      MIKASA_EPIC_DCSR_PCMD)
+#define MIKASA_EPIC_DCSR_ERR        (MIKASA_EPIC_DCSR_DPEC | \
+                                      MIKASA_EPIC_DCSR_LOST | \
+                                      MIKASA_EPIC_DCSR_DDPE | \
+                                      MIKASA_EPIC_DCSR_IOPE | \
+                                      MIKASA_EPIC_DCSR_TABT | \
+                                      MIKASA_EPIC_DCSR_NDEV | \
+                                      MIKASA_EPIC_DCSR_CMRD | \
+                                      MIKASA_EPIC_DCSR_UMRD | \
+                                      MIKASA_EPIC_DCSR_IPTL | \
+                                      MIKASA_EPIC_DCSR_MERR)
+#define MIKASA_EPIC_SEAR_ERR        0xFFFFFFF0u
 #define MIKASA_EPIC_TBASE_1         0x0C0
 #define MIKASA_EPIC_TBASE_2         0x0E0
 #define MIKASA_EPIC_TBASE_MASK      0xFFFFFE00u
@@ -1342,6 +1382,16 @@ uint32 index = reg >> 5;
 uint32 data = (uint32) val;
 
 switch (reg) {
+    case MIKASA_EPIC_DCSR:
+        data = (data & MIKASA_EPIC_DCSR_CTL) |
+            ((mikasa_epic_reg[index] & MIKASA_EPIC_DCSR_ERR) &
+            ~data) | MIKASA_EPIC_DCSR_PASS2;
+        break;
+
+    case MIKASA_EPIC_SEAR:
+        data = data & MIKASA_EPIC_SEAR_ERR;
+        break;
+
     case MIKASA_EPIC_TBASE_1:
     case MIKASA_EPIC_TBASE_2:
         data = data & MIKASA_EPIC_TBASE_MASK;
@@ -1407,16 +1457,21 @@ return val;
 static void mikasa_comanche_write (t_uint64 pa, t_uint64 val, uint32 lnt)
 {
 uint32 off = (uint32) (pa - MIKASA_COMANCHE_BASE);
+uint32 reg = off & (MIKASA_COMANCHE_SIZE - 1);
 uint32 index = (off & (MIKASA_COMANCHE_SIZE - 1)) >> 5;
+uint32 data = (uint32) val;
 
-if ((off & (MIKASA_COMANCHE_SIZE - 1)) == MIKASA_COMANCHE_ED)
+if (reg == MIKASA_COMANCHE_ED)
     mikasa_comanche_reg[index] =
-        (mikasa_comanche_reg[index] & ~((uint32) val)) |
+        (mikasa_comanche_reg[index] & ~(data & MIKASA_COMANCHE_ED_ERR)) |
         MIKASA_COMANCHE_ED_PASS2;
+else if ((reg == MIKASA_COMANCHE_ERR_HI) ||
+    (reg == MIKASA_COMANCHE_LCK_HI))
+    mikasa_comanche_reg[index] = data & MIKASA_COMANCHE_ADDR_HI;
 else
-    mikasa_comanche_reg[index] = (uint32) val;
+    mikasa_comanche_reg[index] = data;
 sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "COMANCHE write %03X=%08X\n",
-    off, (uint32) val);
+    off, data);
 return;
 }
 
