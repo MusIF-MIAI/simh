@@ -133,7 +133,11 @@ Not implemented yet:
   address and `CTEST2` mirrors/clears the visible `SIGP` bit on read. `TEMP`
   is updated for SCRIPTS `CALL`/`RETURN`, host ID defaults are exposed through
   `SCID`/`RESPID`, and SCRIPTS register writes use the same writable masks for
-  visible controller registers. Additional driver-probed registers now use
+  visible controller registers. SCRIPTS Load/Store is decoded separately from
+  Memory Move using the documented three-bit instruction type, retains its
+  two-longword length, and enforces the documented alignment/count limits;
+  Memory Move can access the NCR register windows and loads visible `TEMP`.
+  Additional driver-probed registers now use
   writable masks (`CTEST2/5`, `DMODE`, `DCNTL`, `MACNTL`, `STIME1`,
   `STEST1/2/3`, and `SIEN1`), `DCNTL.PFF` auto-clears after the emulated
   prefetch flush, and `DCNTL.IRQD` suppresses IRQ output without clearing

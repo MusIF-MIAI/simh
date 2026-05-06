@@ -433,6 +433,8 @@
 #define MIKASA_NCR_SCR_TARGET       0x00000200u
 #define MIKASA_NCR_SCR_ACK          0x00000040u
 #define MIKASA_NCR_SCR_ATN          0x00000008u
+#define MIKASA_NCR_MM_GROUP_MASK    0xE0000000u
+#define MIKASA_NCR_MM_GROUP         0xC0000000u
 #define MIKASA_NCR_TC_GROUP_MASK    0xF8000000u
 #define MIKASA_NCR_TC_JUMP          0x80000000u
 #define MIKASA_NCR_TC_CALL          0x88000000u
@@ -807,6 +809,8 @@ static void mikasa_pic_set_irq (uint32 irq, t_bool state);
 static uint8 mikasa_pic_iack (void);
 static uint32 mikasa_ncr_sext24 (uint32 val);
 static uint32 mikasa_ncr_next_script_addr (uint32 dsp, uint32 op);
+static uint8 mikasa_ncr_read_b (uint32 reg);
+static void mikasa_ncr_write_b (uint32 reg, uint8 val);
 static void mikasa_ncr_update_irq (void);
 static void mikasa_ncr_promote_interrupt_stack (void);
 static void mikasa_ncr_clear_transaction (void);
@@ -2943,7 +2947,36 @@ return mikasa_ncr_fetch_script (dsp, op, arg, TRUE);
 
 static uint32 mikasa_ncr_next_script_addr (uint32 dsp, uint32 op)
 {
-return dsp + (((op & MIKASA_NCR_BM_TYPE_MASK) == 0xC0000000u) ? 12 : 8);
+return dsp + (((op & MIKASA_NCR_MM_GROUP_MASK) == MIKASA_NCR_MM_GROUP) ?
+    12 : 8);
+}
+
+static t_bool mikasa_ncr_script_addr_reg (uint32 addr, uint32 *reg)
+{
+return mikasa_ncr_bar_reg (addr, 0x14, 0xFFFFFFFFu, reg) ||
+    mikasa_ncr_bar_reg (addr, 0x10, 0xFFFFFFFFu, reg);
+}
+
+static t_bool mikasa_ncr_script_read_byte (uint32 addr, uint8 *val)
+{
+uint32 reg;
+
+if (mikasa_ncr_script_addr_reg (addr, &reg)) {
+    *val = mikasa_ncr_read_b (reg);
+    return TRUE;
+    }
+return mikasa_pci_dma_read_byte (addr, val);
+}
+
+static t_bool mikasa_ncr_script_write_byte (uint32 addr, uint8 val)
+{
+uint32 reg;
+
+if (mikasa_ncr_script_addr_reg (addr, &reg)) {
+    mikasa_ncr_write_b (reg, val);
+    return TRUE;
+    }
+return mikasa_pci_dma_write_byte (addr, val);
 }
 
 static t_bool mikasa_ncr_script_copy (uint32 src, uint32 dst, uint32 count)
@@ -2953,8 +2986,8 @@ uint32 i;
 for (i = 0; i < count; i++) {
     uint8 val;
 
-    if (!mikasa_pci_dma_read_byte (src + i, &val) ||
-        !mikasa_pci_dma_write_byte (dst + i, val))
+    if (!mikasa_ncr_script_read_byte (src + i, &val) ||
+        !mikasa_ncr_script_write_byte (dst + i, val))
         return FALSE;
     }
 return TRUE;
@@ -3139,6 +3172,12 @@ if (mikasa_ncr_bar_reg (memaddr, 0x14, 0xFFFFFFFFu, &regaddr)) {
         mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_IID, arg);
     return FALSE;
     }
+if ((((memaddr ^ reg) & 3u) != 0) || (count > 4) ||
+    (((memaddr & 3u) + count) > 4)) {
+    if (state->side_effects)
+        mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_IID, arg);
+    return FALSE;
+    }
 for (i = 0; i < count; i++) {
     uint32 r = (reg + i) & (MIKASA_NCR_REG_SIZE - 1);
     uint8 val;
@@ -3230,26 +3269,33 @@ static t_bool mikasa_ncr_advance_script (uint32 *dsp, uint32 op, uint32 arg,
 {
 uint32 group = op & MIKASA_NCR_TC_GROUP_MASK;
 
-if ((op & MIKASA_NCR_BM_TYPE_MASK) == 0xC0000000u) {
+if ((op & MIKASA_NCR_LS_GROUP_MASK) == MIKASA_NCR_LS_GROUP) {
+    if (!mikasa_ncr_script_load_store (op, arg, state))
+        return FALSE;
+    *dsp = next;
+    return TRUE;
+    }
+if ((op & MIKASA_NCR_MM_GROUP_MASK) == MIKASA_NCR_MM_GROUP) {
     uint32 dst;
+    uint32 count = op & MIKASA_NCR_BM_COUNT_MASK;
 
-    if ((op & MIKASA_NCR_BM_COUNT_MASK) == 0) {
+    if ((op & 0x1F000000u) || (count == 0)) {
+        if (state->side_effects)
+            mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_IID, arg);
+        return FALSE;
+        }
+    if (!mikasa_pci_dma_read_long (next - 4, &dst))
+        return FALSE;
+    if ((arg & 3u) != (dst & 3u)) {
         if (state->side_effects)
             mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_IID, arg);
         return FALSE;
         }
     if (state->side_effects) {
-        if (!mikasa_pci_dma_read_long (next - 4, &dst))
+        mikasa_ncr_set_reg_l (MIKASA_NCR_REG_TEMP, dst);
+        if (!mikasa_ncr_script_copy (arg, dst, count))
             return FALSE;
-        (void) mikasa_ncr_script_copy (arg, dst,
-            op & MIKASA_NCR_BM_COUNT_MASK);
         }
-    *dsp = next;
-    return TRUE;
-    }
-if ((op & MIKASA_NCR_LS_GROUP_MASK) == MIKASA_NCR_LS_GROUP) {
-    if (!mikasa_ncr_script_load_store (op, arg, state))
-        return FALSE;
     *dsp = next;
     return TRUE;
     }
