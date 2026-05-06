@@ -99,7 +99,8 @@ Not implemented yet:
   from the script in `DSPS`, falling back to synthetic phase markers only when
   the current frontend cannot find a matching script interrupt.
   `INTFLY` is treated as non-halting and sets `ISTAT.INTF`, with CPU
-  write-one clearing.
+  write-one clearing. SCRIPTS execution can now be started through `DCNTL.STD`
+  as well as by writing `DSP`.
   CPU writes no longer overwrite read-only NCR status registers, and completed
   MOVE phases are reflected in `SOCL`, `SBCL`, and `SSTAT1`.
   The local SCSI disk path also handles extended probe/read commands such as

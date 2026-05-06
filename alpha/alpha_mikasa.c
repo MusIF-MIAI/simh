@@ -270,6 +270,7 @@
 #define MIKASA_NCR_REG_DSP          0x2C
 #define MIKASA_NCR_REG_DSPS         0x30
 #define MIKASA_NCR_REG_DIEN         0x39
+#define MIKASA_NCR_REG_DCNTL        0x3B
 #define MIKASA_NCR_REG_SIEN0        0x40
 #define MIKASA_NCR_REG_SIEN1        0x41
 #define MIKASA_NCR_REG_SIST0        0x42
@@ -285,6 +286,7 @@
 #define MIKASA_NCR_DSTAT_SIR        0x04
 #define MIKASA_NCR_DSTAT_ABRT       0x10
 #define MIKASA_NCR_DSTAT_IRQS       0x7Du
+#define MIKASA_NCR_DCNTL_STD        0x04
 #define MIKASA_NCR_ISTAT_SRST       0x40
 #define MIKASA_NCR_ISTAT_SIGP       0x20
 #define MIKASA_NCR_ISTAT_ABRT       0x80
@@ -3534,6 +3536,23 @@ else {
 return TRUE;
 }
 
+static void mikasa_ncr_start_script (uint32 dsp)
+{
+if (mikasa_ncr_status_phase) {
+    mikasa_ncr_status_phase = FALSE;
+    mikasa_ncr_write_status_msg (dsp, mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA),
+        mikasa_ncr_status_byte);
+    mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SIR,
+        mikasa_ncr_status_dsps_valid ?
+        mikasa_ncr_status_dsps : mikasa_ncr_status_int_dsps (dsp));
+    }
+else {
+    mikasa_ncr_trace_script (dsp);
+    (void) mikasa_ncr_run_script (dsp);
+    }
+return;
+}
+
 static void mikasa_ncr_init_regs (void)
 {
 memset (mikasa_ncr_reg, 0, sizeof (mikasa_ncr_reg));
@@ -3598,21 +3617,14 @@ else {
     if ((reg == MIKASA_NCR_REG_DIEN) || (reg == MIKASA_NCR_REG_SIEN0) ||
         (reg == MIKASA_NCR_REG_SIEN1))
         mikasa_ncr_update_irq ();
+    if ((reg == MIKASA_NCR_REG_DCNTL) && (val & MIKASA_NCR_DCNTL_STD)) {
+        mikasa_ncr_reg[reg] = val & ~MIKASA_NCR_DCNTL_STD;
+        mikasa_ncr_start_script (mikasa_ncr_reg_l (MIKASA_NCR_REG_DSP));
+        }
     if (reg == (MIKASA_NCR_REG_DSP + 3)) {
     uint32 dsp = mikasa_ncr_reg_l (MIKASA_NCR_REG_DSP);
 
-    if (mikasa_ncr_status_phase) {
-        mikasa_ncr_status_phase = FALSE;
-        mikasa_ncr_write_status_msg (dsp, mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA),
-            mikasa_ncr_status_byte);
-        mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SIR,
-            mikasa_ncr_status_dsps_valid ?
-            mikasa_ncr_status_dsps : mikasa_ncr_status_int_dsps (dsp));
-        }
-    else {
-        mikasa_ncr_trace_script (dsp);
-        (void) mikasa_ncr_run_script (dsp);
-        }
+    mikasa_ncr_start_script (dsp);
     }
     }
 return;
