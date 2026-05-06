@@ -41,6 +41,8 @@
 - [x] Add DECchip 21040/Tulip PCI/CSR shell.
 - [x] Re-run SRM ROM smoke after the current APECS/NCR hardware batch; it
   still reaches the Mikasa `V5.4-101` banner and sees pka/ewa.
+- [x] Re-run SRM ROM smoke after the NCR progress/status and extended SCSI
+  probe batch; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
