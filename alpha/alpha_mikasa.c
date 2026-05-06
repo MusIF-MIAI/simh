@@ -598,6 +598,9 @@ static uint32 mikasa_icu_int_req_bits = 0;
 static uint32 mikasa_pic_int_req_bits = 0;
 static t_bool mikasa_ncr_status_phase = FALSE;
 static uint8 mikasa_ncr_status_byte = 0;
+static uint8 mikasa_ncr_sense_key[MIKASA_DKA_UNITS] = { 0 };
+static uint8 mikasa_ncr_sense_asc[MIKASA_DKA_UNITS] = { 0 };
+static uint8 mikasa_ncr_sense_ascq[MIKASA_DKA_UNITS] = { 0 };
 static t_bool mikasa_direct_apb = FALSE;
 static uint32 mikasa_pceb_cfg[MIKASA_PCI_CFG_DWORDS] = { 0 };
 static uint8 mikasa_ocp_reg[4] = { 0 };
@@ -1679,6 +1682,32 @@ uint32 m = (a < b) ? a : b;
 return (m < c) ? m : c;
 }
 
+static uint32 mikasa_ncr_alloc_len10 (const uint8 *cdb)
+{
+return (((uint32) cdb[7]) << 8) | cdb[8];
+}
+
+static void mikasa_ncr_clear_sense (uint32 unit)
+{
+if (unit < MIKASA_DKA_UNITS) {
+    mikasa_ncr_sense_key[unit] = 0;
+    mikasa_ncr_sense_asc[unit] = 0;
+    mikasa_ncr_sense_ascq[unit] = 0;
+    }
+return;
+}
+
+static void mikasa_ncr_set_sense (uint32 unit, uint8 key, uint8 asc,
+    uint8 ascq)
+{
+if (unit < MIKASA_DKA_UNITS) {
+    mikasa_ncr_sense_key[unit] = key;
+    mikasa_ncr_sense_asc[unit] = asc;
+    mikasa_ncr_sense_ascq[unit] = ascq;
+    }
+return;
+}
+
 static uint32 mikasa_ncr_sext24 (uint32 val)
 {
 val = val & 0x00FFFFFFu;
@@ -1827,9 +1856,14 @@ return FALSE;
 static t_bool mikasa_ncr_data_out_cmd (const uint8 *cdb)
 {
 switch (cdb[0]) {
+    case 0x07:                                      /* REASSIGN BLOCKS */
     case 0x0A:                                      /* WRITE(6) */
     case 0x15:                                      /* MODE SELECT(6) */
+    case 0x1D:                                      /* SEND DIAGNOSTIC */
     case 0x2A:                                      /* WRITE(10) */
+    case 0x2E:                                      /* WRITE AND VERIFY */
+    case 0x3B:                                      /* WRITE BUFFER */
+    case 0x3F:                                      /* WRITE LONG */
     case 0x55:                                      /* MODE SELECT(10) */
         return TRUE;
 
@@ -1889,6 +1923,49 @@ while (bytes_left != 0) {
 return TRUE;
 }
 
+static t_bool mikasa_ncr_scsi_write (uint32 unit, uint32 lbn, uint32 blocks,
+    uint32 data_addr, uint32 data_count, uint8 *status)
+{
+uint8 buf[MIKASA_IO_BUFSIZE];
+UNIT *uptr = &dka_unit[unit];
+t_uint64 bytes_left = ((t_uint64) blocks) * MIKASA_DKA_BLOCK_SIZE;
+uint32 done = 0;
+
+if (bytes_left > data_count)
+    bytes_left = data_count;
+if (bytes_left == 0)
+    return TRUE;
+if ((uptr->flags & UNIT_ATT) == 0)
+    return FALSE;
+if (uptr->flags & UNIT_RO) {
+    mikasa_ncr_set_sense (unit, 0x07, 0x27, 0x00);
+    *status = 2;
+    return TRUE;
+    }
+if ((uptr->capac != 0) && (((t_uint64) lbn + blocks) > uptr->capac)) {
+    mikasa_ncr_set_sense (unit, 0x05, 0x21, 0x00);
+    *status = 2;
+    return TRUE;
+    }
+if (sim_fseeko (uptr->fileref,
+    ((t_offset) lbn) * MIKASA_DKA_BLOCK_SIZE, SEEK_SET))
+    return FALSE;
+
+while (bytes_left != 0) {
+    uint32 chunk = (bytes_left > sizeof (buf)) ? sizeof (buf) :
+        (uint32) bytes_left;
+
+    if (!mikasa_ncr_read_dma_buf (data_addr + done, buf, chunk))
+        return FALSE;
+    if (sim_fwrite (buf, 1, chunk, uptr->fileref) != chunk)
+        return FALSE;
+    done = done + chunk;
+    bytes_left = bytes_left - chunk;
+    }
+mikasa_ncr_clear_sense (unit);
+return TRUE;
+}
+
 static t_bool mikasa_ncr_scsi_cmd (uint32 unit, const uint8 *cdb,
     uint32 data_addr, uint32 data_count, uint8 *status)
 {
@@ -1902,22 +1979,54 @@ uint32 blocks;
 memset (buf, 0, sizeof (buf));
 switch (cdb[0]) {
     case 0x00:                                              /* TEST UNIT READY */
+        mikasa_ncr_clear_sense (unit);
         return TRUE;
 
     case 0x03:                                              /* REQUEST SENSE */
         buf[0] = 0x70;
+        buf[2] = mikasa_ncr_sense_key[unit];
         buf[7] = 0x0A;
+        buf[12] = mikasa_ncr_sense_asc[unit];
+        buf[13] = mikasa_ncr_sense_ascq[unit];
         len = mikasa_ncr_min3 (data_count, cdb[4], sizeof (buf));
-        return mikasa_ncr_write_dma_buf (data_addr, buf, len);
+        if (!mikasa_ncr_write_dma_buf (data_addr, buf, len))
+            return FALSE;
+        mikasa_ncr_clear_sense (unit);
+        return TRUE;
 
     case 0x08:                                              /* READ(6) */
         lbn = (((uint32) cdb[1] & 0x1F) << 16) |
             (((uint32) cdb[2]) << 8) | cdb[3];
         blocks = cdb[4] ? cdb[4] : 256;
-        return mikasa_ncr_scsi_read (unit, lbn, blocks, data_addr,
-            data_count);
+        if (mikasa_ncr_scsi_read (unit, lbn, blocks, data_addr, data_count)) {
+            mikasa_ncr_clear_sense (unit);
+            return TRUE;
+            }
+        mikasa_ncr_set_sense (unit, 0x05, 0x21, 0x00);
+        *status = 2;
+        return TRUE;
+
+    case 0x0A:                                              /* WRITE(6) */
+        lbn = (((uint32) cdb[1] & 0x1F) << 16) |
+            (((uint32) cdb[2]) << 8) | cdb[3];
+        blocks = cdb[4] ? cdb[4] : 256;
+        return mikasa_ncr_scsi_write (unit, lbn, blocks, data_addr,
+            data_count, status);
 
     case 0x12:                                              /* INQUIRY */
+        if (cdb[1] & 1) {
+            if (cdb[2] != 0) {
+                mikasa_ncr_set_sense (unit, 0x05, 0x24, 0x00);
+                *status = 2;
+                return TRUE;
+                }
+            buf[1] = 0;
+            buf[3] = 1;
+            buf[4] = 0;
+            len = mikasa_ncr_min3 (data_count, cdb[4], sizeof (buf));
+            mikasa_ncr_clear_sense (unit);
+            return mikasa_ncr_write_dma_buf (data_addr, buf, len);
+            }
         buf[2] = 2;
         buf[3] = 2;
         buf[4] = 31;
@@ -1925,11 +2034,25 @@ switch (cdb[0]) {
         memcpy (&buf[16], "RZ58     (C) DEC", 16);
         memcpy (&buf[32], "2000", 4);
         len = mikasa_ncr_min3 (data_count, cdb[4], sizeof (buf));
+        mikasa_ncr_clear_sense (unit);
         return mikasa_ncr_write_dma_buf (data_addr, buf, len);
+
+    case 0x07:                                              /* REASSIGN BLOCKS */
+    case 0x15:                                              /* MODE SELECT(6) */
+    case 0x16:                                              /* RESERVE UNIT */
+    case 0x17:                                              /* RELEASE UNIT */
+    case 0x1B:                                              /* START STOP UNIT */
+    case 0x1D:                                              /* SEND DIAGNOSTIC */
+    case 0x1E:                                              /* PREVENT/ALLOW */
+        mikasa_ncr_clear_sense (unit);
+        return TRUE;
 
     case 0x1A:                                              /* MODE SENSE(6) */
         buf[0] = 3;
+        if (uptr->flags & UNIT_RO)
+            buf[2] = 0x80;
         len = mikasa_ncr_min3 (data_count, cdb[4], sizeof (buf));
+        mikasa_ncr_clear_sense (unit);
         return mikasa_ncr_write_dma_buf (data_addr, buf, len);
 
     case 0x25:                                              /* READ CAPACITY(10) */
@@ -1939,19 +2062,67 @@ switch (cdb[0]) {
             uptr->capac ? ((uint32) uptr->capac - 1) : 0);
         mikasa_ncr_write_be32 (&buf[4], MIKASA_DKA_BLOCK_SIZE);
         len = (data_count < 8) ? data_count : 8;
+        mikasa_ncr_clear_sense (unit);
         return mikasa_ncr_write_dma_buf (data_addr, buf, len);
 
     case 0x28:                                              /* READ(10) */
         lbn = (((uint32) cdb[2]) << 24) | (((uint32) cdb[3]) << 16) |
             (((uint32) cdb[4]) << 8) | cdb[5];
         blocks = (((uint32) cdb[7]) << 8) | cdb[8];
-        return mikasa_ncr_scsi_read (unit, lbn, blocks, data_addr,
-            data_count);
+        if (mikasa_ncr_scsi_read (unit, lbn, blocks, data_addr, data_count)) {
+            mikasa_ncr_clear_sense (unit);
+            return TRUE;
+            }
+        mikasa_ncr_set_sense (unit, 0x05, 0x21, 0x00);
+        *status = 2;
+        return TRUE;
+
+    case 0x2A:                                              /* WRITE(10) */
+    case 0x2E:                                              /* WRITE AND VERIFY */
+        lbn = (((uint32) cdb[2]) << 24) | (((uint32) cdb[3]) << 16) |
+            (((uint32) cdb[4]) << 8) | cdb[5];
+        blocks = (((uint32) cdb[7]) << 8) | cdb[8];
+        return mikasa_ncr_scsi_write (unit, lbn, blocks, data_addr,
+            data_count, status);
+
+    case 0x2B:                                              /* SEEK(10) */
+    case 0x2F:                                              /* VERIFY(10) */
+    case 0x35:                                              /* SYNCHRONIZE CACHE */
+    case 0x3B:                                              /* WRITE BUFFER */
+    case 0x55:                                              /* MODE SELECT(10) */
+        mikasa_ncr_clear_sense (unit);
+        return TRUE;
+
+    case 0x3F:                                              /* WRITE LONG */
+        if (uptr->flags & UNIT_RO) {
+            mikasa_ncr_set_sense (unit, 0x07, 0x27, 0x00);
+            *status = 2;
+            return TRUE;
+            }
+        mikasa_ncr_clear_sense (unit);
+        return TRUE;
+
+    case 0x4D:                                              /* LOG SENSE */
+        buf[0] = cdb[2] & 0x3F;
+        len = mikasa_ncr_min3 (data_count, mikasa_ncr_alloc_len10 (cdb),
+            sizeof (buf));
+        mikasa_ncr_clear_sense (unit);
+        return mikasa_ncr_write_dma_buf (data_addr, buf, len);
+
+    case 0x5A:                                              /* MODE SENSE(10) */
+        buf[1] = 6;
+        if (uptr->flags & UNIT_RO)
+            buf[3] = 0x80;
+        len = mikasa_ncr_min3 (data_count, mikasa_ncr_alloc_len10 (cdb),
+            sizeof (buf));
+        mikasa_ncr_clear_sense (unit);
+        return mikasa_ncr_write_dma_buf (data_addr, buf, len);
 
     default:
         sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
             "NCR unsupported SCSI command %02X on target %u\n", cdb[0],
             unit);
+        mikasa_ncr_set_sense (unit, 0x05, 0x20, 0x00);
         *status = 2;
         return TRUE;
         }
@@ -5132,6 +5303,9 @@ mikasa_ncr_cfg[0x08 >> 2] = 0x01000001u;
 mikasa_ncr_cfg[0x10 >> 2] = 0x00000001u;
 mikasa_ncr_cfg[0x3C >> 2] = 0x401101FFu;
 mikasa_ncr_init_regs ();
+memset (mikasa_ncr_sense_key, 0, sizeof (mikasa_ncr_sense_key));
+memset (mikasa_ncr_sense_asc, 0, sizeof (mikasa_ncr_sense_asc));
+memset (mikasa_ncr_sense_ascq, 0, sizeof (mikasa_ncr_sense_ascq));
 memset (mikasa_pceb_cfg, 0, sizeof (mikasa_pceb_cfg));
 mikasa_pceb_cfg[0x00 >> 2] = 0x04828086u;
 mikasa_pceb_cfg[0x04 >> 2] = 0x02000007u;
