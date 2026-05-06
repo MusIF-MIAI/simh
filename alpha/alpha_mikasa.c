@@ -3167,7 +3167,7 @@ uint32 memaddr = (op & MIKASA_NCR_LS_DSA_REL) ?
 uint32 regaddr;
 uint32 i;
 
-if (mikasa_ncr_bar_reg (memaddr, 0x14, 0xFFFFFFFFu, &regaddr)) {
+if (mikasa_ncr_script_addr_reg (memaddr, &regaddr)) {
     if (state->side_effects)
         mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_IID, arg);
     return FALSE;
@@ -3185,10 +3185,10 @@ for (i = 0; i < count; i++) {
     if (op & MIKASA_NCR_LS_LOAD) {
         if (!mikasa_pci_dma_read_byte (memaddr + i, &val))
             return FALSE;
+        if (r == MIKASA_NCR_REG_SFBR)
+            continue;
         if (state->side_effects)
             mikasa_ncr_script_store_reg (r, val);
-        if (r == MIKASA_NCR_REG_SFBR)
-            state->sfbr = val;
         }
     else {
         val = mikasa_ncr_reg[r];

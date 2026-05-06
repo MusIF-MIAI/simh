@@ -135,8 +135,10 @@ Not implemented yet:
   `SCID`/`RESPID`, and SCRIPTS register writes use the same writable masks for
   visible controller registers. SCRIPTS Load/Store is decoded separately from
   Memory Move using the documented three-bit instruction type, retains its
-  two-longword length, and enforces the documented alignment/count limits;
-  Memory Move can access the NCR register windows and loads visible `TEMP`.
+  two-longword length, enforces the documented alignment/count limits, rejects
+  chip register-window target addresses with `DSTAT.IID`, and does not load
+  `SFBR`; Memory Move can access the NCR register windows and loads visible
+  `TEMP`.
   Additional driver-probed registers now use
   writable masks (`CTEST2/5`, `DMODE`, `DCNTL`, `MACNTL`, `STIME1`,
   `STEST1/2/3`, and `SIEN1`), `DCNTL.PFF` auto-clears after the emulated

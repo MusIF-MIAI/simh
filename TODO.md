@@ -56,6 +56,8 @@
 - [x] Decode NCR SCRIPTS Load/Store separately from Memory Move using the
   three-bit instruction type, keep Load/Store instructions two longwords, and
   enforce documented Load/Store alignment/count limits.
+- [x] Honor NCR Load/Store restrictions that chip register-window target
+  addresses raise `DSTAT.IID` and `SFBR` cannot be loaded by Load/Store.
 - [x] Model SCRIPTS Memory Move access to NCR register windows, including
   visible `TEMP` loading and documented zero-count/reserved-bit/alignment
   `DSTAT.IID` checks.
@@ -246,6 +248,8 @@
   `STEST3.CSF`; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after separating NCR Load/Store from Memory Move;
   it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after enforcing NCR Load/Store register-window and
+  `SFBR` restrictions; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -317,8 +321,9 @@ the real path works.
     the controller's own memory-mapped register window;
   - current branch decodes Load/Store separately from Memory Move using the
     documented three-bit instruction type, keeps Load/Store at two longwords,
-    enforces Load/Store alignment/count limits, and lets Memory Move reach NCR
-    register windows while loading visible `TEMP`;
+    enforces Load/Store alignment/count limits, blocks Load/Store register
+    window targets, keeps `SFBR` from being loaded by Load/Store, and lets
+    Memory Move reach NCR register windows while loading visible `TEMP`;
   - current branch collects multiple data-phase MOVE entries and reads/writes
     SCSI payloads across scatter/gather segment lists;
   - current branch updates visible SCRIPTS/DMA progress registers for handled
