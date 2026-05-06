@@ -51,6 +51,8 @@
   after the message-out handshake.
 - [x] Model NCR `CTEST3` revision/writable bits and DMA FIFO clear/flush
   effects with the local FIFO-empty state.
+- [x] Update NCR `SFBR` with the first byte of handled input phases including
+  data-in, status, and message-in transfers.
 - [x] Start NCR SCRIPTS execution from `DCNTL.STD`, not only from writes to
   `DSP`, matching the normal 53C810 driver path.
 - [x] Preserve NCR read-only status registers on CPU writes and expose current
@@ -95,6 +97,8 @@
 - [x] Re-run SRM ROM smoke after consuming NCR `MESSAGE OUT`; it still reaches
   `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after NCR `CTEST3`/FIFO-empty handling; it still
+  reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after NCR `SFBR` input-phase updates; it still
   reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
@@ -177,6 +181,8 @@ the real path works.
     clears ATN after that handshake;
   - current branch preserves the `CTEST3` revision nibble and handles DMA FIFO
     clear/flush writes consistently with the FIFO-empty model;
+  - current branch updates `SFBR` from handled data-in, status, and message-in
+    phases so SCRIPTS tests see the first received byte;
   - current branch starts SCRIPTS from `DCNTL.STD` as well as the firmware-style
     `DSP` high-byte write;
   - current branch preserves read-only NCR status registers and reports the

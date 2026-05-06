@@ -2383,6 +2383,12 @@ mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DNAD, addr + done);
 return;
 }
 
+static void mikasa_ncr_set_sfbr (uint8 val)
+{
+mikasa_ncr_reg[MIKASA_NCR_REG_SFBR] = val;
+return;
+}
+
 static void mikasa_ncr_phase_mismatch (const MIKASA_NCR_DMA_LIST *list,
     uint32 expected, uint32 sampled)
 {
@@ -2464,6 +2470,8 @@ static t_bool mikasa_ncr_write_scsi_data (const MIKASA_NCR_DMA_LIST *list,
 {
 if (!mikasa_ncr_write_dma_list (list, buf, len))
     return FALSE;
+if (len != 0)
+    mikasa_ncr_set_sfbr (buf[0]);
 mikasa_ncr_finish_dma_list (list, len);
 return TRUE;
 }
@@ -3238,12 +3246,14 @@ if (!mikasa_ncr_find_table_move (dsp, MIKASA_NCR_PHASE_STS, &sts_off))
     sts_off = 0x24;
 if (mikasa_ncr_table_entry (dsa, sts_off, &count, &addr) && (count != 0)) {
     (void) mikasa_pci_dma_write_byte (addr, status);
+    mikasa_ncr_set_sfbr (status);
     mikasa_ncr_finish_move (mikasa_ncr_move_op_for_phase (
         MIKASA_NCR_PHASE_STS), addr, count, 1);
     }
 if (mikasa_ncr_find_table_move (dsp, MIKASA_NCR_PHASE_MSG_IN, &msg_off) &&
     mikasa_ncr_table_entry (dsa, msg_off, &count, &addr) && (count != 0)) {
     (void) mikasa_pci_dma_write_byte (addr, 0);
+    mikasa_ncr_set_sfbr (0);
     mikasa_ncr_finish_move (mikasa_ncr_move_op_for_phase (
         MIKASA_NCR_PHASE_MSG_IN), addr, count, 1);
     return;
@@ -3251,6 +3261,7 @@ if (mikasa_ncr_find_table_move (dsp, MIKASA_NCR_PHASE_MSG_IN, &msg_off) &&
 if (mikasa_ncr_find_direct_move (dsp, MIKASA_NCR_PHASE_MSG_IN, &count, &addr) &&
     (count != 0)) {
     (void) mikasa_pci_dma_write_byte (addr, 0);
+    mikasa_ncr_set_sfbr (0);
     mikasa_ncr_finish_move (mikasa_ncr_move_op_for_phase (
         MIKASA_NCR_PHASE_MSG_IN), addr, count, 1);
     }
@@ -3264,6 +3275,7 @@ uint8 buf[MIKASA_IO_BUFSIZE];
 UNIT *uptr = &dka_unit[unit];
 t_uint64 bytes_left = ((t_uint64) blocks) * MIKASA_DKA_BLOCK_SIZE;
 uint32 done = 0;
+t_bool sfbr_set = FALSE;
 
 if (bytes_left > data->bytes)
     bytes_left = data->bytes;
@@ -3283,6 +3295,10 @@ while (bytes_left != 0) {
 
     if (sim_fread (buf, 1, chunk, uptr->fileref) != chunk)
         return FALSE;
+    if (!sfbr_set && (chunk != 0)) {
+        mikasa_ncr_set_sfbr (buf[0]);
+        sfbr_set = TRUE;
+        }
     if (!mikasa_ncr_write_dma_list_offset (data, done, buf, chunk))
         return FALSE;
     done = done + chunk;
