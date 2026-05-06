@@ -28,6 +28,8 @@
   register ops, load/store, memory copy, and basic conditional flow.
 - [x] Collect multiple NCR data-phase MOVE entries and transfer SCSI payloads
   across scatter/gather DMA segment lists.
+- [x] Honor NCR `DIEN`, `SIEN0`, and `SIEN1` interrupt masks while preserving
+  latched `DSTAT`/`SIST` status.
 - [x] Add common SCSI-2 disk responses, per-target REQUEST SENSE, MODE SENSE
   pages, read/write paths, write-protect handling, and harmless disk no-ops.
 - [x] Add DECchip 21040/Tulip PCI/CSR shell.
@@ -87,6 +89,8 @@ the real path works.
     phase mismatch handling, and memory moves;
   - current branch models the main `DSP`, `DSPS`, `DSTAT`, `SIST0`, `SIST1`,
     `ISTAT`, SIR/DIP/SIP, abort, and select-timeout paths used so far;
+  - current branch latches `DSTAT`/`SIST` causes independently of
+    `DIEN`/`SIEN` masks and only asserts IRQ for enabled causes;
   - current branch collects multiple data-phase MOVE entries and reads/writes
     SCSI payloads across scatter/gather segment lists;
   - current branch returns common SCSI-2 disk responses, write-protect check

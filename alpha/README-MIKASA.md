@@ -91,6 +91,8 @@ Not implemented yet:
   moves, controller interrupt status, common SCSI-2 disk commands, and per-target
   REQUEST SENSE state. Data payloads can now span multiple data-phase MOVE
   segments, but the frontend is still not a complete SCRIPTS processor.
+  `DIEN`, `SIEN0`, and `SIEN1` now mask IRQ assertion while `DSTAT`/`SIST`
+  status bits remain latched until read.
 - Full Ethernet, VGA, full NVRAM, and multiprocessor support. A DECchip 21040
   PCI/CSR shell exists so firmware and OS probes see a plausible DEC Ethernet
   device, but packet I/O is not implemented yet.

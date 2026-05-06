@@ -232,6 +232,9 @@
 #define MIKASA_NCR_REG_DNAD         0x28
 #define MIKASA_NCR_REG_DSP          0x2C
 #define MIKASA_NCR_REG_DSPS         0x30
+#define MIKASA_NCR_REG_DIEN         0x39
+#define MIKASA_NCR_REG_SIEN0        0x40
+#define MIKASA_NCR_REG_SIEN1        0x41
 #define MIKASA_NCR_REG_SIST0        0x42
 #define MIKASA_NCR_REG_SIST1        0x43
 #define MIKASA_NCR_REG_CTEST1       0x19
@@ -244,6 +247,7 @@
 #define MIKASA_NCR_DSTAT_DFE        0x80
 #define MIKASA_NCR_DSTAT_SIR        0x04
 #define MIKASA_NCR_DSTAT_ABRT       0x10
+#define MIKASA_NCR_DSTAT_IRQS       0x7Du
 #define MIKASA_NCR_ISTAT_SRST       0x40
 #define MIKASA_NCR_ISTAT_SIGP       0x20
 #define MIKASA_NCR_ISTAT_ABRT       0x80
@@ -631,6 +635,7 @@ static void mikasa_irq_update (void);
 static void mikasa_pic_set_irq (uint32 irq, t_bool state);
 static uint8 mikasa_pic_iack (void);
 static uint32 mikasa_ncr_sext24 (uint32 val);
+static void mikasa_ncr_update_irq (void);
 static t_bool mikasa_apb_iobox_read (uint32 unit, t_uint64 lbn,
     t_uint64 addr);
 static t_bool mikasa_apb_iobox_write (uint32 unit, t_uint64 lbn,
@@ -1695,24 +1700,15 @@ uint8 val = mikasa_ncr_reg[reg & (MIKASA_NCR_REG_SIZE - 1)];
 if ((reg & (MIKASA_NCR_REG_SIZE - 1)) == MIKASA_NCR_REG_DSTAT) {
     mikasa_ncr_reg[MIKASA_NCR_REG_DSTAT] &= MIKASA_NCR_DSTAT_DFE;
     mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &= ~MIKASA_NCR_ISTAT_DIP;
-    if ((mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &
-        (MIKASA_NCR_ISTAT_SIP | MIKASA_NCR_ISTAT_DIP)) == 0) {
-        mikasa_irq_summary &= ~MIKASA_NCR_INTBIT;
-        mikasa_irq_update ();
-        }
+    mikasa_ncr_update_irq ();
     }
 else if (((reg & (MIKASA_NCR_REG_SIZE - 1)) == MIKASA_NCR_REG_SIST0) ||
     ((reg & (MIKASA_NCR_REG_SIZE - 1)) == MIKASA_NCR_REG_SIST1)) {
     mikasa_ncr_reg[reg & (MIKASA_NCR_REG_SIZE - 1)] = 0;
     if ((mikasa_ncr_reg[MIKASA_NCR_REG_SIST0] == 0) &&
-        (mikasa_ncr_reg[MIKASA_NCR_REG_SIST1] == 0)) {
+        (mikasa_ncr_reg[MIKASA_NCR_REG_SIST1] == 0))
         mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &= ~MIKASA_NCR_ISTAT_SIP;
-        if ((mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &
-            (MIKASA_NCR_ISTAT_SIP | MIKASA_NCR_ISTAT_DIP)) == 0) {
-            mikasa_irq_summary &= ~MIKASA_NCR_INTBIT;
-            mikasa_irq_update ();
-            }
-        }
+    mikasa_ncr_update_irq ();
     }
 sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "NCR read %02X=%02X\n",
     reg, val);
@@ -1999,6 +1995,26 @@ mikasa_irq_update ();
 return;
 }
 
+static void mikasa_ncr_update_irq (void)
+{
+t_bool dma_irq = (mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &
+    MIKASA_NCR_ISTAT_DIP) &&
+    ((mikasa_ncr_reg[MIKASA_NCR_REG_DSTAT] &
+    mikasa_ncr_reg[MIKASA_NCR_REG_DIEN] & MIKASA_NCR_DSTAT_IRQS) != 0);
+t_bool scsi_irq = (mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &
+    MIKASA_NCR_ISTAT_SIP) &&
+    (((mikasa_ncr_reg[MIKASA_NCR_REG_SIST0] &
+    mikasa_ncr_reg[MIKASA_NCR_REG_SIEN0]) != 0) ||
+    ((mikasa_ncr_reg[MIKASA_NCR_REG_SIST1] &
+    mikasa_ncr_reg[MIKASA_NCR_REG_SIEN1]) != 0));
+
+if (dma_irq || scsi_irq)
+    mikasa_ncr_assert_irq ();
+else
+    mikasa_ncr_clear_irq ();
+return;
+}
+
 static void mikasa_ncr_set_dip (uint8 dstat, uint32 dsps)
 {
 mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DSPS, dsps);
@@ -2006,7 +2022,7 @@ mikasa_ncr_reg[MIKASA_NCR_REG_DSTAT] =
     (mikasa_ncr_reg[MIKASA_NCR_REG_DSTAT] & MIKASA_NCR_DSTAT_DFE) |
     MIKASA_NCR_DSTAT_DFE | dstat;
 mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] |= MIKASA_NCR_ISTAT_DIP;
-mikasa_ncr_assert_irq ();
+mikasa_ncr_update_irq ();
 sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
     "NCR signal DIP dstat=%02X dsps=%u\n", dstat, dsps);
 return;
@@ -2017,7 +2033,7 @@ static void mikasa_ncr_set_sip (uint8 sist0, uint8 sist1)
 mikasa_ncr_reg[MIKASA_NCR_REG_SIST0] |= sist0;
 mikasa_ncr_reg[MIKASA_NCR_REG_SIST1] |= sist1;
 mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] |= MIKASA_NCR_ISTAT_SIP;
-mikasa_ncr_assert_irq ();
+mikasa_ncr_update_irq ();
 return;
 }
 
@@ -3113,7 +3129,14 @@ if (reg == MIKASA_NCR_REG_ISTAT) {
         mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &= ~MIKASA_NCR_ISTAT_SIGP;
     }
 else {
+    if (reg == MIKASA_NCR_REG_DIEN)
+        val = val & MIKASA_NCR_DSTAT_IRQS;
+    else if (reg == MIKASA_NCR_REG_SIEN1)
+        val = val & 0x07;
     mikasa_ncr_reg[reg] = val;
+    if ((reg == MIKASA_NCR_REG_DIEN) || (reg == MIKASA_NCR_REG_SIEN0) ||
+        (reg == MIKASA_NCR_REG_SIEN1))
+        mikasa_ncr_update_irq ();
     if (reg == (MIKASA_NCR_REG_DSP + 3)) {
     uint32 dsp = mikasa_ncr_reg_l (MIKASA_NCR_REG_DSP);
 
