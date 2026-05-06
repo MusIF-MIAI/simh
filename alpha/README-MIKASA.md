@@ -133,8 +133,10 @@ Not implemented yet:
   `SCID`/`RESPID`, and SCRIPTS register writes use the same writable masks for
   visible controller registers. Additional driver-probed registers now use
   writable masks (`CTEST2/5`, `DMODE`, `DCNTL`, `MACNTL`, `STIME1`,
-  `STEST1/2/3`, and `SIEN1`), and `DCNTL.IRQD` suppresses IRQ output without
-  clearing latched status. `MESSAGE OUT` buffers are now parsed before command
+  `STEST1/2/3`, and `SIEN1`), `DCNTL.PFF` auto-clears after the emulated
+  prefetch flush, and `DCNTL.IRQD` suppresses IRQ output without clearing
+  latched status. `STIME1` now masks reserved bits and preserves only
+  `GEN[3:0]`. `MESSAGE OUT` buffers are now parsed before command
   execution: `IDENTIFY` records the LUN, queue tags are retained, extended
   messages are skipped cleanly, and ATN is cleared after the handshake.
   `CTEST3` now preserves the 53C810 revision nibble and handles FIFO

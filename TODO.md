@@ -77,6 +77,8 @@
 - [x] Add writable masks for more NCR driver-probed registers (`CTEST2/5`,
   `DMODE`, `DCNTL`, `MACNTL`, `STIME1`, `STEST1/2/3`, and `SIEN1`) and honor
   `DCNTL.IRQD` by suppressing IRQ output without clearing latched status.
+- [x] Tighten NCR `DCNTL.PFF` and `STIME1.GEN` register semantics: prefetch
+  flush auto-clears and `STIME1` masks reserved bits.
 - [x] Consume NCR `MESSAGE OUT` moves before command execution and clear ATN
   after the message-out handshake.
 - [x] Parse common NCR `MESSAGE OUT` messages instead of blindly discarding
@@ -215,6 +217,8 @@
   `SBCL`; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after detecting SCRIPTS Load/Store-to-register
   `DSTAT.IID`; it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after tightening `DCNTL.PFF` and `STIME1.GEN`;
+  it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -311,6 +315,8 @@ the real path works.
     selection attempts;
   - current branch honors `DMODE.MAN`, requiring `DCNTL.STD` to start SCRIPTS
     when manual-start mode is enabled;
+  - current branch auto-clears `DCNTL.PFF` and masks `STIME1` to the documented
+    `GEN[3:0]` field;
   - current branch also requires `DCNTL.STD` in `DCNTL.SSM` single-step mode
     instead of auto-starting from `DSP` writes;
   - current branch starts SCRIPTS from `DCNTL.STD` as well as the firmware-style
