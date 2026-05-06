@@ -64,6 +64,8 @@
 - [x] Preserve read-only NCR `ADDER`, update it from `CTEST5.ADCK/BBCK`
   clock pulses, auto-clear those pulse bits, and use the three-bit SCRIPTS
   instruction type in script tracing too.
+- [x] Mask NCR `SIEN1` to the documented `STO`, `GEN`, and `HTH` interrupt
+  enable bits.
 - [x] Treat NCR SCRIPTS `INTFLY` as a non-halting interrupt-on-the-fly path and
   expose/clear `ISTAT.INTF`.
 - [x] Keep NCR `INTFLY` side effects out of auxiliary script scans so debug
@@ -256,6 +258,8 @@
 - [x] Re-run SRM ROM smoke after preserving NCR `ADDER` and adding
   `CTEST5.ADCK`/`BBCK` pulse side effects; it still reaches `V5.4-101` and
   detects pka/ewa.
+- [x] Re-run SRM ROM smoke after masking NCR `SIEN1` to documented bits; it
+  still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -333,6 +337,8 @@ the real path works.
   - current branch preserves read-only `ADDER`, updates `ADDER`/`DNAD`/`DBC`
     from `CTEST5.ADCK` and `CTEST5.BBCK` pulse writes, and auto-clears those
     pulse bits;
+  - current branch masks `SIEN1` to the documented `STO`, `GEN`, and `HTH`
+    interrupt enable bits;
   - current branch collects multiple data-phase MOVE entries and reads/writes
     SCSI payloads across scatter/gather segment lists;
   - current branch updates visible SCRIPTS/DMA progress registers for handled

@@ -367,6 +367,7 @@
 #define MIKASA_NCR_SIST0_RST        0x02
 #define MIKASA_NCR_SIST0_PAR        0x01
 #define MIKASA_NCR_SIST1_STO        0x04
+#define MIKASA_NCR_SIEN1_WRITABLE   0x07
 #define MIKASA_NCR_SSTAT2_ILF1      0x80
 #define MIKASA_NCR_SSTAT2_ORF1      0x40
 #define MIKASA_NCR_SSTAT2_OLF1      0x20
@@ -3106,7 +3107,7 @@ if (reg == MIKASA_NCR_REG_DIEN)
 if (reg == MIKASA_NCR_REG_DCNTL)
     val = (val & MIKASA_NCR_DCNTL_WRITABLE) & ~MIKASA_NCR_DCNTL_PFF;
 if (reg == MIKASA_NCR_REG_SIEN1)
-    val = val & 0x17;
+    val = val & MIKASA_NCR_SIEN1_WRITABLE;
 if (reg == MIKASA_NCR_REG_MACNTL)
     val = val & MIKASA_NCR_MACNTL_WRITABLE;
 if (reg == MIKASA_NCR_REG_GPCNTL)
@@ -4805,7 +4806,7 @@ else {
     else if (reg == MIKASA_NCR_REG_DCNTL)
         val = (val & MIKASA_NCR_DCNTL_WRITABLE) & ~MIKASA_NCR_DCNTL_PFF;
     if (reg == MIKASA_NCR_REG_SIEN1)
-        val = val & 0x17;
+        val = val & MIKASA_NCR_SIEN1_WRITABLE;
     if (reg == MIKASA_NCR_REG_MACNTL)
         val = val & MIKASA_NCR_MACNTL_WRITABLE;
     if (reg == MIKASA_NCR_REG_GPCNTL)

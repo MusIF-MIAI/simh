@@ -141,7 +141,8 @@ Not implemented yet:
   `TEMP`. Script tracing uses the same three-bit instruction type for
   Load/Store versus Memory Move. `ADDER` is preserved as read-only and
   updated by `CTEST5.ADCK`/`CTEST5.BBCK` pulse writes, which also update
-  `DNAD`/`DBC` and auto-clear the pulse bits.
+  `DNAD`/`DBC` and auto-clear the pulse bits. `SIEN1` is masked to the
+  documented `STO`, `GEN`, and `HTH` enable bits.
   Additional driver-probed registers now use
   writable masks (`CTEST2/5`, `DMODE`, `DCNTL`, `MACNTL`, `STIME1`,
   `STEST1/2/3`, and `SIEN1`), `DCNTL.PFF` auto-clears after the emulated
