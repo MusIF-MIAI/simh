@@ -630,6 +630,10 @@ typedef struct {
     uint32 dsp;
     uint32 dsa;
     uint32 target;
+    uint32 lun;
+    t_bool tag_valid;
+    uint8 tag_msg;
+    uint8 tag;
     uint32 data_phase;
     uint8 status;
     t_bool status_dsps_valid;
@@ -3394,6 +3398,7 @@ mikasa_ncr_transaction.active = TRUE;
 mikasa_ncr_transaction.dsp = dsp;
 mikasa_ncr_transaction.dsa = dsa;
 mikasa_ncr_transaction.target = target;
+mikasa_ncr_transaction.lun = 0;
 return;
 }
 
@@ -3418,11 +3423,55 @@ return;
 static t_bool mikasa_ncr_do_msg_out (uint32 dsp, uint32 dsa)
 {
 MIKASA_NCR_DMA_LIST msg;
+uint8 buf[64];
+uint32 len;
+uint32 off = 0;
 
 if (!mikasa_ncr_collect_moves (dsp, dsa, MIKASA_NCR_PHASE_MSG_OUT, &msg))
     return TRUE;
+len = (msg.bytes > sizeof (buf)) ? sizeof (buf) : msg.bytes;
+if ((len != 0) && !mikasa_ncr_read_dma_list_offset (&msg, 0, buf, len))
+    return FALSE;
+while (off < len) {
+    uint8 msgb = buf[off];
+
+    if (msgb & 0x80) {                         /* IDENTIFY */
+        mikasa_ncr_transaction.lun = msgb & 7u;
+        off++;
+        continue;
+        }
+    if ((msgb >= 0x20) && (msgb <= 0x22)) {    /* queue tag */
+        if ((off + 1) >= len)
+            break;
+        mikasa_ncr_transaction.tag_valid = TRUE;
+        mikasa_ncr_transaction.tag_msg = msgb;
+        mikasa_ncr_transaction.tag = buf[off + 1];
+        off = off + 2;
+        continue;
+        }
+    if (msgb == 0x01) {                        /* extended */
+        uint32 ext_len;
+
+        if ((off + 1) >= len)
+            break;
+        ext_len = buf[off + 1];
+        if ((off + 2 + ext_len) > len)
+            break;
+        off = off + 2 + ext_len;
+        continue;
+        }
+    off++;
+    }
 if (!mikasa_ncr_discard_scsi_data (&msg))
     return FALSE;
+sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+    "NCR MESSAGE OUT lun=%u%s%s%u\n", mikasa_ncr_transaction.lun,
+    mikasa_ncr_transaction.tag_valid ? " tag=" : "",
+    mikasa_ncr_transaction.tag_valid ?
+        ((mikasa_ncr_transaction.tag_msg == 0x20) ? "simple:" :
+        (mikasa_ncr_transaction.tag_msg == 0x21) ? "head:" : "ordered:") :
+        "",
+    mikasa_ncr_transaction.tag_valid ? mikasa_ncr_transaction.tag : 0);
 mikasa_ncr_reg[MIKASA_NCR_REG_SOCL] &= ~MIKASA_NCR_SOCL_ATN;
 mikasa_ncr_reg[MIKASA_NCR_REG_SBCL] &= ~MIKASA_NCR_SOCL_ATN;
 return TRUE;
@@ -4114,13 +4163,18 @@ if (has_data && !mikasa_ncr_collect_moves (dsp, dsa, data_phase, &data)) {
     }
 
 sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
-    "NCR target %u CDB", target);
+    "NCR target %u lun %u CDB", target, mikasa_ncr_transaction.lun);
 for (i = 0; i < cmd_count; i++)
     sim_debug (MIKASA_DBG_PCI, &mikasa_dev, " %02X", cdb[i]);
 sim_debug (MIKASA_DBG_PCI, &mikasa_dev, " data_segs=%u/%u\n", data.count,
     data.bytes);
 
-if (!mikasa_ncr_scsi_cmd (target, cdb, &data, &status)) {
+if (mikasa_ncr_transaction.lun != 0) {
+    mikasa_ncr_set_sense (target, 0x05, 0x25, 0x00);
+    status = 2;
+    (void) mikasa_ncr_write_dma_list_zero (&data);
+    }
+else if (!mikasa_ncr_scsi_cmd (target, cdb, &data, &status)) {
     status = 2;
     (void) mikasa_ncr_write_dma_list_zero (&data);
     }

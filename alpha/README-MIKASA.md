@@ -128,8 +128,9 @@ Not implemented yet:
   visible controller registers. Additional driver-probed registers now use
   writable masks (`CTEST2/5`, `DMODE`, `DCNTL`, `MACNTL`, `STIME1`,
   `STEST1/2/3`, and `SIEN1`), and `DCNTL.IRQD` suppresses IRQ output without
-  clearing latched status. `MESSAGE OUT` buffers are now consumed before
-  command execution and ATN is cleared after the message-out handshake.
+  clearing latched status. `MESSAGE OUT` buffers are now parsed before command
+  execution: `IDENTIFY` records the LUN, queue tags are retained, extended
+  messages are skipped cleanly, and ATN is cleared after the handshake.
   `CTEST3` now preserves the 53C810 revision nibble and handles FIFO
   clear/flush writes against the local FIFO-empty model. `SFBR`, `SIDL`, and
   `SBDL` are updated with the first byte of handled input phases, while

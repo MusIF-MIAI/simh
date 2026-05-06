@@ -72,6 +72,10 @@
   `DCNTL.IRQD` by suppressing IRQ output without clearing latched status.
 - [x] Consume NCR `MESSAGE OUT` moves before command execution and clear ATN
   after the message-out handshake.
+- [x] Parse common NCR `MESSAGE OUT` messages instead of blindly discarding
+  them: `IDENTIFY` records LUN, simple/head/ordered queue tags are retained,
+  extended messages are skipped cleanly, and non-zero LUNs return check
+  condition.
 - [x] Model NCR `CTEST3` revision/writable bits and DMA FIFO clear/flush
   effects with the local FIFO-empty state.
 - [x] Update NCR `SFBR` with the first byte of handled input phases including
@@ -183,6 +187,8 @@
   `DCNTL.IRQD`; it still reaches `V5.4-101` and detects pka/ewa.
 - [x] Re-run SRM ROM smoke after exposing low-level NCR data latches
   (`SIDL`/`SODL`/`SBDL`); it still reaches `V5.4-101` and detects pka/ewa.
+- [x] Re-run SRM ROM smoke after parsing common NCR `MESSAGE OUT` messages; it
+  still reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
