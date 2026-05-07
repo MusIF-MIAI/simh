@@ -551,8 +551,9 @@
 #define MIKASA_EISA_CRAM_PAGES      32
 #define MIKASA_EISA_CRAM_PAGE_REG   0x0C00
 #define MIKASA_EISA_SLOT_ID         0x0C80
-#define MIKASA_OCP_READY            0x80
-#define MIKASA_OCP_HALT             0x40
+#define MIKASA_OCP_BUSY             0x80
+#define MIKASA_OCP_ADDR_MASK        0x7F
+#define MIKASA_OCP_DDRAM_SIZE       0x80
 
 #define MIKASA_UART_IRQ             4
 #define MIKASA_UART_CTRL_P          0x10
@@ -964,6 +965,8 @@ static void mikasa_pit_tick (void);
 static void mikasa_pit_set_gate (uint32 chan, t_bool state);
 static uint8 mikasa_portb_read (void);
 static void mikasa_portb_write (uint8 val);
+static uint8 mikasa_ocp_read (uint32 reg);
+static void mikasa_ocp_write (uint32 reg, uint8 val);
 static uint8 mikasa_isa_read (uint32 port);
 static void mikasa_isa_write (uint32 port, uint8 val);
 static t_uint64 mikasa_comanche_read (t_uint64 pa, uint32 lnt);
@@ -1076,6 +1079,8 @@ static SCSI_BUS mikasa_ncr_scsi_bus = { 0 };
 static t_bool mikasa_direct_apb = FALSE;
 static uint32 mikasa_pceb_cfg[MIKASA_PCI_CFG_DWORDS] = { 0 };
 static uint8 mikasa_ocp_reg[4] = { 0 };
+static uint8 mikasa_ocp_ddram[MIKASA_OCP_DDRAM_SIZE] = { 0 };
+static uint8 mikasa_ocp_addr = 0;
 static t_bool mikasa_halt_pending = FALSE;
 uint32 mikasa_scc_scale = 1;
 
@@ -1187,9 +1192,8 @@ if (c >= SCPE_KFLAG) {
     mikasa_uart_rbr = (uint8) (c & M8);
     if (mikasa_uart_rbr == MIKASA_UART_CTRL_P) {
         mikasa_halt_pending = TRUE;
-        mikasa_ocp_reg[1] |= MIKASA_OCP_HALT;
         sim_debug (MIKASA_DBG_UART, &mikasa_dev,
-            "COM1 Ctrl-P latched OCP halt request pc=%llX ra=%llX\n",
+            "COM1 Ctrl-P latched halt request pc=%llX ra=%llX\n",
             (unsigned long long) PC, (unsigned long long) R[26]);
         }
     mikasa_uart_rbr_valid = TRUE;
@@ -2064,6 +2068,53 @@ static void mikasa_portb_write (uint8 val)
 mikasa_portb = val & (MIKASA_PORTB_GATE2 | MIKASA_PORTB_SPKR);
 mikasa_pit_set_gate (2, (val & MIKASA_PORTB_GATE2) != 0);
 sim_debug (MIKASA_DBG_IO, &mikasa_dev, "PORTB write %02X\n", val);
+return;
+}
+
+static uint8 mikasa_ocp_read (uint32 reg)
+{
+uint8 val;
+
+reg = reg & 3;
+if (reg == 0) {
+    val = mikasa_ocp_ddram[mikasa_ocp_addr & MIKASA_OCP_ADDR_MASK];
+    mikasa_ocp_addr = (mikasa_ocp_addr + 1) & MIKASA_OCP_ADDR_MASK;
+    }
+else if (reg == 1)
+    val = mikasa_ocp_addr & MIKASA_OCP_ADDR_MASK;       /* busy clear */
+else
+    val = mikasa_ocp_reg[reg];
+sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+    "OCP read pc=%llX ra=%llX %u=%02X addr=%02X halt=%c\n",
+    (unsigned long long) PC, (unsigned long long) R[26], reg, val,
+    mikasa_ocp_addr, mikasa_halt_pending ? 'y' : 'n');
+return val;
+}
+
+static void mikasa_ocp_write (uint32 reg, uint8 val)
+{
+reg = reg & 3;
+mikasa_ocp_reg[reg] = val;
+if (reg == 0) {
+    mikasa_ocp_ddram[mikasa_ocp_addr & MIKASA_OCP_ADDR_MASK] = val;
+    mikasa_ocp_addr = (mikasa_ocp_addr + 1) & MIKASA_OCP_ADDR_MASK;
+    }
+else if (reg == 1) {
+    if (val & 0x80)
+        mikasa_ocp_addr = val & MIKASA_OCP_ADDR_MASK;
+    else if (val & 0x40)
+        mikasa_ocp_addr = val & MIKASA_OCP_ADDR_MASK;
+    else if (val == 0x01) {
+        memset (mikasa_ocp_ddram, ' ', sizeof (mikasa_ocp_ddram));
+        mikasa_ocp_addr = 0;
+        }
+    else if (val == 0x02)
+        mikasa_ocp_addr = 0;
+    }
+sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+    "OCP write pc=%llX ra=%llX %u=%02X addr=%02X\n",
+    (unsigned long long) PC, (unsigned long long) R[26], reg, val,
+    mikasa_ocp_addr);
 return;
 }
 
@@ -6426,17 +6477,7 @@ if (port == MIKASA_ISA_ELCR1)
 if (port == MIKASA_ISA_ELCR2)
     return mikasa_elcr[1] & MIKASA_ELCR2_WRITABLE;
 if ((port >= MIKASA_ISA_OCP) && (port < (MIKASA_ISA_OCP + 4))) {
-    uint32 reg = port - MIKASA_ISA_OCP;
-    uint8 val;
-
-    if (reg == 1)
-        val = mikasa_ocp_reg[reg] | MIKASA_OCP_READY |
-            (mikasa_halt_pending ? MIKASA_OCP_HALT : 0);
-    else
-        val = mikasa_ocp_reg[reg];
-    sim_debug (MIKASA_DBG_IO, &mikasa_dev, "OCP read %u=%02X\n",
-        reg, val);
-    return val;
+    return mikasa_ocp_read (port - MIKASA_ISA_OCP);
     }
 if ((port == MIKASA_ISA_ICU_IRR) || (port == (MIKASA_ISA_ICU_IRR + 1)))
     return (uint8) (irr >> ((port - MIKASA_ISA_ICU_IRR) << 3));
@@ -6535,13 +6576,7 @@ if (port == MIKASA_ISA_ELCR2) {
     return;
     }
 if ((port >= MIKASA_ISA_OCP) && (port < (MIKASA_ISA_OCP + 4))) {
-    uint32 reg = port - MIKASA_ISA_OCP;
-
-    mikasa_ocp_reg[reg] = val;
-    if ((reg == 1) && ((val & MIKASA_OCP_HALT) == 0))
-        mikasa_halt_pending = FALSE;
-    sim_debug (MIKASA_DBG_IO, &mikasa_dev, "OCP write %u=%02X\n",
-        reg, val);
+    mikasa_ocp_write (port - MIKASA_ISA_OCP, val);
     return;
     }
 if (port == MIKASA_ISA_ICU_IMR) {
@@ -9402,6 +9437,8 @@ mikasa_pceb_cfg[0x04 >> 2] = 0x02000007u;
 mikasa_pceb_cfg[0x08 >> 2] = 0x06020003u;
 mikasa_pceb_cfg[0x40 >> 2] = 0x80800020u;
 memset (mikasa_ocp_reg, 0, sizeof (mikasa_ocp_reg));
+memset (mikasa_ocp_ddram, ' ', sizeof (mikasa_ocp_ddram));
+mikasa_ocp_addr = 0;
 mikasa_halt_pending = FALSE;
 mikasa_unit.wait = MIKASA_CLOCK_DELAY;
 sim_activate (&mikasa_unit, sim_rtcn_init_unit (&mikasa_unit,

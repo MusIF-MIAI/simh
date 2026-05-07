@@ -83,6 +83,9 @@ Implemented:
     byte.
   - Ctrl-P on the serial console is also latched as an OCP Halt request while
     the byte remains visible to the UART receive path.
+  - The OCP/LCD shell keeps display DDRAM state separate from the Ctrl-P halt
+    latch, and reports the LCD status register as busy clear instead of
+    echoing command-address bits as a permanent busy state.
   - The DECchip 21040/Tulip shell can raise the platform ICU IRQ 11 when
     masked CSR5 status bits are enabled in CSR7.
   - `DEP MIKASA SCCSCALE <n>` can be used as a debug accelerator for SRM
@@ -422,7 +425,13 @@ The tool strips the 16-byte AXPbox `decompressed.rom` header before invoking
 post-banner PC values seen so far are still inside SRM delay/poll paths. For
 example, `0x5A030` is a timer wait loop around `RSCC`, not APB or disk code.
 The current SCSI discovery blocker is therefore in the SRM firmware's NCR/PKE
-probe path before the disk bootstrap is loaded.
+probe path before the disk bootstrap is loaded. The current trace repeatedly
+issues standard `INQUIRY` to targets 0-3 and LUNs 0-7, select-times-out
+targets 4-6, and starts the same discovery pass again without reaching `READ
+CAPACITY` or the visible prompt. A 2026-05-07 probe forced both present and
+absent LUN INQUIRY replies to return the full 255-byte allocation with zero
+residual; the loop did not change, so the blocker is not simply the INQUIRY
+short-transfer/phase-mismatch path.
 
 APB console output is not yet routed through the SIMH console callback path.
 For the current stop, the useful history extraction is:

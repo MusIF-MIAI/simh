@@ -50,6 +50,9 @@
   SIRR/AST state with the common Alpha interrupt evaluator.
 - [x] Latch serial Ctrl-P as an OCP Halt request while still delivering the
   byte to the guest UART path.
+- [x] Refine the OCP/LCD shell so port `0x531` reports busy clear instead of
+  echoing command-address bits as a permanent busy state; keep display DDRAM
+  state and Ctrl-P halt state separate.
 - [x] Add NCR/Symbios 53C810 PCI config, I/O BAR, memory BAR, register shell,
   interrupt status, abort, reset, and select-timeout behavior.
 - [x] Mirror the NCR/Symbios 53C810 operating registers through both halves of
@@ -368,7 +371,10 @@
 - [ ] Debug the current SRM post-banner discovery loop: after the latest NCR
   fixes SRM repeatedly issues standard `INQUIRY` to targets 0-3 and LUNs 0-7,
   then select-times-out targets 4-6. It has not yet advanced to `READ
-  CAPACITY` or a visible `>>>` prompt.
+  CAPACITY` or a visible `>>>` prompt. A 2026-05-07 probe forced both present
+  and absent LUN INQUIRY replies to return the full 255-byte allocation with
+  zero residual; the loop did not change, so the current blocker is not simply
+  the INQUIRY short-transfer/phase-mismatch path.
 - [ ] Complete APECS/DECchip 21071 behavior beyond the current register shells,
   especially actually raising error causes, remaining HAE/config details, and
   DMA corner cases.
