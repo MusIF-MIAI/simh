@@ -110,10 +110,6 @@ Implemented:
   - Handles the VMS queue/probe PAL calls reached by the APB bootstrap path.
   - Exposes CTB/CRB console callback descriptors and generic callback handlers
     for environment variables and DKA-backed open/read/write services.
-  - Provides terminal CTB vector fields for COM1/IRQ4. The terminal CSR
-    remains zero in the direct-APB bypass until the exact firmware CSR encoding
-    is known; using the APECS sparse physical address makes APB halt before
-    disk I/O.
   - Passes APB flags in `R5`.
   - Passes HWRPB physical address in `R16`.
 
@@ -461,10 +457,6 @@ After removing the APB sysroot rewrite, this message should no longer appear in
 the direct-APB smoke test. A timeout is expected until the next blocker is
 identified, but the trace should show reads beyond `SYS0.DIR`, including
 `SYSEXE.DIR` and blocks from `VMS$LPBEGIN-050_STARTUP.COM`.
-
-The CRB callback counters still stay at zero at that point, and UART debug
-does not show COM1 output. The current silent phase is therefore not using the
-synthetic CRB `PUTS` path or the emulated 16550 transmit path yet.
 
 ## SRM Firmware Images
 
