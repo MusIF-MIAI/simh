@@ -155,6 +155,11 @@
   legacy `0xA0000..0xBFFFF` memory, the PCI option-ROM BAR, and the low
   `0xC0000` option-ROM probe range so normal firmware-visible VGA probes do
   not falsely latch `EPIC.NDEV`.
+- [x] Apply APECS sparse-memory HAXR1 extension only above the low 16 MB
+  sparse-memory region. FreeBSD's APECS code treats addresses below `REG1`
+  as low legacy space even when HAXR1 still contains high PCI address bits;
+  this makes SRM's physical `0x201800008` probe decode as VGA legacy
+  `0x000C0000` instead of a false high-address `EPIC.NDEV`.
 - [x] Update NCR `SFBR` with the transferred byte for handled status/message
   phases and the last byte of handled data-in transfers.
 - [x] Reflect SCSI bus data in low-level NCR latches: input phases update
@@ -439,11 +444,6 @@
   `HALTBTN` mapped to OCP status bit `0x40` is visible to SRM, but it leaves
   the firmware spinning in the OCP polling helper instead of entering the
   prompt, so that bit is not the full console-mode request semantics.
-- [ ] Resolve the remaining SRM sparse-memory probe at physical `0x201800008`.
-  With HAXR1 still carrying high PCI address bits, this decodes as a high
-  alias of the VGA legacy `0xC0000` option-ROM area and still latches
-  `EPIC.NDEV`; decide from APECS/SRM behavior whether HAXR1 should apply to
-  that legacy probe or whether the firmware expects a non-error VGA response.
 - [ ] Implement real DECchip 21040 receive path, packet I/O, and full
   descriptor processing beyond the current SRM setup-frame transmit shell.
 - [ ] Re-run SRM/APB smoke tests after the next hardware batch.

@@ -236,6 +236,7 @@
 #define MIKASA_VGA_ROM_SIZE         0x00010000u
 #define MIKASA_VGA_FB_MASK          0xFC000000u
 #define MIKASA_VGA_ROM_MASK         0xFFFF0000u
+#define MIKASA_APECS_HAE_REG1       0x01000000u
 #define MIKASA_TULIP_REG_SIZE       0x80
 #define MIKASA_TULIP_BAR_SIZE       0x80
 #define MIKASA_TULIP_BAR_MASK       0xFFFFFF80u
@@ -2536,6 +2537,16 @@ if ((addr >= base) && (addr < (base + 0x04000000u))) {
     return TRUE;
     }
 return FALSE;
+}
+
+static uint32 mikasa_apecs_sparse_mem_addr (t_uint64 off)
+{
+uint32 addr = (uint32) ((off >> 5) & 0x07FFFFFFu);
+
+if (addr >= MIKASA_APECS_HAE_REG1)
+    addr |= mikasa_epic_reg[MIKASA_EPIC_HAXR1 >> 5] &
+        MIKASA_EPIC_HAXR1_EADDR;
+return addr;
 }
 
 static t_bool mikasa_vga_rom_reg (uint32 addr, uint32 *reg)
@@ -7210,8 +7221,7 @@ return;
 static t_uint64 mikasa_pci_sparse_mem_read (t_uint64 pa, uint32 lnt)
 {
 t_uint64 off = pa - MIKASA_APECS_PCI_SPARSE;
-uint32 addr = ((uint32) (off >> 5) & 0x07FFFFFFu) |
-    (mikasa_epic_reg[MIKASA_EPIC_HAXR1 >> 5] & MIKASA_EPIC_HAXR1_EADDR);
+uint32 addr = mikasa_apecs_sparse_mem_addr (off);
 uint32 mode = (uint32) ((off >> 3) & 3);
 uint32 reg;
 uint32 val;
@@ -7273,8 +7283,7 @@ static void mikasa_pci_sparse_mem_write (t_uint64 pa, t_uint64 val,
     uint32 lnt)
 {
 t_uint64 off = pa - MIKASA_APECS_PCI_SPARSE;
-uint32 addr = ((uint32) (off >> 5) & 0x07FFFFFFu) |
-    (mikasa_epic_reg[MIKASA_EPIC_HAXR1 >> 5] & MIKASA_EPIC_HAXR1_EADDR);
+uint32 addr = mikasa_apecs_sparse_mem_addr (off);
 uint32 mode = (uint32) ((off >> 3) & 3);
 uint32 reg;
 uint32 data;
