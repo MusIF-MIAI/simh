@@ -859,6 +859,9 @@ static uint32 mikasa_ncr_next_script_addr (uint32 dsp, uint32 op);
 static uint8 mikasa_ncr_read_b (uint32 reg);
 static void mikasa_ncr_write_b (uint32 reg, uint8 val);
 static void mikasa_ncr_update_irq (void);
+static t_uint64 mikasa_ncr_frame_ra (void);
+static t_uint64 mikasa_ncr_parent_frame_ra (void);
+static void mikasa_ncr_debug_state (const char *tag);
 static void mikasa_ncr_promote_interrupt_stack (void);
 static void mikasa_ncr_clear_transaction (void);
 static void mikasa_ncr_clear_wait_reselect (void);
@@ -2363,8 +2366,12 @@ else if (reg == MIKASA_NCR_REG_CTEST2) {
         MIKASA_NCR_CTEST2_SIGP : 0));
     mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &= ~MIKASA_NCR_ISTAT_SIGP;
     }
-sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "NCR read %02X=%02X\n",
-    reg, val);
+if (sim_deb && (mikasa_dev.dctrl & MIKASA_DBG_PCI))
+    sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+        "NCR read pc=%llX ra=%llX fra=%llX pra=%llX %02X=%02X\n",
+        (unsigned long long) PC, (unsigned long long) R[26],
+        (unsigned long long) mikasa_ncr_frame_ra (),
+        (unsigned long long) mikasa_ncr_parent_frame_ra (), reg, val);
 return val;
 }
 
@@ -2387,6 +2394,68 @@ return ((uint32) mikasa_ncr_reg[reg]) |
     (((uint32) mikasa_ncr_reg[(reg + 1) & (MIKASA_NCR_REG_SIZE - 1)]) << 8) |
     (((uint32) mikasa_ncr_reg[(reg + 2) & (MIKASA_NCR_REG_SIZE - 1)]) << 16) |
     (((uint32) mikasa_ncr_reg[(reg + 3) & (MIKASA_NCR_REG_SIZE - 1)]) << 24);
+}
+
+static t_uint64 mikasa_ncr_frame_ra (void)
+{
+t_uint64 addr = R[29] + 8;
+
+if (!ADDR_IS_MEM (addr + 7))
+    return 0;
+return mikasa_read_phys_quad (addr);
+}
+
+static t_uint64 mikasa_ncr_parent_frame_ra (void)
+{
+t_uint64 gp_addr = R[29] + 32;
+t_uint64 gp;
+t_uint64 addr;
+
+if (!ADDR_IS_MEM (gp_addr + 7))
+    return 0;
+gp = mikasa_read_phys_quad (gp_addr);
+addr = gp + 8;
+if (!ADDR_IS_MEM (addr + 7))
+    return 0;
+return mikasa_read_phys_quad (addr);
+}
+
+static void mikasa_ncr_debug_state (const char *tag)
+{
+if (!sim_deb || ((mikasa_dev.dctrl & MIKASA_DBG_PCI) == 0))
+    return;
+sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+    "NCR state %s pc=%llX ra=%llX fra=%llX pra=%llX dsp=%08X dsps=%08X "
+    "dsa=%08X dbc=%08X dnad=%08X istat=%02X dstat=%02X sist=%02X/%02X "
+    "sien=%02X/%02X sbcl=%02X socl=%02X sstat=%02X/%02X/%02X "
+    "scntl=%02X/%02X/%02X trans=%c pend=%c tgt=%u lun=%u wait=%c\n",
+    tag ? tag : "", (unsigned long long) PC, (unsigned long long) R[26],
+    (unsigned long long) mikasa_ncr_frame_ra (),
+    (unsigned long long) mikasa_ncr_parent_frame_ra (),
+    mikasa_ncr_reg_l (MIKASA_NCR_REG_DSP),
+    mikasa_ncr_reg_l (MIKASA_NCR_REG_DSPS),
+    mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA),
+    mikasa_ncr_reg_l (MIKASA_NCR_REG_DBC),
+    mikasa_ncr_reg_l (MIKASA_NCR_REG_DNAD),
+    mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT],
+    mikasa_ncr_reg[MIKASA_NCR_REG_DSTAT],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SIST0],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SIST1],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SIEN0],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SIEN1],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SBCL],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SOCL],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SSTAT0],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SSTAT1],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SSTAT2],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL0],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL1],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL2],
+    mikasa_ncr_transaction.active ? 'y' : 'n',
+    mikasa_ncr_transaction.status_pending ? 'y' : 'n',
+    mikasa_ncr_transaction.target, mikasa_ncr_transaction.lun,
+    mikasa_ncr_wait_reselect ? 'y' : 'n');
+return;
 }
 
 static t_uint64 mikasa_ncr_read_len (uint32 reg, uint32 lnt)
@@ -2701,6 +2770,7 @@ if (mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &
     mikasa_ncr_update_irq ();
     sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
         "NCR stack DIP dstat=%02X dsps=%u\n", dstat, dsps);
+    mikasa_ncr_debug_state ("stack-dip");
     return;
     }
 mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DSPS, dsps);
@@ -2711,6 +2781,7 @@ mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] |= MIKASA_NCR_ISTAT_DIP;
 mikasa_ncr_update_irq ();
 sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
     "NCR signal DIP dstat=%02X dsps=%u\n", dstat, dsps);
+mikasa_ncr_debug_state ("signal-dip");
 return;
 }
 
@@ -2721,12 +2792,14 @@ if (mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &
     mikasa_ncr_sist0_stack |= sist0;
     mikasa_ncr_sist1_stack |= sist1;
     mikasa_ncr_update_irq ();
+    mikasa_ncr_debug_state ("stack-sip");
     return;
     }
 mikasa_ncr_reg[MIKASA_NCR_REG_SIST0] |= sist0;
 mikasa_ncr_reg[MIKASA_NCR_REG_SIST1] |= sist1;
 mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] |= MIKASA_NCR_ISTAT_SIP;
 mikasa_ncr_update_irq ();
+mikasa_ncr_debug_state ("signal-sip");
 return;
 }
 
@@ -2960,6 +3033,7 @@ mikasa_ncr_latch_phase (expected, sampled);
 mikasa_ncr_set_sip (MIKASA_NCR_SIST0_MIA, 0);
 sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
     "NCR phase mismatch expected=%u sampled=%u\n", expected, sampled);
+mikasa_ncr_debug_state ("phase-mismatch");
 return;
 }
 
@@ -4636,6 +4710,9 @@ switch (cdb[0]) {
         memcpy (&buf[32], "2000", 4);
         len = mikasa_ncr_min3 (data->bytes, cdb[4],
             5 + (uint32) buf[4]);
+        sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+            "NCR INQUIRY target=%u lun=0 alloc=%u bytes=%u pdt=%02X "
+            "addlen=%u\n", unit, cdb[4], len, buf[0], buf[4]);
         mikasa_ncr_clear_sense (unit);
         return mikasa_ncr_write_scsi_data (data, buf, len);
 
@@ -4859,6 +4936,9 @@ if ((cdb[0] == 0x12) && ((cdb[1] & 1) == 0) && (cdb[4] != 0) &&
     buf[0] = 0x7F;                         /* no logical unit present */
     buf[4] = 31;
     len = mikasa_ncr_min3 (data->bytes, cdb[4], sizeof (buf));
+    sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+        "NCR INQUIRY target=%u no-lun alloc=%u bytes=%u pdt=%02X addlen=%u\n",
+        unit, cdb[4], len, buf[0], buf[4]);
     mikasa_ncr_clear_sense (unit);
     *status = 0;
     return mikasa_ncr_write_scsi_data (data, buf, len);
@@ -4934,6 +5014,7 @@ if (!mikasa_ncr_find_select (dsp, dsa, &target)) {
 if ((target >= MIKASA_DKA_UNITS) || ((dka_unit[target].flags & UNIT_ATT) == 0)) {
     sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
         "NCR target %u select timeout\n", target);
+    mikasa_ncr_debug_state ("select-timeout");
     mikasa_ncr_clear_transaction ();
     mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL2] &= ~MIKASA_NCR_SCNTL2_SDU;
     mikasa_ncr_set_connected (FALSE);
@@ -4988,6 +5069,7 @@ for (i = 0; i < cmd_count; i++)
     sim_debug (MIKASA_DBG_PCI, &mikasa_dev, " %02X", cdb[i]);
 sim_debug (MIKASA_DBG_PCI, &mikasa_dev, " data_segs=%u/%u\n", data.count,
     data.bytes);
+mikasa_ncr_debug_state ("scsi-cdb");
 
 if (mikasa_ncr_transaction.lun != 0) {
     if (!mikasa_ncr_scsi_no_lun_cmd (target, cdb, &data, &status)) {
@@ -4999,6 +5081,11 @@ else if (!mikasa_ncr_scsi_cmd (target, cdb, &data, &status)) {
     status = 2;
     (void) mikasa_ncr_write_dma_list_zero (&data);
     }
+sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+    "NCR target %u lun %u status=%02X data_phase=%u resid=%u\n",
+    target, mikasa_ncr_transaction.lun, status, data_phase,
+    mikasa_ncr_reg_l (MIKASA_NCR_REG_DBC) & MIKASA_NCR_BM_COUNT_MASK);
+mikasa_ncr_debug_state ("scsi-status");
 if (data.bytes != 0) {
     uint32 data_resid;
 
@@ -5217,8 +5304,12 @@ return;
 static void mikasa_ncr_write_b (uint32 reg, uint8 val)
 {
 reg = reg & 0x7Fu;
-sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "NCR write %02X=%02X\n",
-    reg, val);
+if (sim_deb && (mikasa_dev.dctrl & MIKASA_DBG_PCI))
+    sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+        "NCR write pc=%llX ra=%llX fra=%llX pra=%llX %02X=%02X\n",
+        (unsigned long long) PC, (unsigned long long) R[26],
+        (unsigned long long) mikasa_ncr_frame_ra (),
+        (unsigned long long) mikasa_ncr_parent_frame_ra (), reg, val);
 if (reg == MIKASA_NCR_REG_ISTAT) {
     uint8 istat = mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT];
     t_bool sigp_run = FALSE;

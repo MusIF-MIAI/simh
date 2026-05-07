@@ -321,6 +321,17 @@
 - [x] Re-run SRM ROM smoke after limiting standard INQUIRY transfer length;
   LUN 0 now reports the same 219-byte residual as the no-LUN INQUIRY path, but
   SRM still repeats discovery and still never issues `READ CAPACITY`.
+- [x] Add NCR debug-state trace points around SRM SCSI CDB dispatch,
+  completion status, phase mismatches, SIP/DIP signalling, select timeouts,
+  and register reads/writes. The trace now includes the current firmware PC so
+  stopped SIMH state can be correlated directly with SRM disassembly, plus
+  `RA`, the wrapper frame's saved return address, and the parent frame's saved
+  return address because NCR MMIO accesses normally occur through nested SRM
+  wrapper helpers.
+- [x] Add `alpha/tools/disassemble-srm-rom.py` for Alpha SRM
+  `decompressed.rom` inspection. It strips the AXPbox 16-byte header and
+  disassembles by SIMH firmware PC addresses instead of misleading file
+  offsets.
 - [x] Re-run SRM ROM smoke after PIC/ELCR edge-vs-level handling; it still
   reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each

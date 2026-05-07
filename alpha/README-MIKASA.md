@@ -395,6 +395,20 @@ When disassembling the APB, remember that SIMH `EX -M` takes physical
 addresses. APB virtual `0x200030A0` is physical `0x002030A0`, not
 `0x200030A0`.
 
+For real SRM firmware disassembly, use the decompressed AXPbox-format memory
+image and SIMH's firmware PC values:
+
+```text
+alpha/tools/disassemble-srm-rom.py ../firmware/as1000/mksrmrom.decompressed.rom --pc 0x5A030 --bytes 0x80
+```
+
+The tool strips the 16-byte AXPbox `decompressed.rom` header before invoking
+`alpha-linux-gnu-objdump`, so branch targets line up with SIMH PC values. The
+post-banner PC values seen so far are still inside SRM delay/poll paths. For
+example, `0x5A030` is a timer wait loop around `RSCC`, not APB or disk code.
+The current SCSI discovery blocker is therefore in the SRM firmware's NCR/PKE
+probe path before the disk bootstrap is loaded.
+
 APB console output is not yet routed through the SIMH console callback path.
 For the current stop, the useful history extraction is:
 
@@ -461,6 +475,14 @@ The same AXPbox EV68 path does not currently complete for `mksrmrom.exe`; with
 debug tracing, the PC cycles inside the ROM decompressor around `0x900301` and
 `0x902009`. The tool intentionally rejects chunk-limited output so partial
 `decompressed.rom` files are not mistaken for usable SRM images.
+
+`SET MIKASA DEBUG=PCI` now includes firmware `PC`, return-address `RA`,
+wrapper-frame return-address `FRA`, and parent-frame return-address `PRA`
+values on NCR register reads/writes and prints full controller snapshots around
+SCSI CDB dispatch, completion, SIP/DIP signalling, phase mismatches, and select
+timeouts. `PC` often lands in the SRM MMIO wrapper, `RA` in the sparse-access
+wrapper, and `FRA` in a byte/long helper; use `PRA` to find the firmware caller
+to disassemble.
 
 ## Next implementation steps
 
