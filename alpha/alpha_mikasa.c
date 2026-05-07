@@ -5752,6 +5752,7 @@ if ((target >= MIKASA_DKA_UNITS) || ((dka_unit[target].flags & UNIT_ATT) == 0)) 
     }
 mikasa_ncr_begin_transaction (dsp, dsa, target);
 mikasa_ncr_set_connected (TRUE);
+mikasa_ncr_set_sip (MIKASA_NCR_SIST0_CMP, 0);
 if (!mikasa_ncr_do_msg_out (dsp, dsa)) {
     mikasa_ncr_clear_transaction ();
     mikasa_ncr_set_connected (FALSE);
@@ -5892,11 +5893,13 @@ if ((op & MIKASA_NCR_TC_GROUP_MASK) == MIKASA_NCR_SCR_SEL_ABS) {
     target = table ? ((sel >> 16) & MIKASA_NCR_SDID_WRITABLE) :
         (sel & MIKASA_NCR_SDID_WRITABLE);
     if ((target < MIKASA_DKA_UNITS) &&
-        ((dka_unit[target].flags & UNIT_ATT) != 0))
+        ((dka_unit[target].flags & UNIT_ATT) != 0)) {
         mikasa_ncr_set_connected (TRUE);
+        mikasa_ncr_set_sip (MIKASA_NCR_SIST0_CMP, 0);
+        }
     else {
         mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL2] &= ~MIKASA_NCR_SCNTL2_SDU;
-        mikasa_ncr_set_sip (0, MIKASA_NCR_SIST1_STO);
+        mikasa_ncr_set_sip (MIKASA_NCR_SIST0_UDC, MIKASA_NCR_SIST1_STO);
         }
     mikasa_ncr_set_reg_l (MIKASA_NCR_REG_DSP, next);
     mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SSI,

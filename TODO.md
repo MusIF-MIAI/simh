@@ -204,6 +204,9 @@
 - [x] Raise NCR `SIST0.UDC` together with `SIST1.STO` on selection timeout
   paths, matching documented initiator behavior where timeout is also treated
   as an unexpected disconnect condition.
+- [x] Raise NCR `SIST0.CMP` when selection succeeds (both normal run and
+  single-step select paths), matching documented function-complete signaling
+  for completed arbitration+selection sequences.
 - [x] Execute deferred NCR status/message completion by running the firmware
   control script with STATUS as the current phase, then transition the script
   state to MESSAGE IN after the status byte instead of synthesizing an
