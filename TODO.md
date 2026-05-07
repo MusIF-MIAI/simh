@@ -49,6 +49,9 @@
   `mksrmrom.payload.bin`.
 - [x] Verify serial input at the SRM prompt with a PTY-driven `show dev`;
   firmware receives the command and starts listing DKA devices.
+- [x] Run the first real SRM boot command from the prompt:
+  `boot dka0 -fl 0,10000` reaches SRM device open and currently fails with
+  `failed to open dka0.0.0.6.0`.
 - [x] Route 8042 keyboard and auxiliary mouse output-buffer interrupts through
   PIC IRQ1/IRQ12 according to the controller command byte.
 - [x] Add DECchip 21040/Tulip interrupt masking/status delivery through
@@ -433,6 +436,10 @@
   The current branch has the shared bus/device/attach layer and routes only
   conservative no-data status commands through `sim_scsi`; SRM/VMS-sensitive
   probe and disk commands still use the local shim.
+- [ ] Fix SRM `boot dka0` device open. The current trace reaches
+  `TEST UNIT READY` on target 0/LUN 0 through the NCR path; SRM then fails the
+  open before issuing READ CAPACITY or boot-block reads. The visible symptom is
+  `failed to open dka0.0.0.6.0`.
 - [x] Debug the current SRM post-banner wait. The immediate blocker was not
   SCSI discovery or OCP busy polling; SRM had entered its console driver, but
   the UART model did not raise THRE interrupts, so the prompt stayed queued.
