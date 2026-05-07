@@ -801,39 +801,6 @@ static uint32 mikasa_apb_trace_count = 0;
 static void mikasa_write_phys_byte (t_uint64 pa, uint8 dat);
 static uint8 mikasa_read_phys_byte (t_uint64 pa);
 
-static void mikasa_apb_patch_sysroot (uint32 osflags, t_uint64 image_bytes)
-{
-    static const char marker[] = "SYS%%%%%%%%%%%%%%%%%%%%%%%%%%%%";
-    const uint32 marker_len = (uint32) (sizeof (marker) - 1);
-    uint8 root_char = (uint8) ('0' + ((osflags >> 28) & 0x0F));
-    t_uint64 limit = image_bytes;
-    t_uint64 off;
-    uint32 i;
-
-    if (limit > MIKASA_BOOT_RESERVED_SIZE)
-        limit = MIKASA_BOOT_RESERVED_SIZE;
-    if (limit < marker_len)
-        return;
-    for (off = 0; off + marker_len <= limit; off++) {
-        if (mikasa_read_phys_byte (MIKASA_BOOT_IMAGE_PA + off) !=
-            (uint8) marker[0])
-            continue;
-        for (i = 1; i < marker_len; i++)
-            if (mikasa_read_phys_byte (MIKASA_BOOT_IMAGE_PA + off + i) !=
-                (uint8) marker[i])
-                break;
-        if (i != marker_len)
-            continue;
-        mikasa_write_phys_byte (MIKASA_BOOT_IMAGE_PA + off + 3, root_char);
-        for (i = 4; i < marker_len; i++)
-            mikasa_write_phys_byte (MIKASA_BOOT_IMAGE_PA + off + i, ' ');
-        if (mikasa_apb_trace_count < 1024) {
-            sim_printf ("MIKASA APB patched SYSROOT template at +%llX -> "
-                "SYS%c\n", (unsigned long long) off, root_char);
-            mikasa_apb_trace_count++;
-            }
-        }
-}
 t_uint64 mikasa_align_count = 0;
 t_uint64 mikasa_align_last_va = 0;
 t_uint64 mikasa_align_last_pc = 0;
@@ -9616,7 +9583,6 @@ if (mem_pages <= console_pages)
 mikasa_zero_phys (bitmap_pa, (uint32) (bitmap_pages * MIKASA_PAGE_SIZE));
 mikasa_apb_dma_valid = FALSE;
 mikasa_apb_trace_count = 0;
-mikasa_apb_patch_sysroot (osflags, image_bytes);
 mikasa_set_boot_env (bootdev, osflags);
 mikasa_clear_io_channels ();
 mikasa_build_boot_pt ();

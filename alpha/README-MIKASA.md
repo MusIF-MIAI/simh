@@ -282,7 +282,7 @@ Earlier SRM stops fixed during bring-up:
 - Infinite `LDQ_L`/`STQ_C` retry loop. The common Alpha CPU core now writes
   success value `1` back to the source register on successful `STL_C`/`STQ_C`.
 
-Current verified direct-APB diagnostic stop:
+Earlier direct-APB diagnostic stop:
 
 ```text
 Loaded OpenVMS Alpha APB from DKA0: LBN 4455271, 1049 blocks, 537088 bytes at 00200000
@@ -291,21 +291,19 @@ Loaded OpenVMS Alpha APB from DKA0: LBN 4455271, 1049 blocks, 537088 bytes at 00
 HALT instruction, PC: 200039E0
 ```
 
-The APB now reads enough ODS-2 metadata to mount the system volume, find
-`SYS0.DIR`, and enter the system-root search. The current stop is still before
-the implemented CRB callback counters move: `CALLBACKS`, `GETENVS`, `IOREADS`,
-and `IOWRITES` remain zero. The APB mailbox path performs 11 DKA0 reads before
-the stop. After the current SCSI/PCI hardware batch, the direct APB smoke still
-loads APB from DKA0 and reaches the same `PC: 200039E0` halt. The same
-non-regression holds after EPIC `DCSR.NDEV` latching for absent PCI memory
-accesses.
+That stop was self-inflicted: `mikasa_apb_patch_sysroot()` rewrote APB's
+`SYS%%%%%%%%%%%%%%%%%%%%%%%%%%%%` template to `SYS0` padded with spaces. APB
+uses that template as part of its own boot/system-root resolution, so the
+rewrite corrupted the directory traversal. With the rewrite removed, APB reads
+past `SYS0.DIR` and continues into later `SYSCOMMON/SYSEXE` directory blocks
+instead of halting with `%APB-I-FILENOTLOC`.
 
 Earlier stops were `R0=0x124` (`SS$_INSFMEM`) while mapping bootstrap memory
 around the `0x40000000` boot page-table window, unsupported PAL calls such as
-`PROBER` and `INSQUEQ`, `%APB-F-MOUNT`, and `%APB-F-BADSYSROOT`. The active
-blocker is now the `SYSBOOT.EXE` lookup. `SYSBOOT.EXE;2` is present in the
-dump, so the next work is to compare the APB's directory traversal against the
-ODS-2 layout under `[SYS0.SYSEXE]` and `[SYS0.SYSCOMMON.SYSEXE]`.
+`PROBER` and `INSQUEQ`, `%APB-F-MOUNT`, `%APB-F-BADSYSROOT`, and the forced
+`SYSBOOT.EXE` lookup failure above. The active blocker now needs a fresh trace
+from the post-`SYS0.DIR` path; do not reintroduce sysroot string patching to
+force a specific root.
 
 ## Fisica dump quick start
 
@@ -448,12 +446,17 @@ timeout 120 bash -lc "printf 'set cpu history=20000\ndo alpha/mikasa-fermi.ini\n
 perl -ane 'if ($F[0] eq "0000000020049E5C") { $c = chr(hex($F[1]) & 255); next if defined($last) && $last eq $c; print $c; $last = $c } END { print "\n" }' /tmp/mikasa_boot_history.txt
 ```
 
-The de-duplicated current message is:
+The old de-duplicated failure message was:
 
 ```text
 %APB-I-FILENOTLOC, Unable to locate SYSBOOT.EXE
 %APB-I-LOADFAIL, Failed to load secondary bootstrap, status = 0910
 ```
+
+After removing the APB sysroot rewrite, this message should no longer appear in
+the direct-APB smoke test. A timeout is expected until the next blocker is
+identified, but the trace should show reads beyond `SYS0.DIR`, including later
+`SYSCOMMON/SYSEXE` directory blocks.
 
 ## SRM Firmware Images
 
@@ -526,11 +529,10 @@ to disassemble.
    SCRIPTS executor until the probe finishes and `BOOT DKA0` can be issued from
    SRM.
 
-2. Understand the direct-APB `SYSBOOT.EXE` lookup failure.
-   The APB now reaches the system root and reads `SYSEXE`-related ODS-2
-   metadata. The next check is whether its search path should be
-   `[SYS0.SYSEXE]`, `[SYS0.SYSCOMMON.SYSEXE]`, or both, and why it misses the
-   on-disk `SYSBOOT.EXE;2` header.
+2. Continue direct-APB boot tracing after the fixed `SYSBOOT.EXE` lookup
+   regression. The APB now resolves past the system-root directory search and
+   reads later `SYSCOMMON/SYSEXE` metadata. Capture the next stop without
+   relying on the old `%APB-I-FILENOTLOC` failure.
 
 3. Keep tightening the remaining SRM boot memory/page-table context.
    HWRPB VPTB/processor-slot `PTBR`/`PT_VA`, the MDDT cluster layout, and APB

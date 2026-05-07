@@ -48,6 +48,9 @@
   Mikasa ICU IRQ 11.
 - [x] Add direct-APB PAL `WTINT` idle behavior and synchronize synthetic
   SIRR/AST state with the common Alpha interrupt evaluator.
+- [x] Remove the forced direct-APB `SYS%%%%%%%%%%%%%%%%...` sysroot rewrite.
+  APB resolves its boot/system root itself; padding that template to `SYS0`
+  made directory traversal stop with `%APB-I-FILENOTLOC`.
 - [x] Latch serial Ctrl-P as an OCP Halt request while still delivering the
   byte to the guest UART path.
 - [x] Refine the OCP/LCD shell so port `0x531` reports busy clear instead of
@@ -411,8 +414,10 @@
 - [ ] Implement real DECchip 21040 receive path, packet I/O, and full
   descriptor processing beyond the current SRM setup-frame transmit shell.
 - [ ] Re-run SRM/APB smoke tests after the next hardware batch.
-- [ ] Continue the direct-APB `SYSBOOT.EXE;2` lookup investigation under
-  `[SYS0.SYSEXE]` and `[SYS0.SYSCOMMON.SYSEXE]`.
+- [ ] Continue the direct-APB investigation after the old `SYSBOOT.EXE;2`
+  lookup failure. APB now reads past `SYS0.DIR` and fetches later
+  `SYSCOMMON/SYSEXE` directory blocks; the next blocker is whatever happens
+  after those reads, not the previous `%APB-I-FILENOTLOC` stop.
 
 ## Not Started / Deferred
 
@@ -663,5 +668,5 @@ V5.4-101, built on Mar 24 1999 at 13:58:27
   `INQUIRY` scan.
 - With no disks attached, target timeouts must complete cleanly instead of
   causing an endless low-level controller loop.
-- The direct APB diagnostic must not regress before the known
-  `SYSBOOT.EXE` lookup stop.
+- The direct APB diagnostic must not regress back to the old
+  `%APB-I-FILENOTLOC` `SYSBOOT.EXE` lookup stop.
