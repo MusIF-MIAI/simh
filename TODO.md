@@ -190,6 +190,9 @@
 - [x] Return a valid standard INQUIRY "no logical unit present" response for
   non-zero LUNs instead of treating every non-zero LUN INQUIRY as check
   condition.
+- [x] Limit standard SCSI INQUIRY DATA IN to the response length advertised
+  by the additional-length byte instead of padding the whole allocation
+  length; this now produces the expected 36-byte short transfer for LUN 0 too.
 - [x] Limit phase-specific auxiliary NCR SCRIPTS scans to the current phase
   run, so `MESSAGE OUT`/DATA discovery no longer wanders into later dispatcher
   paths after the target has advanced to another phase.
@@ -315,6 +318,9 @@
   cleanup; SRM still reaches `V5.4-101`, pka/ewa are detected, and the log no
   longer prints false queue tags in `MESSAGE OUT`. The remaining blocker is
   still repeated SCSI `INQUIRY` discovery loops with no `READ CAPACITY` yet.
+- [x] Re-run SRM ROM smoke after limiting standard INQUIRY transfer length;
+  LUN 0 now reports the same 219-byte residual as the no-LUN INQUIRY path, but
+  SRM still repeats discovery and still never issues `READ CAPACITY`.
 - [x] Re-run SRM ROM smoke after PIC/ELCR edge-vs-level handling; it still
   reaches `V5.4-101` and detects pka/ewa.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each

@@ -167,6 +167,9 @@ Not implemented yet:
   `GEN[3:0]`. `MESSAGE OUT` buffers are now parsed before command
   execution: `IDENTIFY` records the LUN, queue tags are retained, extended
   messages are skipped cleanly, and ATN is cleared after the handshake.
+  Standard INQUIRY responses now transfer only the bytes advertised by the
+  additional-length field, so allocation lengths larger than the response do
+  not make the target pad DATA IN to the initiator's full request.
   `CTEST3` now preserves the 53C810 revision nibble and handles FIFO
   clear/flush writes against the local FIFO-empty model. `DFIFO.BO[6:0]`
   mirrors the low seven bits of `DBC`, so documented FIFO residual

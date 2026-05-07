@@ -4634,7 +4634,8 @@ switch (cdb[0]) {
         memcpy (&buf[8], "DEC     ", 8);
         memcpy (&buf[16], "RZ58     (C) DEC", 16);
         memcpy (&buf[32], "2000", 4);
-        len = mikasa_ncr_min3 (data->bytes, cdb[4], sizeof (buf));
+        len = mikasa_ncr_min3 (data->bytes, cdb[4],
+            5 + (uint32) buf[4]);
         mikasa_ncr_clear_sense (unit);
         return mikasa_ncr_write_scsi_data (data, buf, len);
 
