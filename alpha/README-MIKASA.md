@@ -24,6 +24,11 @@ Implemented:
   - APECS PCI config cycles decode across the full 512 MB sparse aperture at
     `0x1E0000000`, so type-1 probes outside bus 0 return normal absent-device
     config data instead of falling through as unhandled host-bridge I/O.
+  - A Cirrus GD5446-compatible VGA probe shell is present at PCI slot 2. It
+    exposes the expected PCI identity and writable BAR/command fields, handles
+    legacy VGA indexed I/O ports, and absorbs legacy VGA memory plus option-ROM
+    probes through both the PCI option-ROM BAR and low `0xA0000..0xCFFFF`
+    ranges without latching false `EPIC.NDEV` errors.
   - EPIC sparse PCI memory accesses now use `HAXR1` for high-address
     extension, and EPIC DMA window registers preserve the documented writable
     fields used by the PCI DMA mapper.
@@ -248,12 +253,14 @@ Not implemented yet:
   keeping SRM/VMS-sensitive INQUIRY, READ CAPACITY, READ/WRITE, MODE SENSE,
   VPD, and REQUEST SENSE behavior in the local shim until the common backend
   can match it.
-- Full Ethernet, VGA, full NVRAM, and multiprocessor support. A DECchip 21040
+- Full Ethernet, VGA display/BIOS, full NVRAM, and multiprocessor support. A
+  DECchip 21040
   PCI/CSR shell exists so firmware and OS probes see a plausible DEC Ethernet
   device, including basic reset/status/run-state behavior, legacy Ethernet
   Address ROM reads, CSR9 EEPROM/SROM reads, and minimal transmit-descriptor
   ownership completion for SRM setup frames, but real packet I/O is not
-  implemented yet.
+  implemented yet. The current Cirrus/VGA path is a probe shell, not a video
+  renderer.
 - A complete SRM-compatible firmware execution environment. The real SRM image
   now reaches the SRM banner and receives serial input, but it does not reach
   an SRM prompt yet.
@@ -446,6 +453,11 @@ port `0x531`; the first status read after the `0xC0` LCD command returns busy
 and later reads return `0x00`. SRM still does not enter `P00>>>`, and sending
 Ctrl-P after the banner does not change that, so the remaining blocker is in
 the console-manager wait/event path rather than the old false OCP address bit.
+A test-only front-panel Halt mapping to OCP status bit `0x40` was visible to
+SRM but kept the firmware in the same OCP polling helper. AXPbox does not
+settle this for Mikasa: its telnet BREAK path opens the emulator menu, and its
+`HaltA`/`HaltB` state belongs to ES40 TIG registers rather than this OCP/DPR
+interface.
 
 Use a PTY or the remote-console proxy for this class of debug. Injecting WRU
 through a plain stdin pipe is not reliable enough to recover `sim>` state after

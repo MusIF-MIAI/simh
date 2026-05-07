@@ -58,6 +58,10 @@
   state and Ctrl-P halt state separate.
 - [x] Separate the OCP/LCD address counter from the front-panel status value
   and add a short LCD busy transition after command/data writes.
+- [x] Verify the AXPbox/ES40 halt-button model is not directly usable for
+  Mikasa: telnet BREAK opens the emulator control menu, while its `HaltA` and
+  `HaltB` state lives in ES40 TIG registers rather than the Mikasa OCP/DPR path
+  currently polled by SRM.
 - [x] Add NCR/Symbios 53C810 PCI config, I/O BAR, memory BAR, register shell,
   interrupt status, abort, reset, and select-timeout behavior.
 - [x] Mirror the NCR/Symbios 53C810 operating registers through both halves of
@@ -146,6 +150,11 @@
 - [x] Expand the APECS PCI configuration sparse aperture to the full 512 MB
   range used by the 21071 host bridge, so type-1 probes such as bus `0x40`
   decode as absent PCI config reads instead of unhandled APECS I/O.
+- [x] Add a minimal Cirrus GD5446-compatible VGA PCI/legacy shell for Mikasa
+  slot 2, including config-space identity/BAR masks, VGA indexed I/O ports,
+  legacy `0xA0000..0xBFFFF` memory, the PCI option-ROM BAR, and the low
+  `0xC0000` option-ROM probe range so normal firmware-visible VGA probes do
+  not falsely latch `EPIC.NDEV`.
 - [x] Update NCR `SFBR` with the transferred byte for handled status/message
   phases and the last byte of handled data-in transfers.
 - [x] Reflect SCSI bus data in low-level NCR latches: input phases update
@@ -426,7 +435,15 @@
   status cleanup, SRM still polls OCP status from `RA=0x9777C` with value
   `0x00`; sending Ctrl-P after the banner does not produce `P00>>>`, so the
   remaining blocker is not simply the previous false `0x40` halt/address bit.
-- [ ] Decide whether VGA/Cirrus probing is required for the real AS1000 path.
+- [ ] Identify the real Mikasa front-panel/RMC halt input. A test-only
+  `HALTBTN` mapped to OCP status bit `0x40` is visible to SRM, but it leaves
+  the firmware spinning in the OCP polling helper instead of entering the
+  prompt, so that bit is not the full console-mode request semantics.
+- [ ] Resolve the remaining SRM sparse-memory probe at physical `0x201800008`.
+  With HAXR1 still carrying high PCI address bits, this decodes as a high
+  alias of the VGA legacy `0xC0000` option-ROM area and still latches
+  `EPIC.NDEV`; decide from APECS/SRM behavior whether HAXR1 should apply to
+  that legacy probe or whether the firmware expects a non-error VGA response.
 - [ ] Implement real DECchip 21040 receive path, packet I/O, and full
   descriptor processing beyond the current SRM setup-frame transmit shell.
 - [ ] Re-run SRM/APB smoke tests after the next hardware batch.
@@ -438,7 +455,8 @@
 
 ## Not Started / Deferred
 
-- [ ] Full VGA implementation.
+- [ ] Full VGA display/BIOS implementation beyond the current PCI/legacy probe
+  shell.
 - [ ] Full floppy data path.
 - [ ] Multiprocessor support.
 - [ ] Redistributable regression tests that do not require the recovered disk

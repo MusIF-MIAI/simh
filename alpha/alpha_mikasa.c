@@ -224,11 +224,18 @@
 #define MIKASA_EPIC_SGMAP_PFN       0x00000000001FFFFEULL
 #define MIKASA_EPIC_DCSR_PASS2      0x80000000u
 /* On-board devices use raw APECS IDSEL slots; SRM prints virtual slots. */
+#define MIKASA_PCI_SLOT_VGA         2
 #define MIKASA_PCI_SLOT_SCSI        6
 /* SRM reports the EISA bridge as virtual slot 2; config cycles use IDSEL 7. */
 #define MIKASA_PCI_SLOT_PCEB        7
 #define MIKASA_PCI_SLOT_TULIP       11
 #define MIKASA_PCI_CFG_DWORDS       64
+#define MIKASA_VGA_LEGACY_BASE      0x000A0000u
+#define MIKASA_VGA_LEGACY_SIZE      0x00020000u
+#define MIKASA_VGA_ROM_BASE         0x000C0000u
+#define MIKASA_VGA_ROM_SIZE         0x00010000u
+#define MIKASA_VGA_FB_MASK          0xFC000000u
+#define MIKASA_VGA_ROM_MASK         0xFFFF0000u
 #define MIKASA_TULIP_REG_SIZE       0x80
 #define MIKASA_TULIP_BAR_SIZE       0x80
 #define MIKASA_TULIP_BAR_MASK       0xFFFFFF80u
@@ -1080,6 +1087,13 @@ static uint32 mikasa_tulip_tx_cur = 0;
 static uint32 mikasa_tulip_rx_base = 0;
 static uint32 mikasa_tulip_rx_cur = 0;
 static uint32 mikasa_tulip_desc_skip = 0;
+static uint32 mikasa_vga_cfg[MIKASA_PCI_CFG_DWORDS] = { 0 };
+static uint8 mikasa_vga_reg[0x20] = { 0 };
+static uint8 mikasa_vga_crtc_index = 0;
+static uint8 mikasa_vga_seq_index = 0;
+static uint8 mikasa_vga_gfx_index = 0;
+static uint8 mikasa_vga_attr_index = 0;
+static t_bool mikasa_vga_attr_addr = TRUE;
 static uint32 mikasa_ncr_script_trace_count = 0;
 static uint32 mikasa_ncr_disc_pass = 0;
 static t_bool mikasa_ncr_disc_pass_armed = FALSE;
@@ -2501,6 +2515,58 @@ switch (reg) {
     case 0x10:
     case 0x14:
         return MIKASA_TULIP_BAR_MASK;
+
+    case 0x3C:
+        return 0x000000FFu;
+
+    default:
+        return 0;
+        }
+}
+
+static t_bool mikasa_vga_bar_reg (uint32 addr, uint32 bar, uint32 mask,
+    uint32 *reg)
+{
+uint32 base = mikasa_vga_cfg[bar >> 2] & mask;
+
+if (base == 0)
+    return FALSE;
+if ((addr >= base) && (addr < (base + 0x04000000u))) {
+    *reg = addr - base;
+    return TRUE;
+    }
+return FALSE;
+}
+
+static t_bool mikasa_vga_rom_reg (uint32 addr, uint32 *reg)
+{
+uint32 base = mikasa_vga_cfg[0x30 >> 2] & MIKASA_VGA_ROM_MASK;
+
+if ((mikasa_vga_cfg[0x30 >> 2] & 1) == 0)
+    return FALSE;
+if (base == 0)
+    return FALSE;
+if ((addr >= base) && (addr < (base + MIKASA_VGA_ROM_SIZE))) {
+    *reg = addr - base;
+    return TRUE;
+    }
+return FALSE;
+}
+
+static uint32 mikasa_vga_conf_mask (uint32 reg)
+{
+switch (reg) {
+    case 0x04:
+        return 0x00000157u;
+
+    case 0x0C:
+        return 0x0000FFFFu;
+
+    case 0x10:
+        return MIKASA_VGA_FB_MASK;
+
+    case 0x30:
+        return MIKASA_VGA_ROM_MASK | 1u;
 
     case 0x3C:
         return 0x000000FFu;
@@ -6423,6 +6489,26 @@ if (mask != 0)
 return;
 }
 
+static uint32 mikasa_vga_conf_read_l (uint32 func, uint32 reg)
+{
+if (func != 0)
+    return 0xFFFFFFFFu;
+return mikasa_vga_cfg[reg >> 2];
+}
+
+static void mikasa_vga_conf_write_l (uint32 func, uint32 reg, uint32 val)
+{
+uint32 mask;
+
+if (func != 0)
+    return;
+mask = mikasa_vga_conf_mask (reg);
+if (mask != 0)
+    mikasa_vga_cfg[reg >> 2] =
+        mikasa_masked_update (mikasa_vga_cfg[reg >> 2], val, mask);
+return;
+}
+
 static uint32 mikasa_pci_conf_read_l (uint32 cfg)
 {
 uint32 bus = (cfg >> 16) & 0xFF;
@@ -6431,6 +6517,13 @@ uint32 func = (cfg >> 8) & 7;
 uint32 reg = cfg & 0xFC;
 uint32 val = 0xFFFFFFFFu;
 
+if ((bus == 0) && (slot == MIKASA_PCI_SLOT_VGA)) {
+    val = mikasa_vga_conf_read_l (func, reg);
+    sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+        "PCI config read bus %u slot %u func %u reg %02X=%08X\n",
+        bus, slot, func, reg, val);
+    return val;
+    }
 if ((bus == 0) && (slot == MIKASA_PCI_SLOT_PCEB)) {
     val = (func == 0) ? mikasa_pceb_cfg[reg >> 2] : 0xFFFFFFFFu;
     sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
@@ -6465,6 +6558,13 @@ uint32 slot = (cfg >> 11) & 0x1F;
 uint32 func = (cfg >> 8) & 7;
 uint32 reg = cfg & 0xFC;
 
+if ((bus == 0) && (slot == MIKASA_PCI_SLOT_VGA)) {
+    mikasa_vga_conf_write_l (func, reg, val);
+    sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+        "PCI config write bus %u slot %u func %u reg %02X=%08X\n",
+        bus, slot, func, reg, val);
+    return;
+    }
 if ((bus == 0) && (slot == MIKASA_PCI_SLOT_PCEB) && (func == 0)) {
     uint32 mask = mikasa_pceb_conf_mask (reg);
 
@@ -6756,6 +6856,118 @@ sim_debug (MIKASA_DBG_IO, &mikasa_dev, "KBC command write %02X\n", val);
 return;
 }
 
+static t_bool mikasa_vga_io_port (uint32 port)
+{
+return ((port >= 0x3B4) && (port <= 0x3B5)) ||
+    (port == 0x3BA) ||
+    ((port >= 0x3C0) && (port <= 0x3CF)) ||
+    ((port >= 0x3D4) && (port <= 0x3D5)) ||
+    (port == 0x3DA) ||
+    (port == 0x500);
+}
+
+static uint8 mikasa_vga_io_read (uint32 port)
+{
+uint8 val = 0xFF;
+
+switch (port) {
+    case 0x3B4:
+    case 0x3D4:
+        val = mikasa_vga_crtc_index;
+        break;
+
+    case 0x3B5:
+    case 0x3D5:
+        val = mikasa_vga_reg[mikasa_vga_crtc_index &
+            (sizeof (mikasa_vga_reg) - 1)];
+        break;
+
+    case 0x3C4:
+        val = mikasa_vga_seq_index;
+        break;
+
+    case 0x3C5:
+        val = mikasa_vga_reg[mikasa_vga_seq_index &
+            (sizeof (mikasa_vga_reg) - 1)];
+        break;
+
+    case 0x3CE:
+        val = mikasa_vga_gfx_index;
+        break;
+
+    case 0x3CF:
+        val = mikasa_vga_reg[mikasa_vga_gfx_index &
+            (sizeof (mikasa_vga_reg) - 1)];
+        break;
+
+    case 0x3C1:
+        val = mikasa_vga_reg[mikasa_vga_attr_index &
+            (sizeof (mikasa_vga_reg) - 1)];
+        break;
+
+    case 0x3BA:
+    case 0x3DA:
+        mikasa_vga_attr_addr = TRUE;
+        val = 0x00;
+        break;
+
+    default:
+        val = mikasa_vga_reg[port & (sizeof (mikasa_vga_reg) - 1)];
+        break;
+        }
+sim_debug (MIKASA_DBG_IO, &mikasa_dev, "VGA read %03X=%02X\n", port, val);
+return val;
+}
+
+static void mikasa_vga_io_write (uint32 port, uint8 val)
+{
+switch (port) {
+    case 0x3B4:
+    case 0x3D4:
+        mikasa_vga_crtc_index = val;
+        break;
+
+    case 0x3B5:
+    case 0x3D5:
+        mikasa_vga_reg[mikasa_vga_crtc_index &
+            (sizeof (mikasa_vga_reg) - 1)] = val;
+        break;
+
+    case 0x3C0:
+        if (mikasa_vga_attr_addr)
+            mikasa_vga_attr_index = val & 0x1F;
+        else
+            mikasa_vga_reg[mikasa_vga_attr_index &
+                (sizeof (mikasa_vga_reg) - 1)] = val;
+        mikasa_vga_attr_addr = !mikasa_vga_attr_addr;
+        break;
+
+    case 0x3C4:
+        mikasa_vga_seq_index = val;
+        break;
+
+    case 0x3C5:
+        mikasa_vga_reg[mikasa_vga_seq_index &
+            (sizeof (mikasa_vga_reg) - 1)] = val;
+        break;
+
+    case 0x3CE:
+        mikasa_vga_gfx_index = val;
+        break;
+
+    case 0x3CF:
+        mikasa_vga_reg[mikasa_vga_gfx_index &
+            (sizeof (mikasa_vga_reg) - 1)] = val;
+        break;
+
+    default:
+        mikasa_vga_reg[port & (sizeof (mikasa_vga_reg) - 1)] = val;
+        break;
+        }
+sim_debug (MIKASA_DBG_IO, &mikasa_dev, "VGA write %03X=%02X\n", port, val);
+return;
+}
+
 static uint8 mikasa_isa_read (uint32 port)
 {
 uint32 irr = (~mikasa_irq_summary) & M16;
@@ -6766,6 +6978,8 @@ if (mikasa_ncr_io_read (port, &val))
     return val;
 if (mikasa_tulip_io_read (port, &val))
     return val;
+if (mikasa_vga_io_port (port))
+    return mikasa_vga_io_read (port);
 if ((port >= MIKASA_ISA_DMA1) && (port < (MIKASA_ISA_DMA1 + 0x10)))
     return mikasa_dma1_reg[port - MIKASA_ISA_DMA1];
 if ((port == MIKASA_ISA_PIC1) || (port == (MIKASA_ISA_PIC1 + 1)) ||
@@ -6832,6 +7046,10 @@ if (mikasa_ncr_io_write (port, val))
     return;
 if (mikasa_tulip_io_write (port, val))
     return;
+if (mikasa_vga_io_port (port)) {
+    mikasa_vga_io_write (port, val);
+    return;
+    }
 if ((port >= MIKASA_ISA_DMA1) && (port < (MIKASA_ISA_DMA1 + 0x10))) {
     mikasa_dma1_reg[port - MIKASA_ISA_DMA1] = val;
     return;
@@ -6998,6 +7216,28 @@ uint32 mode = (uint32) ((off >> 3) & 3);
 uint32 reg;
 uint32 val;
 
+if ((addr >= MIKASA_VGA_LEGACY_BASE) &&
+    (addr < (MIKASA_VGA_LEGACY_BASE + MIKASA_VGA_LEGACY_SIZE))) {
+    sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+        "VGA legacy memory read %08X\n", addr);
+    return M32;
+    }
+if ((addr >= MIKASA_VGA_ROM_BASE) &&
+    (addr < (MIKASA_VGA_ROM_BASE + MIKASA_VGA_ROM_SIZE))) {
+    sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+        "VGA legacy ROM read %08X\n", addr);
+    return M32;
+    }
+if (mikasa_vga_rom_reg (addr, &reg)) {
+    sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+        "VGA option ROM read %08X\n", addr);
+    return M32;
+    }
+if (mikasa_vga_bar_reg (addr, 0x10, MIKASA_VGA_FB_MASK, &reg)) {
+    sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+        "VGA framebuffer read %08X\n", addr);
+    return M32;
+    }
 if (mikasa_ncr_bar_reg (addr, 0x14, 0xFFFFFFFFu, &reg)) {
     if (mode == 3)
         return mikasa_ncr_read_l (reg & ~3u);
@@ -7039,6 +7279,32 @@ uint32 mode = (uint32) ((off >> 3) & 3);
 uint32 reg;
 uint32 data;
 
+if ((addr >= MIKASA_VGA_LEGACY_BASE) &&
+    (addr < (MIKASA_VGA_LEGACY_BASE + MIKASA_VGA_LEGACY_SIZE))) {
+    sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+        "VGA legacy memory write %08X=%llX\n",
+        addr, (unsigned long long) val);
+    return;
+    }
+if ((addr >= MIKASA_VGA_ROM_BASE) &&
+    (addr < (MIKASA_VGA_ROM_BASE + MIKASA_VGA_ROM_SIZE))) {
+    sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+        "VGA legacy ROM write %08X=%llX\n",
+        addr, (unsigned long long) val);
+    return;
+    }
+if (mikasa_vga_rom_reg (addr, &reg)) {
+    sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+        "VGA option ROM write %08X=%llX\n",
+        addr, (unsigned long long) val);
+    return;
+    }
+if (mikasa_vga_bar_reg (addr, 0x10, MIKASA_VGA_FB_MASK, &reg)) {
+    sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+        "VGA framebuffer write %08X=%llX\n",
+        addr, (unsigned long long) val);
+    return;
+    }
 if (mikasa_ncr_bar_reg (addr, 0x14, 0xFFFFFFFFu, &reg)) {
     if (mode == 3)
         mikasa_ncr_write_l (reg & ~3u, (uint32) val);
@@ -9884,6 +10150,18 @@ mikasa_tulip_cfg[0x10 >> 2] = 0x00000001u;
 mikasa_tulip_cfg[0x3C >> 2] = 0x0000010Bu;
 mikasa_tulip_init_srom ();
 mikasa_tulip_reset_regs ();
+memset (mikasa_vga_cfg, 0, sizeof (mikasa_vga_cfg));
+mikasa_vga_cfg[0x00 >> 2] = 0x00A81013u;
+mikasa_vga_cfg[0x04 >> 2] = 0x011F0000u;
+mikasa_vga_cfg[0x08 >> 2] = 0x03000002u;
+mikasa_vga_cfg[0x10 >> 2] = 0xF8000000u;
+mikasa_vga_cfg[0x3C >> 2] = 0x281401FFu;
+memset (mikasa_vga_reg, 0, sizeof (mikasa_vga_reg));
+mikasa_vga_crtc_index = 0;
+mikasa_vga_seq_index = 0;
+mikasa_vga_gfx_index = 0;
+mikasa_vga_attr_index = 0;
+mikasa_vga_attr_addr = TRUE;
 memset (mikasa_pceb_cfg, 0, sizeof (mikasa_pceb_cfg));
 mikasa_pceb_cfg[0x00 >> 2] = 0x04828086u;
 mikasa_pceb_cfg[0x04 >> 2] = 0x02000007u;
