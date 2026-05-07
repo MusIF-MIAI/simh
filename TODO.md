@@ -374,7 +374,10 @@
   CAPACITY` or a visible `>>>` prompt. A 2026-05-07 probe forced both present
   and absent LUN INQUIRY replies to return the full 255-byte allocation with
   zero residual; the loop did not change, so the current blocker is not simply
-  the INQUIRY short-transfer/phase-mismatch path.
+  the INQUIRY short-transfer/phase-mismatch path. A PTY debug run with all
+  four disks and accelerated SCC loops also showed that sending `show dev`
+  after the banner produces no echo or response while NCR discovery continues,
+  so this is not just an invisible prompt.
 - [ ] Complete APECS/DECchip 21071 behavior beyond the current register shells,
   especially actually raising error causes, remaining HAE/config details, and
   DMA corner cases.

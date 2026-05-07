@@ -431,7 +431,14 @@ targets 4-6, and starts the same discovery pass again without reaching `READ
 CAPACITY` or the visible prompt. A 2026-05-07 probe forced both present and
 absent LUN INQUIRY replies to return the full 255-byte allocation with zero
 residual; the loop did not change, so the blocker is not simply the INQUIRY
-short-transfer/phase-mismatch path.
+short-transfer/phase-mismatch path. A PTY debug run with all four disks and
+accelerated SCC loops also showed that sending `show dev` after the banner
+produces no echo or response while NCR discovery continues, so this is not
+just an invisible prompt.
+
+Use a PTY or the remote-console proxy for this class of debug. Injecting WRU
+through a plain stdin pipe is not reliable enough to recover `sim>` state after
+`BOOT CPU`.
 
 APB console output is not yet routed through the SIMH console callback path.
 For the current stop, the useful history extraction is:
