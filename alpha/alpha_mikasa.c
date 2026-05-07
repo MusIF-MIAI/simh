@@ -552,6 +552,7 @@
 #define MIKASA_EISA_CRAM_PAGE_REG   0x0C00
 #define MIKASA_EISA_SLOT_ID         0x0C80
 #define MIKASA_OCP_BUSY             0x80
+#define MIKASA_OCP_HALT             0x40
 #define MIKASA_OCP_ADDR_MASK        0x7F
 #define MIKASA_OCP_DDRAM_SIZE       0x80
 
@@ -1100,6 +1101,7 @@ static uint32 mikasa_pceb_cfg[MIKASA_PCI_CFG_DWORDS] = { 0 };
 static uint8 mikasa_ocp_reg[4] = { 0 };
 static uint8 mikasa_ocp_ddram[MIKASA_OCP_DDRAM_SIZE] = { 0 };
 static uint8 mikasa_ocp_addr = 0;
+static uint8 mikasa_ocp_busy_count = 0;
 static t_bool mikasa_halt_pending = FALSE;
 uint32 mikasa_scc_scale = 1;
 
@@ -2100,8 +2102,15 @@ if (reg == 0) {
     val = mikasa_ocp_ddram[mikasa_ocp_addr & MIKASA_OCP_ADDR_MASK];
     mikasa_ocp_addr = (mikasa_ocp_addr + 1) & MIKASA_OCP_ADDR_MASK;
     }
-    else if (reg == 1)
-        val = mikasa_ocp_addr & MIKASA_OCP_ADDR_MASK;       /* busy clear */
+else if (reg == 1) {
+    val = 0;                                                /* busy clear */
+    if (mikasa_ocp_busy_count != 0) {
+        val |= MIKASA_OCP_BUSY;
+        mikasa_ocp_busy_count--;
+        }
+    if (mikasa_halt_pending)
+        val |= MIKASA_OCP_HALT;
+    }
 else
     val = mikasa_ocp_reg[reg];
 sim_debug (MIKASA_DBG_IO, &mikasa_dev,
@@ -2118,6 +2127,7 @@ mikasa_ocp_reg[reg] = val;
 if (reg == 0) {
     mikasa_ocp_ddram[mikasa_ocp_addr & MIKASA_OCP_ADDR_MASK] = val;
     mikasa_ocp_addr = (mikasa_ocp_addr + 1) & MIKASA_OCP_ADDR_MASK;
+    mikasa_ocp_busy_count = 1;
     }
 else if (reg == 1) {
     if (val & 0x80)
@@ -2130,6 +2140,7 @@ else if (reg == 1) {
         }
     else if (val == 0x02)
         mikasa_ocp_addr = 0;
+    mikasa_ocp_busy_count = 2;
     }
 sim_debug (MIKASA_DBG_IO, &mikasa_dev,
     "OCP write pc=%llX ra=%llX %u=%02X addr=%02X\n",
@@ -9881,6 +9892,7 @@ mikasa_pceb_cfg[0x40 >> 2] = 0x80800020u;
 memset (mikasa_ocp_reg, 0, sizeof (mikasa_ocp_reg));
 memset (mikasa_ocp_ddram, ' ', sizeof (mikasa_ocp_ddram));
 mikasa_ocp_addr = 0;
+mikasa_ocp_busy_count = 0;
 mikasa_halt_pending = FALSE;
 mikasa_unit.wait = MIKASA_CLOCK_DELAY;
 sim_activate (&mikasa_unit, sim_rtcn_init_unit (&mikasa_unit,

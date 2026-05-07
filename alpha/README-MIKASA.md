@@ -85,7 +85,9 @@ Implemented:
     the byte remains visible to the UART receive path.
   - The OCP/LCD shell keeps display DDRAM state separate from the Ctrl-P halt
     latch, and reports the LCD status register as busy clear instead of
-    echoing command-address bits as a permanent busy state.
+    echoing command-address bits as a permanent busy state. Command and data
+    writes also raise a short synthetic LCD busy transition for SRM polling
+    loops.
   - The DECchip 21040/Tulip shell can raise the platform ICU IRQ 11 when
     masked CSR5 status bits are enabled in CSR7.
   - `DEP MIKASA SCCSCALE <n>` can be used as a debug accelerator for SRM
@@ -433,6 +435,14 @@ short-transfer/phase-mismatch path. A PTY debug run with all four disks and
 accelerated SCC loops also showed that sending `show dev` after the banner
 produces no echo or response while NCR discovery continues, so this is not
 just an invisible prompt.
+
+A later OCP-focused trace showed that the post-banner firmware polls OCP
+status from the sparse-I/O wrapper returning at `0x9777C`. The model now keeps
+the LCD address counter internal and returns only busy/Halt status bits from
+port `0x531`; the first status read after the `0xC0` LCD command returns busy
+and later reads return `0x00`. SRM still does not enter `P00>>>`, and sending
+Ctrl-P after the banner does not change that, so the remaining blocker is in
+the console-manager wait/event path rather than the old false OCP address bit.
 
 Use a PTY or the remote-console proxy for this class of debug. Injecting WRU
 through a plain stdin pipe is not reliable enough to recover `sim>` state after

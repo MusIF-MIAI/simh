@@ -56,6 +56,8 @@
 - [x] Refine the OCP/LCD shell so port `0x531` reports busy clear instead of
   echoing command-address bits as a permanent busy state; keep display DDRAM
   state and Ctrl-P halt state separate.
+- [x] Separate the OCP/LCD address counter from the front-panel status value
+  and add a short LCD busy transition after command/data writes.
 - [x] Add NCR/Symbios 53C810 PCI config, I/O BAR, memory BAR, register shell,
   interrupt status, abort, reset, and select-timeout behavior.
 - [x] Mirror the NCR/Symbios 53C810 operating registers through both halves of
@@ -417,6 +419,10 @@
 - [ ] Identify the real AlphaServer 1000 NVRAM layout and encode SRM console
   defaults such as console mode, auto_action, boot device, and boot flags.
 - [ ] Validate OCP/Halt/Ctrl-P behavior against SRM console transitions.
+- [ ] Trace the SRM post-banner console-manager wait/event loop. After the OCP
+  status cleanup, SRM still polls OCP status from `RA=0x9777C` with value
+  `0x00`; sending Ctrl-P after the banner does not produce `P00>>>`, so the
+  remaining blocker is not simply the previous false `0x40` halt/address bit.
 - [ ] Decide whether VGA/Cirrus probing is required for the real AS1000 path.
 - [ ] Implement real DECchip 21040 receive path, packet I/O, and full
   descriptor processing beyond the current SRM setup-frame transmit shell.
