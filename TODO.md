@@ -339,6 +339,20 @@
 - [x] Re-run SRM ROM smoke after limiting standard INQUIRY transfer length;
   LUN 0 now reports the same 219-byte residual as the no-LUN INQUIRY path, but
   SRM still repeats discovery and still never issues `READ CAPACITY`.
+- [x] Add compact NCR discovery-loop tracing (`SET MIKASA DEBUG=NCRDISC`) that
+  logs scan-pass restarts, CDB dispatch, completion vectors, timeout vectors,
+  and key SRM-side NCR register reads without the full PCI trace noise.
+- [x] Re-run SRM ROM smoke with `NCRDISC` tracing: the loop restart site stays
+  stable (`PC=0x120618`, parent return address `0xAE2EC`) and SRM repeatedly
+  scans targets 0-3 LUNs 0-7, then times out targets 4-6.
+- [x] Route standard and no-LUN INQUIRY DATA IN through allocation-length
+  padded transfers (zero-filled tail) to prevent the forced
+  `mismatch-resid=219` path in the current NCR frontend.
+- [x] Re-run SRM ROM smoke after INQUIRY padded completion: `mismatch-resid`
+  is gone and INQUIRY completions now report `resid=0` with paired
+  `DSTAT.SIR` vectors (`DSPS=9` then `DSPS=0`), but SRM still remains in the
+  same discovery loop and still does not issue `READ CAPACITY` within the
+  smoke-test window.
 - [x] Add NCR debug-state trace points around SRM SCSI CDB dispatch,
   completion status, phase mismatches, SIP/DIP signalling, select timeouts,
   and register reads/writes. The trace now includes the current firmware PC so
@@ -371,13 +385,13 @@
 - [ ] Debug the current SRM post-banner discovery loop: after the latest NCR
   fixes SRM repeatedly issues standard `INQUIRY` to targets 0-3 and LUNs 0-7,
   then select-times-out targets 4-6. It has not yet advanced to `READ
-  CAPACITY` or a visible `>>>` prompt. A 2026-05-07 probe forced both present
-  and absent LUN INQUIRY replies to return the full 255-byte allocation with
-  zero residual; the loop did not change, so the current blocker is not simply
-  the INQUIRY short-transfer/phase-mismatch path. A PTY debug run with all
-  four disks and accelerated SCC loops also showed that sending `show dev`
-  after the banner produces no echo or response while NCR discovery continues,
-  so this is not just an invisible prompt.
+  CAPACITY` or a visible `>>>` prompt. As of 2026-05-07, INQUIRY residual
+  mismatch is no longer the direct trigger (`resid=0`, paired `DSPS=9/0`
+  completions), so the blocker has moved to later SRM-side acceptance logic in
+  the same scan path. A PTY debug run with all four disks and accelerated SCC
+  loops also showed that sending `show dev` after the banner produces no echo
+  or response while NCR discovery continues, so this is not just an invisible
+  prompt.
 - [ ] Complete APECS/DECchip 21071 behavior beyond the current register shells,
   especially actually raising error causes, remaining HAE/config details, and
   DMA corner cases.
