@@ -70,6 +70,10 @@ Implemented:
   - The 8259 pair now honors ELCR edge-vs-level triggering: reserved ELCR bits
     read as zero, edge IRQs latch only on rising edges, level IRQs track the
     asserted input line, and active level IRQs can reassert after EOI.
+  - The ISA 8254 PIT is modeled with count/status latches, read-back,
+    low/high-byte reloads, channel countdown, and IRQ0 pulses through the PIC.
+    The platform service timer is calibrated at 100 Hz and also drives RTC and
+    UART polling.
   - `DEP MIKASA SCCSCALE <n>` can be used as a debug accelerator for SRM
     delay loops. The default is `1`, which preserves the normal PAL `RSCC`
     counter behavior.

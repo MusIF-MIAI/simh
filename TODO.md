@@ -29,6 +29,9 @@
   and parameter-command responses for standard I/O probes.
 - [x] Add optional file-backed 128-byte RTC/NVRAM image support with default
   RTC values and alarm/update/periodic interrupt state.
+- [x] Add a calibrated ISA timer service and 8254 PIT model with count/status
+  latch, read-back, 16-bit reload, channel countdown, and IRQ0 delivery
+  through the 8259 PIC.
 - [x] Add 8259 PIC init, mask/pending/in-service, EOI, auto-EOI, cascade IACK,
   and ELCR edge/level-trigger storage.
 - [x] Honor 8259 ELCR edge-vs-level behavior: edge IRQs latch only on rising
@@ -565,6 +568,8 @@ the real path works.
   - current branch has host-backed time-of-day, status A/B/C/D,
     update/periodic/alarm flags, interrupt behavior, and optional file-backed
     128-byte NVRAM storage;
+  - current branch drives RTC/UART/PIT service from a calibrated 100 Hz SIMH
+    timer and models the ISA 8254 PIT channel registers and IRQ0 path;
   - plausible defaults for `console serial`, `auto_action`, boot device, and
     boot flags still require the AS1000 NVRAM layout.
 - Improve OCP/Halt/Ctrl-P handling:

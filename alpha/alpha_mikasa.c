@@ -418,11 +418,25 @@
 #define MIKASA_NCR_INTBIT           (1u << MIKASA_NCR_IRQ)
 #define MIKASA_RTC_IRQ              8
 #define MIKASA_RTC_INTBIT           (1u << MIKASA_RTC_IRQ)
+#define MIKASA_PIT_IRQ              0
 #define MIKASA_ICU_HWRE_LEVEL       2
 #define MIKASA_PIC_HWRE_LEVEL       1
 #define MIKASA_ELCR1_WRITABLE       0xF8
 #define MIKASA_ELCR2_WRITABLE       0xDE
-#define MIKASA_RTC_TICK             10000
+#define MIKASA_CLOCK_TMR            0
+#define MIKASA_CLOCK_HZ             100
+#define MIKASA_CLOCK_DELAY          10000
+#define MIKASA_PIT_HZ               1193182u
+#define MIKASA_PIT_CHANNELS         3
+#define MIKASA_PIT_ACCESS_LATCH     0
+#define MIKASA_PIT_ACCESS_LO        1
+#define MIKASA_PIT_ACCESS_HI        2
+#define MIKASA_PIT_ACCESS_LOHI      3
+#define MIKASA_PIT_MODE_TERMINAL    0
+#define MIKASA_PIT_MODE_RATE        2
+#define MIKASA_PIT_MODE_SQUARE      3
+#define MIKASA_PIT_STATUS_OUT       0x80
+#define MIKASA_PIT_STATUS_NULL      0x40
 #define MIKASA_NCR_DSPS_OK          0
 #define MIKASA_NCR_DSPS_DAT_OUT     8
 #define MIKASA_NCR_DSPS_DAT_IN      9
@@ -710,6 +724,23 @@ typedef struct {
     uint8 status;
     } MIKASA_NCR_TRANSACTION;
 
+typedef struct {
+    uint32 reload;
+    uint32 counter;
+    uint32 latch;
+    uint32 write_latch;
+    uint8 access;
+    uint8 mode;
+    uint8 write_state;
+    uint8 read_state;
+    uint8 status;
+    t_bool bcd;
+    t_bool running;
+    t_bool latched;
+    t_bool status_latched;
+    t_bool null_count;
+    } MIKASA_PIT_CHANNEL;
+
 uint32 mikasa_irq_mask = 0;
 uint32 mikasa_irq_summary = 0;
 t_uint64 mikasa_hwrpb_pa = MIKASA_HWRPB_PA;
@@ -787,6 +818,8 @@ static t_stat mikasa_load_axpbox_rom (FILE *fileref, const char *path,
     const uint8 *header);
 static t_stat mikasa_load_raw_rom_payload (FILE *fileref, t_offset fsize,
     const char *path);
+static t_uint64 mikasa_debug_frame_ra (void);
+static t_uint64 mikasa_debug_parent_frame_ra (void);
 static t_stat mikasa_write_le64 (FILE *fileref, t_uint64 val);
 static t_uint64 mikasa_sum_qwords (t_uint64 pa, uint32 size);
 static t_uint64 mikasa_fill_bitmap (t_uint64 bitmap_pa, t_uint64 bits);
@@ -888,6 +921,10 @@ static void mikasa_uart_update_irq (void);
 static void mikasa_uart_poll (void);
 static uint8 mikasa_uart_read (uint32 port);
 static void mikasa_uart_write (uint32 port, uint8 val);
+static void mikasa_pit_reset (void);
+static uint8 mikasa_pit_read (uint32 port);
+static void mikasa_pit_write (uint32 port, uint8 val);
+static void mikasa_pit_tick (void);
 static uint8 mikasa_isa_read (uint32 port);
 static void mikasa_isa_write (uint32 port, uint8 val);
 static t_uint64 mikasa_comanche_read (t_uint64 pa, uint32 lnt);
@@ -939,8 +976,8 @@ static uint8 mikasa_dma2_reg[0x20] = { 0 };
 static uint8 mikasa_dma_page_reg[0x10] = { 0 };
 static uint8 mikasa_cfg_index = 0;
 static uint8 mikasa_cfg_reg[256] = { 0 };
-static uint8 mikasa_pit_mode = 0;
-static uint8 mikasa_pit_reg[3] = { 0 };
+static MIKASA_PIT_CHANNEL mikasa_pit[MIKASA_PIT_CHANNELS];
+static uint32 mikasa_pit_accum = 0;
 static uint8 mikasa_kbc_cmd_byte = 0;
 static uint8 mikasa_kbc_out_port = MIKASA_KBC_OUT_NORMAL;
 static uint8 mikasa_kbc_pending_cmd = 0;
@@ -1064,6 +1101,30 @@ DEVICE mikasa_dev = {
     DEV_DIB|DEV_DEBUG, 0, mikasa_debug
     };
 
+static t_uint64 mikasa_debug_frame_ra (void)
+{
+t_uint64 addr = R[29] + 8;
+
+if (!ADDR_IS_MEM (addr + 7))
+    return 0;
+return mikasa_read_phys_quad (addr);
+}
+
+static t_uint64 mikasa_debug_parent_frame_ra (void)
+{
+t_uint64 gp_addr = R[29] + 32;
+t_uint64 gp;
+t_uint64 addr;
+
+if (!ADDR_IS_MEM (gp_addr + 7))
+    return 0;
+gp = mikasa_read_phys_quad (gp_addr);
+addr = gp + 8;
+if (!ADDR_IS_MEM (addr + 7))
+    return 0;
+return mikasa_read_phys_quad (addr);
+}
+
 static void mikasa_uart_update_irq (void)
 {
 mikasa_pic_set_irq (MIKASA_UART_IRQ,
@@ -1082,7 +1143,11 @@ if (c >= SCPE_KFLAG) {
     mikasa_uart_rbr = (uint8) (c & M8);
     mikasa_uart_rbr_valid = TRUE;
     sim_debug (MIKASA_DBG_UART, &mikasa_dev,
-        "COM1 receive %02X\n", mikasa_uart_rbr);
+        "COM1 receive pc=%llX ra=%llX fra=%llX pra=%llX %02X\n",
+        (unsigned long long) PC, (unsigned long long) R[26],
+        (unsigned long long) mikasa_debug_frame_ra (),
+        (unsigned long long) mikasa_debug_parent_frame_ra (),
+        mikasa_uart_rbr);
     mikasa_uart_update_irq ();
     }
 return;
@@ -1101,7 +1166,11 @@ switch (reg) {
         if (mikasa_uart_rbr_valid) {
             mikasa_uart_rbr_valid = FALSE;
             sim_debug (MIKASA_DBG_UART, &mikasa_dev,
-                "COM1 read RBR %02X\n", mikasa_uart_rbr);
+                "COM1 read pc=%llX ra=%llX fra=%llX pra=%llX RBR %02X\n",
+                (unsigned long long) PC, (unsigned long long) R[26],
+                (unsigned long long) mikasa_debug_frame_ra (),
+                (unsigned long long) mikasa_debug_parent_frame_ra (),
+                mikasa_uart_rbr);
             mikasa_uart_update_irq ();
             return mikasa_uart_rbr;
             }
@@ -1154,7 +1223,10 @@ switch (reg) {
         else {
             c = sim_tt_outcvt (val, TT_MODE_8B);
             sim_debug (MIKASA_DBG_UART, &mikasa_dev,
-                "COM1 transmit %02X\n", val);
+                "COM1 transmit pc=%llX ra=%llX fra=%llX pra=%llX %02X\n",
+                (unsigned long long) PC, (unsigned long long) R[26],
+                (unsigned long long) mikasa_debug_frame_ra (),
+                (unsigned long long) mikasa_debug_parent_frame_ra (), val);
             if (c >= 0)
                 (void) sim_putchar_s (c);
             }
@@ -1166,7 +1238,10 @@ switch (reg) {
         else {
             mikasa_uart_ier = val;
             sim_debug (MIKASA_DBG_UART, &mikasa_dev,
-                "COM1 IER=%02X\n", val);
+                "COM1 write pc=%llX ra=%llX fra=%llX pra=%llX IER=%02X\n",
+                (unsigned long long) PC, (unsigned long long) R[26],
+                (unsigned long long) mikasa_debug_frame_ra (),
+                (unsigned long long) mikasa_debug_parent_frame_ra (), val);
             mikasa_uart_update_irq ();
             }
         break;
@@ -1174,13 +1249,19 @@ switch (reg) {
     case 3:
         mikasa_uart_lcr = val;
         sim_debug (MIKASA_DBG_UART, &mikasa_dev,
-            "COM1 LCR=%02X\n", val);
+            "COM1 write pc=%llX ra=%llX fra=%llX pra=%llX LCR=%02X\n",
+            (unsigned long long) PC, (unsigned long long) R[26],
+            (unsigned long long) mikasa_debug_frame_ra (),
+            (unsigned long long) mikasa_debug_parent_frame_ra (), val);
         break;
 
     case 4:
         mikasa_uart_mcr = val;
         sim_debug (MIKASA_DBG_UART, &mikasa_dev,
-            "COM1 MCR=%02X\n", val);
+            "COM1 write pc=%llX ra=%llX fra=%llX pra=%llX MCR=%02X\n",
+            (unsigned long long) PC, (unsigned long long) R[26],
+            (unsigned long long) mikasa_debug_frame_ra (),
+            (unsigned long long) mikasa_debug_parent_frame_ra (), val);
         break;
 
     case 7:
@@ -1573,23 +1654,264 @@ if ((status != 0) && (mikasa_irq_mask & MIKASA_RTC_INTBIT)) {
     mikasa_irq_update ();
     }
 mikasa_uart_poll ();
-sim_activate (uptr, MIKASA_RTC_TICK);
+mikasa_pit_tick ();
+sim_activate (uptr, sim_rtcn_calb (MIKASA_CLOCK_HZ, MIKASA_CLOCK_TMR));
 return SCPE_OK;
+}
+
+static void mikasa_pit_reset (void)
+{
+uint32 i;
+
+memset (mikasa_pit, 0, sizeof (mikasa_pit));
+for (i = 0; i < MIKASA_PIT_CHANNELS; i++) {
+    mikasa_pit[i].access = MIKASA_PIT_ACCESS_LOHI;
+    mikasa_pit[i].mode = MIKASA_PIT_MODE_TERMINAL;
+    mikasa_pit[i].null_count = TRUE;
+    }
+mikasa_pit_accum = 0;
+mikasa_pic_set_irq (MIKASA_PIT_IRQ, FALSE);
+return;
+}
+
+static uint32 mikasa_pit_delta (void)
+{
+uint32 delta = MIKASA_PIT_HZ / MIKASA_CLOCK_HZ;
+
+mikasa_pit_accum += MIKASA_PIT_HZ % MIKASA_CLOCK_HZ;
+if (mikasa_pit_accum >= MIKASA_CLOCK_HZ) {
+    mikasa_pit_accum -= MIKASA_CLOCK_HZ;
+    delta++;
+    }
+return delta;
+}
+
+static uint8 mikasa_pit_status (uint32 chan)
+{
+MIKASA_PIT_CHANNEL *pit = &mikasa_pit[chan];
+uint8 mode = pit->mode;
+uint8 status = ((!pit->running || (mode != MIKASA_PIT_MODE_TERMINAL)) ?
+    MIKASA_PIT_STATUS_OUT : 0) |
+    (pit->null_count ? MIKASA_PIT_STATUS_NULL : 0) |
+    ((pit->access & 3) << 4) | ((mode & 7) << 1) |
+    (pit->bcd ? 1 : 0);
+
+return status;
+}
+
+static void mikasa_pit_latch_count (uint32 chan)
+{
+MIKASA_PIT_CHANNEL *pit = &mikasa_pit[chan];
+
+if (!pit->latched) {
+    pit->latch = pit->counter & 0xFFFFu;
+    pit->latched = TRUE;
+    pit->read_state = 0;
+    }
+return;
+}
+
+static uint8 mikasa_pit_read_counter (MIKASA_PIT_CHANNEL *pit, uint32 val,
+    t_bool *done)
+{
+uint8 ret;
+
+*done = TRUE;
+switch (pit->access) {
+
+    case MIKASA_PIT_ACCESS_LO:
+        ret = val & 0xFF;
+        break;
+
+    case MIKASA_PIT_ACCESS_HI:
+        ret = (val >> 8) & 0xFF;
+        break;
+
+    case MIKASA_PIT_ACCESS_LOHI:
+    default:
+        if (pit->read_state == 0) {
+            pit->read_state = 1;
+            *done = FALSE;
+            ret = val & 0xFF;
+            }
+        else {
+            pit->read_state = 0;
+            ret = (val >> 8) & 0xFF;
+            }
+        break;
+        }
+return ret;
 }
 
 static uint8 mikasa_pit_read (uint32 port)
 {
-if (port == (MIKASA_ISA_PIT + 3))
-    return mikasa_pit_mode;
-return mikasa_pit_reg[port - MIKASA_ISA_PIT];
+uint32 chan = port - MIKASA_ISA_PIT;
+MIKASA_PIT_CHANNEL *pit;
+uint8 ret;
+t_bool done;
+
+if (chan >= MIKASA_PIT_CHANNELS)
+    return 0;
+pit = &mikasa_pit[chan];
+if (pit->status_latched) {
+    pit->status_latched = FALSE;
+    sim_debug (MIKASA_DBG_IO, &mikasa_dev, "PIT%u status read %02X\n",
+        chan, pit->status);
+    return pit->status;
+    }
+ret = mikasa_pit_read_counter (pit,
+    pit->latched ? pit->latch : (pit->counter & 0xFFFFu), &done);
+if (pit->latched && done)
+    pit->latched = FALSE;
+sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+    "PIT%u read %02X reload=%u counter=%u\n",
+    chan, ret, pit->reload, pit->counter);
+return ret;
+}
+
+static void mikasa_pit_load_counter (uint32 chan, uint32 count)
+{
+MIKASA_PIT_CHANNEL *pit = &mikasa_pit[chan];
+
+pit->reload = count ? count : 0x10000u;
+pit->counter = pit->reload;
+pit->running = TRUE;
+pit->null_count = FALSE;
+pit->read_state = 0;
+sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+    "PIT%u load reload=%u mode=%u access=%u\n",
+    chan, pit->reload, pit->mode, pit->access);
+return;
+}
+
+static void mikasa_pit_write_counter (uint32 chan, uint8 val)
+{
+MIKASA_PIT_CHANNEL *pit = &mikasa_pit[chan];
+
+switch (pit->access) {
+
+    case MIKASA_PIT_ACCESS_LO:
+        mikasa_pit_load_counter (chan, val);
+        break;
+
+    case MIKASA_PIT_ACCESS_HI:
+        mikasa_pit_load_counter (chan, ((uint32) val) << 8);
+        break;
+
+    case MIKASA_PIT_ACCESS_LOHI:
+    default:
+        if (pit->write_state == 0) {
+            pit->write_latch = val;
+            pit->write_state = 1;
+            }
+        else {
+            pit->write_state = 0;
+            mikasa_pit_load_counter (chan,
+                pit->write_latch | (((uint32) val) << 8));
+            }
+        break;
+        }
+return;
+}
+
+static void mikasa_pit_latch_status (uint32 chan)
+{
+MIKASA_PIT_CHANNEL *pit = &mikasa_pit[chan];
+
+if (!pit->status_latched) {
+    pit->status = mikasa_pit_status (chan);
+    pit->status_latched = TRUE;
+    }
+return;
+}
+
+static void mikasa_pit_control (uint8 val)
+{
+uint32 chan = (val >> 6) & 3;
+uint8 access = (val >> 4) & 3;
+uint8 mode = (val >> 1) & 7;
+
+if (chan == 3) {
+    uint32 i;
+
+    for (i = 0; i < MIKASA_PIT_CHANNELS; i++) {
+        if ((val & (1u << (i + 1))) == 0)
+            continue;
+        if ((val & 0x20) == 0)
+            mikasa_pit_latch_count (i);
+        if ((val & 0x10) == 0)
+            mikasa_pit_latch_status (i);
+        }
+    sim_debug (MIKASA_DBG_IO, &mikasa_dev, "PIT readback %02X\n", val);
+    return;
+    }
+
+if (access == MIKASA_PIT_ACCESS_LATCH) {
+    mikasa_pit_latch_count (chan);
+    sim_debug (MIKASA_DBG_IO, &mikasa_dev, "PIT%u latch\n", chan);
+    return;
+    }
+
+if (mode >= 6)
+    mode -= 4;
+mikasa_pit[chan].access = access;
+mikasa_pit[chan].mode = mode;
+mikasa_pit[chan].bcd = (val & 1) != 0;
+mikasa_pit[chan].write_state = 0;
+mikasa_pit[chan].read_state = 0;
+mikasa_pit[chan].null_count = TRUE;
+sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+    "PIT%u control access=%u mode=%u bcd=%u\n",
+    chan, access, mode, mikasa_pit[chan].bcd ? 1 : 0);
+return;
 }
 
 static void mikasa_pit_write (uint32 port, uint8 val)
 {
-if (port == (MIKASA_ISA_PIT + 3))
-    mikasa_pit_mode = val;
-else
-    mikasa_pit_reg[port - MIKASA_ISA_PIT] = val;
+uint32 chan = port - MIKASA_ISA_PIT;
+
+if (chan == 3) {
+    mikasa_pit_control (val);
+    return;
+    }
+if (chan < MIKASA_PIT_CHANNELS)
+    mikasa_pit_write_counter (chan, val);
+return;
+}
+
+static void mikasa_pit_tick (void)
+{
+uint32 delta = mikasa_pit_delta ();
+uint32 chan;
+
+for (chan = 0; chan < MIKASA_PIT_CHANNELS; chan++) {
+    MIKASA_PIT_CHANNEL *pit = &mikasa_pit[chan];
+    uint32 remain;
+
+    if (!pit->running || (pit->reload == 0))
+        continue;
+    if (delta < pit->counter) {
+        pit->counter -= delta;
+        continue;
+        }
+    remain = delta - pit->counter;
+    if (chan == 0) {
+        sim_debug (MIKASA_DBG_IO, &mikasa_dev,
+            "PIT0 IRQ reload=%u remain=%u\n", pit->reload, remain);
+        mikasa_pic_set_irq (MIKASA_PIT_IRQ, TRUE);
+        mikasa_pic_set_irq (MIKASA_PIT_IRQ, FALSE);
+        }
+    if (pit->mode == MIKASA_PIT_MODE_TERMINAL) {
+        pit->running = FALSE;
+        pit->counter = 0;
+        continue;
+        }
+    if (pit->reload != 0)
+        remain = remain % pit->reload;
+    pit->counter = pit->reload - remain;
+    if (pit->counter == 0)
+        pit->counter = pit->reload;
+    }
 return;
 }
 
@@ -2398,26 +2720,12 @@ return ((uint32) mikasa_ncr_reg[reg]) |
 
 static t_uint64 mikasa_ncr_frame_ra (void)
 {
-t_uint64 addr = R[29] + 8;
-
-if (!ADDR_IS_MEM (addr + 7))
-    return 0;
-return mikasa_read_phys_quad (addr);
+return mikasa_debug_frame_ra ();
 }
 
 static t_uint64 mikasa_ncr_parent_frame_ra (void)
 {
-t_uint64 gp_addr = R[29] + 32;
-t_uint64 gp;
-t_uint64 addr;
-
-if (!ADDR_IS_MEM (gp_addr + 7))
-    return 0;
-gp = mikasa_read_phys_quad (gp_addr);
-addr = gp + 8;
-if (!ADDR_IS_MEM (addr + 7))
-    return 0;
-return mikasa_read_phys_quad (addr);
+return mikasa_debug_parent_frame_ra ();
 }
 
 static void mikasa_ncr_debug_state (const char *tag)
@@ -8768,8 +9076,7 @@ memset (mikasa_dma_page_reg, 0, sizeof (mikasa_dma_page_reg));
 mikasa_irq_update ();
 mikasa_cfg_index = 0;
 memset (mikasa_cfg_reg, 0, sizeof (mikasa_cfg_reg));
-mikasa_pit_mode = 0;
-memset (mikasa_pit_reg, 0, sizeof (mikasa_pit_reg));
+mikasa_pit_reset ();
 mikasa_kbc_reset ();
 mikasa_portb = 0;
 mikasa_rtc_index = 0;
@@ -8815,6 +9122,8 @@ mikasa_pceb_cfg[0x04 >> 2] = 0x02000007u;
 mikasa_pceb_cfg[0x08 >> 2] = 0x06020003u;
 mikasa_pceb_cfg[0x40 >> 2] = 0x80800020u;
 memset (mikasa_ocp_reg, 0, sizeof (mikasa_ocp_reg));
-sim_activate (&mikasa_unit, MIKASA_RTC_TICK);
+mikasa_unit.wait = MIKASA_CLOCK_DELAY;
+sim_activate (&mikasa_unit, sim_rtcn_init_unit (&mikasa_unit,
+    mikasa_unit.wait, MIKASA_CLOCK_TMR));
 return SCPE_OK;
 }
