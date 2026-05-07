@@ -79,6 +79,10 @@ Implemented:
     path. SRM enables COM1 `IER=0x0B`, unmasks PIC IRQ4, the APECS PCI IACK
     cycle returns vector `0x04`, and the firmware reads the UART receive
     buffer.
+  - COM1 transmit-empty interrupt handling is present. The post-banner SRM
+    console driver depends on the 16550 THRE interrupt advertised through IIR;
+    without it, the firmware reaches its console loop but leaves the `>>>`
+    prompt queued.
   - The 8259 pair now honors ELCR edge-vs-level triggering: reserved ELCR bits
     read as zero, edge IRQs latch only on rising edges, level IRQs track the
     asserted input line, and active level IRQs can reassert after EOI.
@@ -275,13 +279,13 @@ Not implemented yet:
   implemented yet. The current Cirrus/VGA path is a probe shell, not a video
   renderer.
 - A complete SRM-compatible firmware execution environment. The real SRM image
-  now reaches the SRM banner and receives serial input, but it does not reach
-  an SRM prompt yet.
+  now reaches the SRM `>>>` prompt and accepts serial input. Further firmware
+  commands and OS boot still need validation.
 
 So this is not yet a complete OpenVMS boot. It is a controlled first point:
-SIMH can identify the machine profile, attach all four recovered disks, load the
-same APB that AXPbox/AlphaVM loaded, and enter it with Mikasa-specific HWRPB
-state instead of a DS10/ES40 state.
+SIMH can identify the machine profile, attach all four recovered disks, enter
+the real Mikasa SRM console, and start issuing firmware commands against the
+emulated hardware.
 
 Current verified SRM progress:
 
@@ -289,10 +293,13 @@ Current verified SRM progress:
 Loaded Mikasa SRM ROM payload from ../firmware/as1000/mksrmrom.payload.bin: 475648 bytes at 00900000, PC=00900000 PALBASE=00900000
 ff.fe.fd.fc.fb.fa.f9.f8.f7.f6.f5.f3.f2.f1.f0.ef.df.ee.f4.
 probing hose 0, PCI
-EPICbus 0, slot  6 -- pka -- NCR 53C810
+bus 0, slot  2 -- vga -- Cirrus CL-GD5434
+bus 0, slot  6 -- pka -- NCR 53C810
+bus 0, slot 11 -- ewa -- DECchip 21040-AA
 probing hose 1, EISA
 ed.ec.eb.....ea.e9.e8.e7.e6.e5.e4.e3.e2.e1.e0.
 V5.4-101, built on Mar 24 1999 at 13:58:27
+>>>
 ```
 
 Earlier SRM stops fixed during bring-up:
@@ -444,30 +451,19 @@ alpha/tools/disassemble-srm-rom.py ../firmware/as1000/mksrmrom.decompressed.rom 
 ```
 
 The tool strips the 16-byte AXPbox `decompressed.rom` header before invoking
-`alpha-linux-gnu-objdump`, so branch targets line up with SIMH PC values. The
-post-banner PC values seen so far are still inside SRM delay/poll paths. For
-example, `0x5A030` is a timer wait loop around `RSCC`, not APB or disk code.
-The current SCSI discovery blocker is therefore in the SRM firmware's NCR/PKE
-probe path before the disk bootstrap is loaded. The current trace repeatedly
-issues standard `INQUIRY` to targets 0-3 and LUNs 0-7, select-times-out
-targets 4-6, and starts the same discovery pass again without reaching `READ
-CAPACITY` or the visible prompt. A 2026-05-07 probe forced both present and
-absent LUN INQUIRY replies to return the full 255-byte allocation with zero
-residual; the loop did not change, so the blocker is not simply the INQUIRY
-short-transfer/phase-mismatch path. A PTY debug run with all four disks and
-accelerated SCC loops also showed that sending `show dev` after the banner
-produces no echo or response while NCR discovery continues, so this is not
-just an invisible prompt.
+`alpha-linux-gnu-objdump`, so branch targets line up with SIMH PC values.
+During the post-banner investigation, PCs around `0x5A030`, `0x585xx`, and
+`0x120578` looked like timer/OCP polling and initially suggested a SCSI or OCP
+blocker. The actual prompt blocker was COM1 transmit-empty interrupt delivery:
+SRM had entered its console driver, enabled `IER=0x0B`, and waited for normal
+16550 THRE/IIR behavior before flushing the visible `>>>` prompt. The current
+PTY smoke test reaches `>>>`, injects `show dev`, and receives DKA output.
 
-A later OCP-focused trace showed that the post-banner firmware polls OCP
-status from the sparse-I/O wrapper returning at `0x9777C`. The model now keeps
-the LCD address counter internal and returns only busy/Halt status bits from
-port `0x531`; the first status read after the `0xC0` LCD command returns busy
-and later reads return `0x00`. SRM still does not enter `P00>>>`, and sending
-Ctrl-P after the banner does not change that, so the remaining blocker is in
-the console-manager wait/event path rather than the old false OCP address bit.
-A test-only front-panel Halt mapping to OCP status bit `0x40` was visible to
-SRM but kept the firmware in the same OCP polling helper. AXPbox does not
+The OCP-focused trace is still useful background. The firmware polls OCP
+status from the sparse-I/O wrapper returning at `0x9777C`; the model keeps the
+LCD address counter internal and returns only busy/Halt status bits from port
+`0x531`. A test-only front-panel Halt mapping to OCP status bit `0x40` was
+visible to SRM but did not by itself force console entry. AXPbox does not
 settle this for Mikasa: its telnet BREAK path opens the emulator menu, and its
 `HaltA`/`HaltB` state belongs to ES40 TIG registers rather than this OCP/DPR
 interface.
@@ -564,14 +560,14 @@ to disassemble.
 
 ## Next implementation steps
 
-1. Advance the real SRM firmware path to the `P00>>>` prompt.
-   The real `mksrmrom.exe` now prints the DEC/MIKASA SRM V5.4-101 banner. The
-   serial interrupt path is live. The 53C810 path now decodes absolute and
-   table-indirect selectors, follows simple unconditional script control flow,
-   handles table-indirect command/data/status moves, and returns SCSI-2 sense
-   data for common disk commands. Continue replacing the scanner with a real
-   SCRIPTS executor until the probe finishes and `BOOT DKA0` can be issued from
-   SRM.
+1. Validate firmware commands from the real SRM `>>>` prompt and attempt
+   `BOOT DKA0 -FL 0,10000`.
+   The real `mksrmrom.exe` now prints the DEC/MIKASA SRM V5.4-101 banner,
+   reaches `>>>`, and accepts serial input. The 53C810 path decodes absolute
+   and table-indirect selectors, follows simple unconditional script control
+   flow, handles table-indirect command/data/status moves, and returns SCSI-2
+   sense data for common disk commands. Continue replacing the scanner with a
+   real SCRIPTS executor as firmware or OS boot exposes missing behavior.
 
 2. Continue direct-APB boot tracing after the fixed `SYSBOOT.EXE` lookup
    regression. The APB now resolves past the system-root directory search and

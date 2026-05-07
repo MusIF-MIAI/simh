@@ -42,6 +42,13 @@
   edges, level IRQs track asserted inputs, and level IRQs can reassert after
   EOI while the line remains active.
 - [x] Route COM1 receive interrupts through the SRM-programmed PIC path.
+- [x] Add COM1 THRE interrupt/IIR handling. SRM enables `IER=0x0B` after the
+  banner; without a transmit-empty interrupt, the console driver reaches the
+  idle path but never flushes the visible `>>>` prompt.
+- [x] Reach the real Mikasa SRM `>>>` prompt through `BOOT CPU` using
+  `mksrmrom.payload.bin`.
+- [x] Verify serial input at the SRM prompt with a PTY-driven `show dev`;
+  firmware receives the command and starts listing DKA devices.
 - [x] Route 8042 keyboard and auxiliary mouse output-buffer interrupts through
   PIC IRQ1/IRQ12 according to the controller command byte.
 - [x] Add DECchip 21040/Tulip interrupt masking/status delivery through
@@ -408,8 +415,8 @@
 - [x] Re-run SRM ROM smoke after simultaneous NCR `SIP`/`DIP` delivery. SRM
   now reads `DSTAT=0x84` with `DSPS=9/0` and advances into full target/LUN
   discovery (`targets 0-3`, `LUNs 0-7`) instead of staying in the earlier
-  target 0-3 LUN 0 loop. It still does not reach a visible `P00>>>` prompt
-  before the bounded smoke-test timeout.
+  target 0-3 LUN 0 loop. Later COM1 THRE/IIR work exposed that this was no
+  longer the prompt blocker.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -426,13 +433,9 @@
   The current branch has the shared bus/device/attach layer and routes only
   conservative no-data status commands through `sim_scsi`; SRM/VMS-sensitive
   probe and disk commands still use the local shim.
-- [ ] Debug the current SRM post-banner discovery loop: after simultaneous
-  NCR `SIP`/`DIP` delivery, the old target 0-3 LUN 0 loop is gone. SRM now
-  repeatedly scans targets 0-3 across LUNs 0-7, then select-times-out targets
-  4-6, and restarts the discovery pass. It has not yet advanced to `READ
-  CAPACITY` or a visible `>>>` prompt within the bounded smoke-test window.
-  The next suspect is SRM acceptance of the non-zero-LUN no-device path or the
-  post-scan bus/device summary logic, not the earlier hidden `DSTAT.SIR`.
+- [x] Debug the current SRM post-banner wait. The immediate blocker was not
+  SCSI discovery or OCP busy polling; SRM had entered its console driver, but
+  the UART model did not raise THRE interrupts, so the prompt stayed queued.
 - [ ] Complete APECS/DECchip 21071 behavior beyond the current register shells,
   especially actually raising error causes, remaining HAE/config details, and
   DMA corner cases.
@@ -442,10 +445,6 @@
 - [ ] Identify the real AlphaServer 1000 NVRAM layout and encode SRM console
   defaults such as console mode, auto_action, boot device, and boot flags.
 - [ ] Validate OCP/Halt/Ctrl-P behavior against SRM console transitions.
-- [ ] Trace the SRM post-banner console-manager wait/event loop. After the OCP
-  status cleanup, SRM still polls OCP status from `RA=0x9777C` with value
-  `0x00`; sending Ctrl-P after the banner does not produce `P00>>>`, so the
-  remaining blocker is not simply the previous false `0x40` halt/address bit.
 - [ ] Identify the real Mikasa front-panel/RMC halt input. A test-only
   `HALTBTN` mapped to OCP status bit `0x40` is visible to SRM, but it leaves
   the firmware spinning in the OCP polling helper instead of entering the

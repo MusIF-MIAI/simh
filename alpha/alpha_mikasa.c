@@ -567,7 +567,13 @@
 #define MIKASA_UART_IRQ             4
 #define MIKASA_UART_CTRL_P          0x10
 #define MIKASA_UART_IER_RDA         0x01
+#define MIKASA_UART_IER_THRE        0x02
+#define MIKASA_UART_IER_RLS         0x04
+#define MIKASA_UART_IER_MS          0x08
+#define MIKASA_UART_IIR_MS          0x00
+#define MIKASA_UART_IIR_THRE        0x02
 #define MIKASA_UART_IIR_RDA         0x04
+#define MIKASA_UART_IIR_RLS         0x06
 #define MIKASA_UART_LSR_DR          0x01
 #define MIKASA_UART_LSR_THRE        0x20
 #define MIKASA_UART_LSR_TEMT        0x40
@@ -1021,6 +1027,8 @@ static uint8 mikasa_uart_dll = 0;
 static uint8 mikasa_uart_dlm = 0;
 static uint8 mikasa_uart_rbr = 0;
 static t_bool mikasa_uart_rbr_valid = FALSE;
+static t_bool mikasa_uart_thre_irq = TRUE;
+static uint8 mikasa_uart_msr_delta = 0;
 static uint8 mikasa_com2_lcr = 0;
 static uint8 mikasa_com2_mcr = 0;
 static uint8 mikasa_com2_ier = 0;
@@ -1223,9 +1231,33 @@ return mikasa_read_phys_quad (addr);
 
 static void mikasa_uart_update_irq (void)
 {
-mikasa_pic_set_irq (MIKASA_UART_IRQ,
-    (mikasa_uart_ier & MIKASA_UART_IER_RDA) && mikasa_uart_rbr_valid);
+t_bool pending = FALSE;
+
+if ((mikasa_uart_ier & MIKASA_UART_IER_RDA) && mikasa_uart_rbr_valid)
+    pending = TRUE;
+if ((mikasa_uart_ier & MIKASA_UART_IER_THRE) && mikasa_uart_thre_irq)
+    pending = TRUE;
+if ((mikasa_uart_ier & MIKASA_UART_IER_MS) && (mikasa_uart_msr_delta != 0))
+    pending = TRUE;
+mikasa_pic_set_irq (MIKASA_UART_IRQ, pending);
 return;
+}
+
+static uint8 mikasa_uart_iir (void)
+{
+uint8 iir = MIKASA_UART_IIR_NOPEND;
+
+mikasa_uart_poll ();
+if ((mikasa_uart_ier & MIKASA_UART_IER_RDA) && mikasa_uart_rbr_valid)
+    iir = MIKASA_UART_IIR_RDA;
+else if ((mikasa_uart_ier & MIKASA_UART_IER_THRE) && mikasa_uart_thre_irq) {
+    iir = MIKASA_UART_IIR_THRE;
+    mikasa_uart_thre_irq = FALSE;
+    }
+else if ((mikasa_uart_ier & MIKASA_UART_IER_MS) && (mikasa_uart_msr_delta != 0))
+    iir = MIKASA_UART_IIR_MS;
+mikasa_uart_update_irq ();
+return iir;
 }
 
 static void mikasa_uart_poll (void)
@@ -1258,6 +1290,7 @@ return;
 static uint8 mikasa_uart_read (uint32 port)
 {
 uint32 reg = port - MIKASA_ISA_COM1;
+uint8 val;
 
 switch (reg) {
 
@@ -1284,10 +1317,7 @@ switch (reg) {
         return mikasa_uart_ier;
 
     case 2:
-        mikasa_uart_poll ();
-        if ((mikasa_uart_ier & MIKASA_UART_IER_RDA) && mikasa_uart_rbr_valid)
-            return MIKASA_UART_IIR_RDA;
-        return MIKASA_UART_IIR_NOPEND;
+        return mikasa_uart_iir ();
 
     case 3:
         return mikasa_uart_lcr;
@@ -1301,8 +1331,11 @@ switch (reg) {
             (mikasa_uart_rbr_valid? MIKASA_UART_LSR_DR: 0);
 
     case 6:
-        return MIKASA_UART_MSR_CTS | MIKASA_UART_MSR_DSR |
-            MIKASA_UART_MSR_DCD | MIKASA_UART_MSR_DCTS;
+        val = MIKASA_UART_MSR_CTS | MIKASA_UART_MSR_DSR |
+            MIKASA_UART_MSR_DCD | mikasa_uart_msr_delta;
+        mikasa_uart_msr_delta = 0;
+        mikasa_uart_update_irq ();
+        return val;
 
     case 7:
         return mikasa_uart_scr;
@@ -1331,6 +1364,8 @@ switch (reg) {
                 (unsigned long long) mikasa_debug_parent_frame_ra (), val);
             if (c >= 0)
                 (void) sim_putchar_s (c);
+            mikasa_uart_thre_irq = TRUE;
+            mikasa_uart_update_irq ();
             }
         break;
 
@@ -1339,6 +1374,8 @@ switch (reg) {
             mikasa_uart_dlm = val;
         else {
             mikasa_uart_ier = val;
+            if (val & MIKASA_UART_IER_THRE)
+                mikasa_uart_thre_irq = TRUE;
             sim_debug (MIKASA_DBG_UART, &mikasa_dev,
                 "COM1 write pc=%llX ra=%llX fra=%llX pra=%llX IER=%02X\n",
                 (unsigned long long) PC, (unsigned long long) R[26],
@@ -10134,6 +10171,8 @@ mikasa_uart_dll = 0;
 mikasa_uart_dlm = 0;
 mikasa_uart_rbr = 0;
 mikasa_uart_rbr_valid = FALSE;
+mikasa_uart_thre_irq = TRUE;
+mikasa_uart_msr_delta = 0;
 mikasa_com2_lcr = 0;
 mikasa_com2_mcr = 0;
 mikasa_com2_ier = 0;
