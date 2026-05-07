@@ -390,6 +390,14 @@ else if (ev4_ipr_is_mikasa ()) {
             break;
             }
         }
+    if ((req == 0) && ev5_sirr) {
+        for (i = IPL_SMAX; i > 0; i--) {
+            if ((ev5_sirr >> (i - 1)) & 1) {
+                req = i;
+                break;
+                }
+            }
+        }
     }
 else if (int_req[3] && !(ev5_icsr & ICSR_MSK3)) req = IPL_HMIN + 3;
 else if (int_req[2] && !(ev5_icsr & ICSR_MSK2)) req = IPL_HMIN + 2;

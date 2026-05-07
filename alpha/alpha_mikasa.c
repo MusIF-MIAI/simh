@@ -24,6 +24,7 @@
 #include "alpha_ev5_defs.h"
 #include "sim_fio.h"
 #include "sim_scsi.h"
+#include "sim_timer.h"
 
 #include <time.h>
 
@@ -273,8 +274,15 @@
 #define MIKASA_TULIP_STS_TXINTR     0x00000001u
 #define MIKASA_TULIP_STS_TXNOBUF    0x00000004u
 #define MIKASA_TULIP_STS_W1C        0x0001FFFFu
+#define MIKASA_TULIP_STS_IRQS       (MIKASA_TULIP_STS_NORMAL | \
+                                      MIKASA_TULIP_STS_ABNORMAL | \
+                                      MIKASA_TULIP_STS_RXNOBUF | \
+                                      MIKASA_TULIP_STS_TXINTR | \
+                                      MIKASA_TULIP_STS_TXNOBUF)
 #define MIKASA_TULIP_CMD_TXRUN      0x00002000u
 #define MIKASA_TULIP_CMD_RXRUN      0x00000002u
+#define MIKASA_TULIP_IRQ            11
+#define MIKASA_TULIP_INTBIT         (1u << MIKASA_TULIP_IRQ)
 #define MIKASA_NCR_REG_SIZE         0x100
 #define MIKASA_NCR_BAR_SIZE         0x100
 #define MIKASA_NCR_BAR_MASK         0xFFFFFF00u
@@ -433,10 +441,16 @@
 #define MIKASA_PIT_ACCESS_HI        2
 #define MIKASA_PIT_ACCESS_LOHI      3
 #define MIKASA_PIT_MODE_TERMINAL    0
+#define MIKASA_PIT_MODE_ONESHOT     1
 #define MIKASA_PIT_MODE_RATE        2
 #define MIKASA_PIT_MODE_SQUARE      3
+#define MIKASA_PIT_MODE_STROBE      4
+#define MIKASA_PIT_MODE_HWSTROBE    5
 #define MIKASA_PIT_STATUS_OUT       0x80
 #define MIKASA_PIT_STATUS_NULL      0x40
+#define MIKASA_PORTB_GATE2          0x01
+#define MIKASA_PORTB_SPKR           0x02
+#define MIKASA_PORTB_OUT2           0x20
 #define MIKASA_NCR_DSPS_OK          0
 #define MIKASA_NCR_DSPS_DAT_OUT     8
 #define MIKASA_NCR_DSPS_DAT_IN      9
@@ -538,8 +552,10 @@
 #define MIKASA_EISA_CRAM_PAGE_REG   0x0C00
 #define MIKASA_EISA_SLOT_ID         0x0C80
 #define MIKASA_OCP_READY            0x80
+#define MIKASA_OCP_HALT             0x40
 
 #define MIKASA_UART_IRQ             4
+#define MIKASA_UART_CTRL_P          0x10
 #define MIKASA_UART_IER_RDA         0x01
 #define MIKASA_UART_IIR_RDA         0x04
 #define MIKASA_UART_LSR_DR          0x01
@@ -552,17 +568,28 @@
 #define MIKASA_UART_MSR_DSR         0x20
 #define MIKASA_UART_MSR_DCD         0x80
 
+#define MIKASA_KBD_IRQ              1
+#define MIKASA_MOUSE_IRQ            12
 #define MIKASA_KBC_RESP_SIZE        8
 #define MIKASA_KBC_STATUS_OBF       0x01
 #define MIKASA_KBC_STATUS_SYS       0x04
+#define MIKASA_KBC_STATUS_AUX       0x20
 #define MIKASA_KBC_CMD_READ_BYTE    0x20
 #define MIKASA_KBC_CMD_WRITE_BYTE   0x60
+#define MIKASA_KBC_CMD_DISABLE_AUX  0xA7
+#define MIKASA_KBC_CMD_ENABLE_AUX   0xA8
+#define MIKASA_KBC_CMD_TEST_AUX     0xA9
 #define MIKASA_KBC_CMD_DISABLE_KBD  0xAD
 #define MIKASA_KBC_CMD_ENABLE_KBD   0xAE
 #define MIKASA_KBC_CMD_TEST_KBD     0xAB
 #define MIKASA_KBC_CMD_SELF_TEST    0xAA
 #define MIKASA_KBC_CMD_READ_OUT     0xD0
 #define MIKASA_KBC_CMD_WRITE_OUT    0xD1
+#define MIKASA_KBC_CMD_WRITE_AUX    0xD4
+#define MIKASA_KBC_CCB_KBD_INT      0x01
+#define MIKASA_KBC_CCB_AUX_INT      0x02
+#define MIKASA_KBC_CCB_KBD_DISABLE  0x10
+#define MIKASA_KBC_CCB_AUX_DISABLE  0x20
 #define MIKASA_KBC_OUT_NORMAL       0x03
 #define MIKASA_KBD_ACK              0xFA
 #define MIKASA_KBD_BAT_OK           0xAA
@@ -576,6 +603,7 @@
 #define MIKASA_RTC_INTR            0x0C
 #define MIKASA_RTC_STATUSD          0x0D
 #define MIKASA_RTC_CENTURY          0x32
+#define MIKASA_RTC_UIP              0x80
 #define MIKASA_RTC_UIE              0x10
 #define MIKASA_RTC_AIE              0x20
 #define MIKASA_RTC_PIE              0x40
@@ -672,6 +700,9 @@ extern uint32 pcc_l;
 extern uint32 pc_align;
 extern uint32 int_req[IPL_HLVL];
 extern uint32 ev5_ipl;
+extern uint32 ev5_sirr;
+extern uint32 ev5_astrr;
+extern uint32 ev5_asten;
 extern t_uint64 ev5_palbase;
 extern UNIT dka_unit[];
 extern SCSI_DEV dka_scsi_dev;
@@ -736,6 +767,8 @@ typedef struct {
     uint8 status;
     t_bool bcd;
     t_bool running;
+    t_bool gate;
+    t_bool out;
     t_bool latched;
     t_bool status_latched;
     t_bool null_count;
@@ -892,6 +925,7 @@ static uint32 mikasa_ncr_next_script_addr (uint32 dsp, uint32 op);
 static uint8 mikasa_ncr_read_b (uint32 reg);
 static void mikasa_ncr_write_b (uint32 reg, uint8 val);
 static void mikasa_ncr_update_irq (void);
+static void mikasa_tulip_update_irq (void);
 static t_uint64 mikasa_ncr_frame_ra (void);
 static t_uint64 mikasa_ncr_parent_frame_ra (void);
 static void mikasa_ncr_debug_state (const char *tag);
@@ -921,10 +955,15 @@ static void mikasa_uart_update_irq (void);
 static void mikasa_uart_poll (void);
 static uint8 mikasa_uart_read (uint32 port);
 static void mikasa_uart_write (uint32 port, uint8 val);
+static void mikasa_rtc_update_irq (void);
+static t_bool mikasa_rtc_periodic_due (void);
 static void mikasa_pit_reset (void);
 static uint8 mikasa_pit_read (uint32 port);
 static void mikasa_pit_write (uint32 port, uint8 val);
 static void mikasa_pit_tick (void);
+static void mikasa_pit_set_gate (uint32 chan, t_bool state);
+static uint8 mikasa_portb_read (void);
+static void mikasa_portb_write (uint8 val);
 static uint8 mikasa_isa_read (uint32 port);
 static void mikasa_isa_write (uint32 port, uint8 val);
 static t_uint64 mikasa_comanche_read (t_uint64 pa, uint32 lnt);
@@ -983,11 +1022,15 @@ static uint8 mikasa_kbc_out_port = MIKASA_KBC_OUT_NORMAL;
 static uint8 mikasa_kbc_pending_cmd = 0;
 static uint8 mikasa_kbd_pending_cmd = 0;
 static uint8 mikasa_kbc_resp[MIKASA_KBC_RESP_SIZE] = { 0 };
+static t_bool mikasa_kbc_resp_aux[MIKASA_KBC_RESP_SIZE] = { FALSE };
 static uint32 mikasa_kbc_resp_head = 0;
 static uint32 mikasa_kbc_resp_count = 0;
 static uint8 mikasa_portb = 0;
 static uint8 mikasa_rtc_index = 0;
 static uint8 mikasa_rtc_reg[128] = { 0 };
+static uint32 mikasa_rtc_periodic_accum = 0;
+static time_t mikasa_rtc_last_update = 0;
+static time_t mikasa_rtc_last_alarm = 0;
 static char mikasa_nvram_path[CBUFSIZE] = "";
 static t_bool mikasa_nvram_loaded = FALSE;
 static uint8 mikasa_sio_index = 0;
@@ -1033,6 +1076,7 @@ static SCSI_BUS mikasa_ncr_scsi_bus = { 0 };
 static t_bool mikasa_direct_apb = FALSE;
 static uint32 mikasa_pceb_cfg[MIKASA_PCI_CFG_DWORDS] = { 0 };
 static uint8 mikasa_ocp_reg[4] = { 0 };
+static t_bool mikasa_halt_pending = FALSE;
 uint32 mikasa_scc_scale = 1;
 
 UNIT mikasa_unit = { UDATA (&mikasa_svc, 0, 0) };
@@ -1141,6 +1185,13 @@ if (mikasa_uart_rbr_valid)
 c = sim_poll_kbd ();
 if (c >= SCPE_KFLAG) {
     mikasa_uart_rbr = (uint8) (c & M8);
+    if (mikasa_uart_rbr == MIKASA_UART_CTRL_P) {
+        mikasa_halt_pending = TRUE;
+        mikasa_ocp_reg[1] |= MIKASA_OCP_HALT;
+        sim_debug (MIKASA_DBG_UART, &mikasa_dev,
+            "COM1 Ctrl-P latched OCP halt request pc=%llX ra=%llX\n",
+            (unsigned long long) PC, (unsigned long long) R[26]);
+        }
     mikasa_uart_rbr_valid = TRUE;
     sim_debug (MIKASA_DBG_UART, &mikasa_dev,
         "COM1 receive pc=%llX ra=%llX fra=%llX pra=%llX %02X\n",
@@ -1487,6 +1538,47 @@ return mikasa_rtc_alarm_field_match (mikasa_rtc_reg[0x01],
     mikasa_rtc_encode ((uint32) tm->tm_hour));
 }
 
+static t_bool mikasa_rtc_periodic_due (void)
+{
+uint32 rate = mikasa_rtc_reg[MIKASA_RTC_STATUSA] & 0x0F;
+uint32 hz;
+
+if ((rate < 3) || (rate > 15))
+    return FALSE;
+hz = 32768u >> (rate - 1);
+if (hz >= MIKASA_CLOCK_HZ)
+    return TRUE;
+mikasa_rtc_periodic_accum += hz;
+if (mikasa_rtc_periodic_accum < MIKASA_CLOCK_HZ)
+    return FALSE;
+mikasa_rtc_periodic_accum -= MIKASA_CLOCK_HZ;
+return TRUE;
+}
+
+static void mikasa_rtc_update_irq (void)
+{
+uint8 regc = mikasa_rtc_reg[MIKASA_RTC_INTR];
+uint8 regb = mikasa_rtc_reg[MIKASA_RTC_STATUSB];
+uint8 enabled = 0;
+
+if ((regc & MIKASA_RTC_PF) && (regb & MIKASA_RTC_PIE))
+    enabled |= MIKASA_RTC_PF;
+if ((regc & MIKASA_RTC_AF) && (regb & MIKASA_RTC_AIE))
+    enabled |= MIKASA_RTC_AF;
+if ((regc & MIKASA_RTC_UF) && (regb & MIKASA_RTC_UIE))
+    enabled |= MIKASA_RTC_UF;
+if (enabled) {
+    mikasa_rtc_reg[MIKASA_RTC_INTR] |= MIKASA_RTC_IRQF;
+    mikasa_irq_summary |= MIKASA_RTC_INTBIT;
+    }
+else {
+    mikasa_rtc_reg[MIKASA_RTC_INTR] &= ~MIKASA_RTC_IRQF;
+    mikasa_irq_summary &= ~MIKASA_RTC_INTBIT;
+    }
+mikasa_irq_update ();
+return;
+}
+
 static void mikasa_rtc_init_defaults (void)
 {
 memset (mikasa_rtc_reg, 0, sizeof (mikasa_rtc_reg));
@@ -1586,14 +1678,14 @@ switch (index) {
         break;
 
     case MIKASA_RTC_STATUSA:
-        val = (mikasa_rtc_reg[index] & 0x7F) | 0x20;
+        val = (mikasa_rtc_reg[index] & 0x7F) |
+            (((sim_os_msec () % 1000) >= 990) ? MIKASA_RTC_UIP : 0);
         break;
 
     case MIKASA_RTC_INTR:
         val = mikasa_rtc_reg[index];
         mikasa_rtc_reg[index] = 0;
-        mikasa_irq_summary &= ~MIKASA_RTC_INTBIT;
-        mikasa_irq_update ();
+        mikasa_rtc_update_irq ();
         break;
 
     case MIKASA_RTC_STATUSD:
@@ -1620,11 +1712,13 @@ uint8 index = mikasa_rtc_index & 0x7F;
 if ((index != MIKASA_RTC_INTR) && (index != MIKASA_RTC_STATUSD)) {
     mikasa_rtc_reg[index] = val;
     (void) mikasa_nvram_save_file ();
-    if ((index == MIKASA_RTC_STATUSB) &&
-        ((val & (MIKASA_RTC_UIE | MIKASA_RTC_AIE | MIKASA_RTC_PIE)) == 0)) {
-        mikasa_rtc_reg[MIKASA_RTC_INTR] = 0;
-        mikasa_irq_summary &= ~MIKASA_RTC_INTBIT;
-        mikasa_irq_update ();
+    if (index == MIKASA_RTC_STATUSA)
+        mikasa_rtc_periodic_accum = 0;
+    if (index == MIKASA_RTC_STATUSB) {
+        if ((val & (MIKASA_RTC_UIE | MIKASA_RTC_AIE |
+            MIKASA_RTC_PIE)) == 0)
+            mikasa_rtc_reg[MIKASA_RTC_INTR] &= ~MIKASA_RTC_IRQF;
+        mikasa_rtc_update_irq ();
         }
     }
 sim_debug (MIKASA_DBG_RTC, &mikasa_dev, "RTC write %02X=%02X\n",
@@ -1634,24 +1728,27 @@ return;
 
 t_stat mikasa_svc (UNIT *uptr)
 {
-uint8 status = 0;
+uint8 events = 0;
 time_t now;
 struct tm *tm;
 
-if (mikasa_rtc_reg[MIKASA_RTC_STATUSB] & MIKASA_RTC_PIE)
-    status |= MIKASA_RTC_PF;
-if (mikasa_rtc_reg[MIKASA_RTC_STATUSB] & MIKASA_RTC_UIE)
-    status |= MIKASA_RTC_UF;
-if (mikasa_rtc_reg[MIKASA_RTC_STATUSB] & MIKASA_RTC_AIE) {
-    now = time (NULL);
-    tm = localtime (&now);
-    if ((tm != NULL) && mikasa_rtc_alarm_match (tm))
-        status |= MIKASA_RTC_AF;
+if (mikasa_rtc_periodic_due ())
+    events |= MIKASA_RTC_PF;
+now = time (NULL);
+if (now != mikasa_rtc_last_update) {
+    mikasa_rtc_last_update = now;
+    events |= MIKASA_RTC_UF;
+    if (now != mikasa_rtc_last_alarm) {
+        tm = localtime (&now);
+        if ((tm != NULL) && mikasa_rtc_alarm_match (tm)) {
+            mikasa_rtc_last_alarm = now;
+            events |= MIKASA_RTC_AF;
+            }
+        }
     }
-if ((status != 0) && (mikasa_irq_mask & MIKASA_RTC_INTBIT)) {
-    mikasa_rtc_reg[MIKASA_RTC_INTR] |= status | MIKASA_RTC_IRQF;
-    mikasa_irq_summary |= MIKASA_RTC_INTBIT;
-    mikasa_irq_update ();
+if (events != 0) {
+    mikasa_rtc_reg[MIKASA_RTC_INTR] |= events;
+    mikasa_rtc_update_irq ();
     }
 mikasa_uart_poll ();
 mikasa_pit_tick ();
@@ -1668,6 +1765,9 @@ for (i = 0; i < MIKASA_PIT_CHANNELS; i++) {
     mikasa_pit[i].access = MIKASA_PIT_ACCESS_LOHI;
     mikasa_pit[i].mode = MIKASA_PIT_MODE_TERMINAL;
     mikasa_pit[i].null_count = TRUE;
+    mikasa_pit[i].gate = (i == 2) ?
+        ((mikasa_portb & MIKASA_PORTB_GATE2) != 0) : TRUE;
+    mikasa_pit[i].out = TRUE;
     }
 mikasa_pit_accum = 0;
 mikasa_pic_set_irq (MIKASA_PIT_IRQ, FALSE);
@@ -1690,8 +1790,7 @@ static uint8 mikasa_pit_status (uint32 chan)
 {
 MIKASA_PIT_CHANNEL *pit = &mikasa_pit[chan];
 uint8 mode = pit->mode;
-uint8 status = ((!pit->running || (mode != MIKASA_PIT_MODE_TERMINAL)) ?
-    MIKASA_PIT_STATUS_OUT : 0) |
+uint8 status = (pit->out ? MIKASA_PIT_STATUS_OUT : 0) |
     (pit->null_count ? MIKASA_PIT_STATUS_NULL : 0) |
     ((pit->access & 3) << 4) | ((mode & 7) << 1) |
     (pit->bcd ? 1 : 0);
@@ -1775,7 +1874,11 @@ MIKASA_PIT_CHANNEL *pit = &mikasa_pit[chan];
 
 pit->reload = count ? count : 0x10000u;
 pit->counter = pit->reload;
-pit->running = TRUE;
+pit->running = pit->gate;
+pit->out = ((pit->mode == MIKASA_PIT_MODE_TERMINAL) ||
+    (pit->mode == MIKASA_PIT_MODE_ONESHOT) ||
+    (pit->mode == MIKASA_PIT_MODE_STROBE) ||
+    (pit->mode == MIKASA_PIT_MODE_HWSTROBE)) ? FALSE : TRUE;
 pit->null_count = FALSE;
 pit->read_state = 0;
 sim_debug (MIKASA_DBG_IO, &mikasa_dev,
@@ -1860,6 +1963,8 @@ mikasa_pit[chan].bcd = (val & 1) != 0;
 mikasa_pit[chan].write_state = 0;
 mikasa_pit[chan].read_state = 0;
 mikasa_pit[chan].null_count = TRUE;
+mikasa_pit[chan].out = ((mode == MIKASA_PIT_MODE_TERMINAL) ||
+    (mode == MIKASA_PIT_MODE_STROBE)) ? FALSE : TRUE;
 sim_debug (MIKASA_DBG_IO, &mikasa_dev,
     "PIT%u control access=%u mode=%u bcd=%u\n",
     chan, access, mode, mikasa_pit[chan].bcd ? 1 : 0);
@@ -1888,20 +1993,24 @@ for (chan = 0; chan < MIKASA_PIT_CHANNELS; chan++) {
     MIKASA_PIT_CHANNEL *pit = &mikasa_pit[chan];
     uint32 remain;
 
-    if (!pit->running || (pit->reload == 0))
+    if (!pit->running || !pit->gate || (pit->reload == 0))
         continue;
     if (delta < pit->counter) {
         pit->counter -= delta;
         continue;
         }
     remain = delta - pit->counter;
+    pit->out = TRUE;
     if (chan == 0) {
         sim_debug (MIKASA_DBG_IO, &mikasa_dev,
             "PIT0 IRQ reload=%u remain=%u\n", pit->reload, remain);
         mikasa_pic_set_irq (MIKASA_PIT_IRQ, TRUE);
         mikasa_pic_set_irq (MIKASA_PIT_IRQ, FALSE);
         }
-    if (pit->mode == MIKASA_PIT_MODE_TERMINAL) {
+    if ((pit->mode == MIKASA_PIT_MODE_TERMINAL) ||
+        (pit->mode == MIKASA_PIT_MODE_ONESHOT) ||
+        (pit->mode == MIKASA_PIT_MODE_STROBE) ||
+        (pit->mode == MIKASA_PIT_MODE_HWSTROBE)) {
         pit->running = FALSE;
         pit->counter = 0;
         continue;
@@ -1912,6 +2021,49 @@ for (chan = 0; chan < MIKASA_PIT_CHANNELS; chan++) {
     if (pit->counter == 0)
         pit->counter = pit->reload;
     }
+return;
+}
+
+static void mikasa_pit_set_gate (uint32 chan, t_bool state)
+{
+MIKASA_PIT_CHANNEL *pit;
+t_bool old;
+
+if (chan >= MIKASA_PIT_CHANNELS)
+    return;
+pit = &mikasa_pit[chan];
+old = pit->gate;
+pit->gate = state;
+if (!state) {
+    pit->running = FALSE;
+    return;
+    }
+if (!old && !pit->null_count) {
+    if ((pit->mode == MIKASA_PIT_MODE_ONESHOT) ||
+        (pit->mode == MIKASA_PIT_MODE_HWSTROBE)) {
+        pit->counter = pit->reload;
+        pit->out = FALSE;
+        }
+    pit->running = TRUE;
+    }
+return;
+}
+
+static uint8 mikasa_portb_read (void)
+{
+uint8 val = mikasa_portb & ~(uint8) MIKASA_PORTB_OUT2;
+
+if (mikasa_pit[2].out)
+    val |= MIKASA_PORTB_OUT2;
+sim_debug (MIKASA_DBG_IO, &mikasa_dev, "PORTB read %02X\n", val);
+return val;
+}
+
+static void mikasa_portb_write (uint8 val)
+{
+mikasa_portb = val & (MIKASA_PORTB_GATE2 | MIKASA_PORTB_SPKR);
+mikasa_pit_set_gate (2, (val & MIKASA_PORTB_GATE2) != 0);
+sim_debug (MIKASA_DBG_IO, &mikasa_dev, "PORTB write %02X\n", val);
 return;
 }
 
@@ -2319,6 +2471,18 @@ return ((uint32) mikasa_tulip_read_b (reg)) |
     (((uint32) mikasa_tulip_read_b (reg + 3)) << 24);
 }
 
+static uint32 mikasa_tulip_reg_l (uint32 reg)
+{
+reg = reg & (MIKASA_TULIP_REG_SIZE - 1);
+return ((uint32) mikasa_tulip_reg[reg]) |
+    (((uint32) mikasa_tulip_reg[(reg + 1) &
+    (MIKASA_TULIP_REG_SIZE - 1)]) << 8) |
+    (((uint32) mikasa_tulip_reg[(reg + 2) &
+    (MIKASA_TULIP_REG_SIZE - 1)]) << 16) |
+    (((uint32) mikasa_tulip_reg[(reg + 3) &
+    (MIKASA_TULIP_REG_SIZE - 1)]) << 24);
+}
+
 static void mikasa_tulip_set_l (uint32 reg, uint32 val)
 {
 reg = reg & (MIKASA_TULIP_REG_SIZE - 1);
@@ -2329,6 +2493,19 @@ mikasa_tulip_reg[(reg + 2) & (MIKASA_TULIP_REG_SIZE - 1)] =
     (uint8) (val >> 16);
 mikasa_tulip_reg[(reg + 3) & (MIKASA_TULIP_REG_SIZE - 1)] =
     (uint8) (val >> 24);
+return;
+}
+
+static void mikasa_tulip_update_irq (void)
+{
+uint32 status = mikasa_tulip_reg_l (MIKASA_TULIP_CSR_STATUS);
+uint32 intr = mikasa_tulip_reg_l (MIKASA_TULIP_CSR_INTR);
+
+if ((status & intr & MIKASA_TULIP_STS_IRQS) != 0)
+    mikasa_irq_summary |= MIKASA_TULIP_INTBIT;
+else
+    mikasa_irq_summary &= ~MIKASA_TULIP_INTBIT;
+mikasa_irq_update ();
 return;
 }
 
@@ -2500,6 +2677,7 @@ mikasa_tulip_tx_cur = desc;
 if (completed)
     status |= MIKASA_TULIP_STS_TXINTR | MIKASA_TULIP_STS_NORMAL;
 mikasa_tulip_set_l (MIKASA_TULIP_CSR_STATUS, status);
+mikasa_tulip_update_irq ();
 return;
 }
 
@@ -2517,6 +2695,7 @@ if (cmd & MIKASA_TULIP_CMD_RXRUN)
 else
     status |= MIKASA_TULIP_STS_RXS_STOP;
 mikasa_tulip_set_l (MIKASA_TULIP_CSR_STATUS, status);
+mikasa_tulip_update_irq ();
 return;
 }
 
@@ -2532,6 +2711,7 @@ mikasa_tulip_rx_cur = 0;
 mikasa_tulip_desc_skip = 0;
 mikasa_tulip_set_l (MIKASA_TULIP_CSR_STATUS,
     MIKASA_TULIP_STS_TXS_STOP | MIKASA_TULIP_STS_RXS_STOP);
+mikasa_tulip_update_irq ();
 return;
 }
 
@@ -2572,6 +2752,7 @@ switch (reg) {
     case MIKASA_TULIP_CSR_STATUS:
         mikasa_tulip_set_l (reg, mikasa_tulip_read_l (reg) &
             ~(val & MIKASA_TULIP_STS_W1C));
+        mikasa_tulip_update_irq ();
         break;
 
     case MIKASA_TULIP_CSR_CMD:
@@ -2579,6 +2760,11 @@ switch (reg) {
         if (val & MIKASA_TULIP_CMD_TXRUN)
             mikasa_tulip_process_tx ();
         mikasa_tulip_update_state ();
+        break;
+
+    case MIKASA_TULIP_CSR_INTR:
+        mikasa_tulip_set_l (reg, val);
+        mikasa_tulip_update_irq ();
         break;
 
     case MIKASA_TULIP_CSR_SIO:
@@ -5977,12 +6163,38 @@ mikasa_kbc_out_port = MIKASA_KBC_OUT_NORMAL;
 mikasa_kbc_pending_cmd = 0;
 mikasa_kbd_pending_cmd = 0;
 memset (mikasa_kbc_resp, 0, sizeof (mikasa_kbc_resp));
+memset (mikasa_kbc_resp_aux, 0, sizeof (mikasa_kbc_resp_aux));
 mikasa_kbc_resp_head = 0;
 mikasa_kbc_resp_count = 0;
+mikasa_pic_set_irq (MIKASA_KBD_IRQ, FALSE);
+mikasa_pic_set_irq (MIKASA_MOUSE_IRQ, FALSE);
 return;
 }
 
-static void mikasa_kbc_queue (uint8 val)
+static void mikasa_kbc_update_irq (void)
+{
+t_bool kbd = FALSE;
+t_bool aux = FALSE;
+uint32 i;
+
+for (i = 0; i < mikasa_kbc_resp_count; i++) {
+    uint32 index = (mikasa_kbc_resp_head + i) % MIKASA_KBC_RESP_SIZE;
+
+    if (mikasa_kbc_resp_aux[index])
+        aux = TRUE;
+    else
+        kbd = TRUE;
+    }
+mikasa_pic_set_irq (MIKASA_KBD_IRQ,
+    kbd && (mikasa_kbc_cmd_byte & MIKASA_KBC_CCB_KBD_INT) &&
+    ((mikasa_kbc_cmd_byte & MIKASA_KBC_CCB_KBD_DISABLE) == 0));
+mikasa_pic_set_irq (MIKASA_MOUSE_IRQ,
+    aux && (mikasa_kbc_cmd_byte & MIKASA_KBC_CCB_AUX_INT) &&
+    ((mikasa_kbc_cmd_byte & MIKASA_KBC_CCB_AUX_DISABLE) == 0));
+return;
+}
+
+static void mikasa_kbc_queue_src (uint8 val, t_bool aux)
 {
 uint32 tail;
 
@@ -5991,7 +6203,21 @@ if (mikasa_kbc_resp_count >= MIKASA_KBC_RESP_SIZE)
 tail = (mikasa_kbc_resp_head + mikasa_kbc_resp_count) %
     MIKASA_KBC_RESP_SIZE;
 mikasa_kbc_resp[tail] = val;
+mikasa_kbc_resp_aux[tail] = aux;
 mikasa_kbc_resp_count++;
+mikasa_kbc_update_irq ();
+return;
+}
+
+static void mikasa_kbc_queue (uint8 val)
+{
+mikasa_kbc_queue_src (val, FALSE);
+return;
+}
+
+static void mikasa_kbc_queue_aux (uint8 val)
+{
+mikasa_kbc_queue_src (val, TRUE);
 return;
 }
 
@@ -6001,10 +6227,12 @@ uint8 val = 0;
 
 if (mikasa_kbc_resp_count != 0) {
     val = mikasa_kbc_resp[mikasa_kbc_resp_head];
+    mikasa_kbc_resp_aux[mikasa_kbc_resp_head] = FALSE;
     mikasa_kbc_resp_head = (mikasa_kbc_resp_head + 1) %
         MIKASA_KBC_RESP_SIZE;
     mikasa_kbc_resp_count--;
     }
+mikasa_kbc_update_irq ();
 sim_debug (MIKASA_DBG_IO, &mikasa_dev, "KBC data read %02X\n", val);
 return val;
 }
@@ -6016,7 +6244,9 @@ uint8 status;
 if (port == MIKASA_ISA_KBD_DATA)
     return mikasa_kbc_read_data ();
 status = MIKASA_KBC_STATUS_SYS |
-    ((mikasa_kbc_resp_count != 0) ? MIKASA_KBC_STATUS_OBF : 0);
+    ((mikasa_kbc_resp_count != 0) ? MIKASA_KBC_STATUS_OBF : 0) |
+    ((mikasa_kbc_resp_count != 0) &&
+    mikasa_kbc_resp_aux[mikasa_kbc_resp_head] ? MIKASA_KBC_STATUS_AUX : 0);
 sim_debug (MIKASA_DBG_IO, &mikasa_dev, "KBC status read %02X\n", status);
 return status;
 }
@@ -6026,10 +6256,16 @@ static void mikasa_kbc_write_data (uint8 val)
 if (mikasa_kbc_pending_cmd == MIKASA_KBC_CMD_WRITE_BYTE) {
     mikasa_kbc_cmd_byte = val;
     mikasa_kbc_pending_cmd = 0;
+    mikasa_kbc_update_irq ();
     }
 else if (mikasa_kbc_pending_cmd == MIKASA_KBC_CMD_WRITE_OUT) {
     mikasa_kbc_out_port = val;
     mikasa_kbc_pending_cmd = 0;
+    }
+else if (mikasa_kbc_pending_cmd == MIKASA_KBC_CMD_WRITE_AUX) {
+    mikasa_kbc_pending_cmd = 0;
+    if ((mikasa_kbc_cmd_byte & MIKASA_KBC_CCB_AUX_DISABLE) == 0)
+        mikasa_kbc_queue_aux (MIKASA_KBD_ACK);
     }
 else if (mikasa_kbd_pending_cmd != 0) {
     mikasa_kbd_pending_cmd = 0;
@@ -6088,6 +6324,7 @@ switch (val) {
 
     case MIKASA_KBC_CMD_WRITE_BYTE:
     case MIKASA_KBC_CMD_WRITE_OUT:
+    case MIKASA_KBC_CMD_WRITE_AUX:
         mikasa_kbc_pending_cmd = val;
         break;
 
@@ -6099,12 +6336,32 @@ switch (val) {
         mikasa_kbc_queue (0);
         break;
 
+    case MIKASA_KBC_CMD_TEST_AUX:
+        mikasa_kbc_queue (0);
+        break;
+
     case MIKASA_KBC_CMD_READ_OUT:
         mikasa_kbc_queue (mikasa_kbc_out_port);
         break;
 
     case MIKASA_KBC_CMD_DISABLE_KBD:
+        mikasa_kbc_cmd_byte |= MIKASA_KBC_CCB_KBD_DISABLE;
+        mikasa_kbc_update_irq ();
+        break;
+
     case MIKASA_KBC_CMD_ENABLE_KBD:
+        mikasa_kbc_cmd_byte &= ~MIKASA_KBC_CCB_KBD_DISABLE;
+        mikasa_kbc_update_irq ();
+        break;
+
+    case MIKASA_KBC_CMD_DISABLE_AUX:
+        mikasa_kbc_cmd_byte |= MIKASA_KBC_CCB_AUX_DISABLE;
+        mikasa_kbc_update_irq ();
+        break;
+
+    case MIKASA_KBC_CMD_ENABLE_AUX:
+        mikasa_kbc_cmd_byte &= ~MIKASA_KBC_CCB_AUX_DISABLE;
+        mikasa_kbc_update_irq ();
         break;
 
     default:
@@ -6138,7 +6395,7 @@ if ((port >= MIKASA_ISA_PIT) && (port < (MIKASA_ISA_PIT + 4)))
 if ((port == MIKASA_ISA_KBD_DATA) || (port == MIKASA_ISA_KBD_CMD))
     return mikasa_kbc_read (port);
 if (port == MIKASA_ISA_PORTB)
-    return mikasa_portb;
+    return mikasa_portb_read ();
 if (port == MIKASA_ISA_RTC_INDEX)
     return mikasa_rtc_index;
 if (port == MIKASA_ISA_RTC_DATA)
@@ -6173,7 +6430,8 @@ if ((port >= MIKASA_ISA_OCP) && (port < (MIKASA_ISA_OCP + 4))) {
     uint8 val;
 
     if (reg == 1)
-        val = mikasa_ocp_reg[reg] | MIKASA_OCP_READY;
+        val = mikasa_ocp_reg[reg] | MIKASA_OCP_READY |
+            (mikasa_halt_pending ? MIKASA_OCP_HALT : 0);
     else
         val = mikasa_ocp_reg[reg];
     sim_debug (MIKASA_DBG_IO, &mikasa_dev, "OCP read %u=%02X\n",
@@ -6225,7 +6483,7 @@ if ((port == MIKASA_ISA_KBD_DATA) || (port == MIKASA_ISA_KBD_CMD)) {
     return;
     }
 if (port == MIKASA_ISA_PORTB) {
-    mikasa_portb = val;
+    mikasa_portb_write (val);
     return;
     }
 if (port == MIKASA_ISA_RTC_INDEX) {
@@ -6277,9 +6535,13 @@ if (port == MIKASA_ISA_ELCR2) {
     return;
     }
 if ((port >= MIKASA_ISA_OCP) && (port < (MIKASA_ISA_OCP + 4))) {
-    mikasa_ocp_reg[port - MIKASA_ISA_OCP] = val;
+    uint32 reg = port - MIKASA_ISA_OCP;
+
+    mikasa_ocp_reg[reg] = val;
+    if ((reg == 1) && ((val & MIKASA_OCP_HALT) == 0))
+        mikasa_halt_pending = FALSE;
     sim_debug (MIKASA_DBG_IO, &mikasa_dev, "OCP write %u=%02X\n",
-        port - MIKASA_ISA_OCP, val);
+        reg, val);
     return;
     }
 if (port == MIKASA_ISA_ICU_IMR) {
@@ -8641,12 +8903,14 @@ switch (fnc) {
         R[0] = mikasa_pal_asten & MPAL_AST_MASK;
         mikasa_pal_asten = ((mikasa_pal_asten & arg32) | (arg32 >> 4)) &
             MPAL_AST_MASK;
+        ev5_asten = mikasa_pal_asten;
         break;
 
     case MPAL_MT_ASTSR:
         R[0] = mikasa_pal_astsr & MPAL_AST_MASK;
         mikasa_pal_astsr = ((mikasa_pal_astsr & arg32) | (arg32 >> 4)) &
             MPAL_AST_MASK;
+        ev5_astrr = mikasa_pal_astsr;
         break;
 
     case MPAL_CSERVE:
@@ -8711,10 +8975,12 @@ switch (fnc) {
     case MPAL_MT_SIRR:
         mikasa_pal_sisr = (mikasa_pal_sisr | (1u << (arg32 & 0xF))) &
             MPAL_SISR_MASK;
+        ev5_sirr = mikasa_pal_sisr & MPAL_SISR_MASK;
         break;
 
     case MPAL_MF_SISR:
-        R[0] = mikasa_pal_sisr & MPAL_SISR_MASK;
+        mikasa_pal_sisr = ev5_sirr & MPAL_SISR_MASK;
+        R[0] = mikasa_pal_sisr;
         break;
 
     case MPAL_MF_TBCHK:
@@ -8767,8 +9033,12 @@ switch (fnc) {
         mikasa_pal_sysptbr = R[16];
         break;
 
-    case MPAL_WTINT:
     case MPAL_MF_WHAMI:
+        R[0] = 0;
+        break;
+
+    case MPAL_WTINT:
+        sim_idle (MIKASA_CLOCK_TMR, 0);
         R[0] = 0;
         break;
 
@@ -8875,6 +9145,7 @@ switch (fnc) {
     case MPAL_SWASTEN:
         R[0] = mikasa_pal_asten & 1;
         mikasa_pal_asten = (mikasa_pal_asten & ~1u) | (arg32 & 1);
+        ev5_asten = mikasa_pal_asten & MPAL_AST_MASK;
         break;
 
     case MPAL_WR_PS_SW:
@@ -9020,6 +9291,12 @@ mikasa_pal_pcbb = proc_pa;
 mikasa_pal_ptbr = MIKASA_L1_PT_PA;
 mikasa_pal_ipl = 0x1F;
 ev5_ipl = mikasa_pal_ipl;
+mikasa_pal_sisr = 0;
+ev5_sirr = 0;
+mikasa_pal_asten = 0;
+mikasa_pal_astsr = 0;
+ev5_asten = 0;
+ev5_astrr = 0;
 mikasa_pal_mces = 8;
 mikasa_pal_last_pcc = pcc_l;
 
@@ -9076,10 +9353,13 @@ memset (mikasa_dma_page_reg, 0, sizeof (mikasa_dma_page_reg));
 mikasa_irq_update ();
 mikasa_cfg_index = 0;
 memset (mikasa_cfg_reg, 0, sizeof (mikasa_cfg_reg));
+mikasa_portb = 0;
 mikasa_pit_reset ();
 mikasa_kbc_reset ();
-mikasa_portb = 0;
 mikasa_rtc_index = 0;
+mikasa_rtc_periodic_accum = 0;
+mikasa_rtc_last_update = 0;
+mikasa_rtc_last_alarm = 0;
 if (!mikasa_nvram_loaded)
     mikasa_rtc_init_defaults ();
 else {
@@ -9113,7 +9393,7 @@ mikasa_tulip_cfg[0x00 >> 2] = 0x00021011u;
 mikasa_tulip_cfg[0x04 >> 2] = 0x02800001u;
 mikasa_tulip_cfg[0x08 >> 2] = 0x02000002u;
 mikasa_tulip_cfg[0x10 >> 2] = 0x00000001u;
-mikasa_tulip_cfg[0x3C >> 2] = 0x00000100u;
+mikasa_tulip_cfg[0x3C >> 2] = 0x0000010Bu;
 mikasa_tulip_init_srom ();
 mikasa_tulip_reset_regs ();
 memset (mikasa_pceb_cfg, 0, sizeof (mikasa_pceb_cfg));
@@ -9122,6 +9402,7 @@ mikasa_pceb_cfg[0x04 >> 2] = 0x02000007u;
 mikasa_pceb_cfg[0x08 >> 2] = 0x06020003u;
 mikasa_pceb_cfg[0x40 >> 2] = 0x80800020u;
 memset (mikasa_ocp_reg, 0, sizeof (mikasa_ocp_reg));
+mikasa_halt_pending = FALSE;
 mikasa_unit.wait = MIKASA_CLOCK_DELAY;
 sim_activate (&mikasa_unit, sim_rtcn_init_unit (&mikasa_unit,
     mikasa_unit.wait, MIKASA_CLOCK_TMR));

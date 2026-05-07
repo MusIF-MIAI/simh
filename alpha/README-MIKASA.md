@@ -72,8 +72,19 @@ Implemented:
     asserted input line, and active level IRQs can reassert after EOI.
   - The ISA 8254 PIT is modeled with count/status latches, read-back,
     low/high-byte reloads, channel countdown, and IRQ0 pulses through the PIC.
-    The platform service timer is calibrated at 100 Hz and also drives RTC and
-    UART polling.
+    Channel 2 gate/output is reflected through port `0x61`, one-shot/strobe
+    modes are handled as one-shot timers, and the platform service timer is
+    calibrated at 100 Hz to drive RTC and UART polling.
+  - The RTC model latches MC146818 periodic/update/alarm flags independently
+    from interrupt enables, recomputes IRQF from status B, and coalesces
+    higher periodic rates onto the 100 Hz platform tick.
+  - The 8042 model can raise keyboard and auxiliary mouse output-buffer
+    interrupts through PIC IRQ1/IRQ12 when enabled by the controller command
+    byte.
+  - Ctrl-P on the serial console is also latched as an OCP Halt request while
+    the byte remains visible to the UART receive path.
+  - The DECchip 21040/Tulip shell can raise the platform ICU IRQ 11 when
+    masked CSR5 status bits are enabled in CSR7.
   - `DEP MIKASA SCCSCALE <n>` can be used as a debug accelerator for SRM
     delay loops. The default is `1`, which preserves the normal PAL `RSCC`
     counter behavior.

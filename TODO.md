@@ -32,12 +32,24 @@
 - [x] Add a calibrated ISA timer service and 8254 PIT model with count/status
   latch, read-back, 16-bit reload, channel countdown, and IRQ0 delivery
   through the 8259 PIC.
+- [x] Extend PIT timing with one-shot/strobe modes, channel-2 gate/output
+  behavior, and port `0x61` speaker/timer status bits.
+- [x] Refine MC146818 RTC events so periodic/update/alarm flags are latched
+  separately from IRQ enable state and IRQF follows status B.
 - [x] Add 8259 PIC init, mask/pending/in-service, EOI, auto-EOI, cascade IACK,
   and ELCR edge/level-trigger storage.
 - [x] Honor 8259 ELCR edge-vs-level behavior: edge IRQs latch only on rising
   edges, level IRQs track asserted inputs, and level IRQs can reassert after
   EOI while the line remains active.
 - [x] Route COM1 receive interrupts through the SRM-programmed PIC path.
+- [x] Route 8042 keyboard and auxiliary mouse output-buffer interrupts through
+  PIC IRQ1/IRQ12 according to the controller command byte.
+- [x] Add DECchip 21040/Tulip interrupt masking/status delivery through
+  Mikasa ICU IRQ 11.
+- [x] Add direct-APB PAL `WTINT` idle behavior and synchronize synthetic
+  SIRR/AST state with the common Alpha interrupt evaluator.
+- [x] Latch serial Ctrl-P as an OCP Halt request while still delivering the
+  byte to the guest UART path.
 - [x] Add NCR/Symbios 53C810 PCI config, I/O BAR, memory BAR, register shell,
   interrupt status, abort, reset, and select-timeout behavior.
 - [x] Mirror the NCR/Symbios 53C810 operating registers through both halves of
@@ -365,7 +377,7 @@
   is now implemented, but still needs validation under the target OS.
 - [ ] Identify the real AlphaServer 1000 NVRAM layout and encode SRM console
   defaults such as console mode, auto_action, boot device, and boot flags.
-- [ ] Improve OCP/Halt/Ctrl-P behavior enough for SRM console transitions.
+- [ ] Validate OCP/Halt/Ctrl-P behavior against SRM console transitions.
 - [ ] Decide whether VGA/Cirrus probing is required for the real AS1000 path.
 - [ ] Implement real DECchip 21040 receive path, packet I/O, and full
   descriptor processing beyond the current SRM setup-frame transmit shell.
@@ -570,11 +582,16 @@ the real path works.
     128-byte NVRAM storage;
   - current branch drives RTC/UART/PIT service from a calibrated 100 Hz SIMH
     timer and models the ISA 8254 PIT channel registers and IRQ0 path;
+  - current branch coalesces RTC periodic rates onto the platform tick,
+    latches update/alarm events once per host second, and recomputes IRQF from
+    status B enable bits;
   - plausible defaults for `console serial`, `auto_action`, boot device, and
     boot flags still require the AS1000 NVRAM layout.
 - Improve OCP/Halt/Ctrl-P handling:
-  - model the ready/status bits and Halt button behavior expected by SRM;
-  - make console-entry decisions observable in debug traces.
+  - current branch reports OCP ready and latches Ctrl-P as a Halt request in
+    OCP status while leaving the UART byte visible to firmware;
+  - validate the exact SRM console-entry policy once the firmware reaches an
+    interactive prompt.
 
 ## P2 Enumerated Devices
 
@@ -582,7 +599,9 @@ the real path works.
   - current branch exposes a DECchip 21040 Ethernet PCI/CSR shell at raw IDSEL
     `11`, including software reset, status W1C, and CSR6 run-state reporting;
     CSR9 EEPROM/SROM serial reads now return a deterministic station address,
-    but packet I/O and real Tulip descriptor processing are still deferred;
+    transmit completions can raise ICU IRQ 11 through CSR5/CSR7 status masks,
+    but packet I/O and real Tulip receive descriptor processing are still
+    deferred;
   - VGA/Cirrus shell only if firmware probes require it;
   - floppy/FDC shell only enough for `DVA0` probing.
 - Defer full Ethernet, VGA, and floppy data paths until SRM reaches a prompt

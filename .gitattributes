@@ -13,4 +13,5 @@
 *.crd binary
 *.dck binary
 sim_rev.h export-subst
-
+.gitattributes whitespace=cr-at-eol
+alpha/alpha_ev5_pal.c whitespace=cr-at-eol
