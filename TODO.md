@@ -375,6 +375,16 @@
   offsets.
 - [x] Re-run SRM ROM smoke after PIC/ELCR edge-vs-level handling; it still
   reaches `V5.4-101` and detects pka/ewa.
+- [x] Allow NCR `SIP` and `DIP` to be visible at the same time instead of
+  stacking a DMA interrupt behind a pending SCSI interrupt. The SRM handler
+  reads `SIST0`, `SIST1`, then `DSTAT`; hiding `DSTAT.SIR` while `SIP` was
+  set made the firmware miss the data/status completion and restart the
+  discovery pass.
+- [x] Re-run SRM ROM smoke after simultaneous NCR `SIP`/`DIP` delivery. SRM
+  now reads `DSTAT=0x84` with `DSPS=9/0` and advances into full target/LUN
+  discovery (`targets 0-3`, `LUNs 0-7`) instead of staying in the earlier
+  target 0-3 LUN 0 loop. It still does not reach a visible `P00>>>` prompt
+  before the bounded smoke-test timeout.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
 
@@ -391,16 +401,13 @@
   The current branch has the shared bus/device/attach layer and routes only
   conservative no-data status commands through `sim_scsi`; SRM/VMS-sensitive
   probe and disk commands still use the local shim.
-- [ ] Debug the current SRM post-banner discovery loop: after the latest NCR
-  fixes SRM repeatedly issues standard `INQUIRY` to targets 0-3 and LUNs 0-7,
-  then select-times-out targets 4-6. It has not yet advanced to `READ
-  CAPACITY` or a visible `>>>` prompt. As of 2026-05-07, INQUIRY residual
-  mismatch is no longer the direct trigger (`resid=0`, paired `DSPS=9/0`
-  completions), so the blocker has moved to later SRM-side acceptance logic in
-  the same scan path. A PTY debug run with all four disks and accelerated SCC
-  loops also showed that sending `show dev` after the banner produces no echo
-  or response while NCR discovery continues, so this is not just an invisible
-  prompt.
+- [ ] Debug the current SRM post-banner discovery loop: after simultaneous
+  NCR `SIP`/`DIP` delivery, the old target 0-3 LUN 0 loop is gone. SRM now
+  repeatedly scans targets 0-3 across LUNs 0-7, then select-times-out targets
+  4-6, and restarts the discovery pass. It has not yet advanced to `READ
+  CAPACITY` or a visible `>>>` prompt within the bounded smoke-test window.
+  The next suspect is SRM acceptance of the non-zero-LUN no-device path or the
+  post-scan bus/device summary logic, not the earlier hidden `DSTAT.SIR`.
 - [ ] Complete APECS/DECchip 21071 behavior beyond the current register shells,
   especially actually raising error causes, remaining HAE/config details, and
   DMA corner cases.

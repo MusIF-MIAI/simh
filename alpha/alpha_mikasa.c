@@ -944,11 +944,14 @@ static void mikasa_ncr_write_ctest3 (uint8 val);
 static void mikasa_ncr_write_ctest5 (uint8 val);
 static void mikasa_ncr_write_stest3 (uint8 val);
 static void mikasa_ncr_disc_log (const char *fmt, ...);
+static t_bool mikasa_ncr_table_entry (uint32 dsa, uint32 off, uint32 *count,
+    uint32 *addr);
 static void mikasa_ncr_disc_track_cmd (uint32 target, uint32 lun,
     const uint8 *cdb);
 static void mikasa_ncr_disc_track_timeout (uint32 target);
 static void mikasa_ncr_disc_track_completion (uint32 target, uint32 lun,
-    uint8 status, uint32 dsps, uint32 resid);
+    const uint8 *cdb, const MIKASA_NCR_DMA_LIST *data, uint8 status,
+    uint32 dsps, uint32 resid);
 static t_bool mikasa_ncr_bar_reg (uint32 addr, uint32 bar, uint32 mask,
     uint32 *reg);
 static t_bool mikasa_apb_iobox_read (uint32 unit, t_uint64 lbn,
@@ -3007,6 +3010,102 @@ va_end (arglist);
 return;
 }
 
+static void mikasa_ncr_disc_dump_bytes (const char *tag, uint32 addr,
+    uint32 len)
+{
+uint32 i;
+uint32 max = (len > 64) ? 64 : len;
+char text[3 * 64 + 1];
+uint8 val;
+
+if (!sim_deb || ((mikasa_dev.dctrl & MIKASA_DBG_NCRDISC) == 0))
+    return;
+for (i = 0; i < max; i++) {
+    if (!mikasa_pci_dma_read_byte (addr + i, &val)) {
+        mikasa_ncr_disc_log ("NCRDISC %s addr=%08X len=%u dma-read-failed "
+            "at +%u\n", tag, addr, len, i);
+        return;
+        }
+    (void) snprintf (&text[i * 3], sizeof (text) - (i * 3), "%02X%s",
+        val, (i + 1 == max) ? "" : " ");
+    }
+mikasa_ncr_disc_log ("NCRDISC %s addr=%08X len=%u dump=%s%s\n", tag, addr,
+    len, text, (len > max) ? " ..." : "");
+return;
+}
+
+static void mikasa_ncr_disc_dump_list (const char *tag,
+    const MIKASA_NCR_DMA_LIST *list)
+{
+uint32 i;
+
+if ((list == NULL) || !sim_deb ||
+    ((mikasa_dev.dctrl & MIKASA_DBG_NCRDISC) == 0))
+    return;
+mikasa_ncr_disc_log ("NCRDISC %s list count=%u bytes=%u\n", tag,
+    list->count, list->bytes);
+for (i = 0; i < list->count; i++) {
+    mikasa_ncr_disc_log ("NCRDISC %s seg%u op=%08X count=%u addr=%08X\n",
+        tag, i, list->seg[i].op, list->seg[i].count, list->seg[i].addr);
+    if (list->seg[i].count != 0)
+        mikasa_ncr_disc_dump_bytes (tag, list->seg[i].addr,
+            list->seg[i].count);
+    }
+return;
+}
+
+static void mikasa_ncr_disc_dump_dsa (const char *tag)
+{
+static const uint32 offs[] = { 0x00, 0x08, 0x0C, 0x14, 0x1C, 0x24, 0x2C, 0x34 };
+uint32 dsa = mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA);
+uint32 i;
+
+if (!sim_deb || ((mikasa_dev.dctrl & MIKASA_DBG_NCRDISC) == 0))
+    return;
+mikasa_ncr_disc_log ("NCRDISC %s regs pc=%llX ra=%llX fra=%llX pra=%llX "
+    "dsp=%08X dsa=%08X dnad=%08X dbc=%08X dsps=%08X istat=%02X "
+    "dstat=%02X sist=%02X/%02X sien=%02X/%02X sbcl=%02X sstat=%02X/%02X/%02X "
+    "scntl=%02X/%02X/%02X/%02X sfbr=%02X ssid=%02X sdid=%02X sxfer=%02X\n",
+    tag, (unsigned long long) PC, (unsigned long long) R[26],
+    (unsigned long long) mikasa_ncr_frame_ra (),
+    (unsigned long long) mikasa_ncr_parent_frame_ra (),
+    mikasa_ncr_reg_l (MIKASA_NCR_REG_DSP),
+    dsa,
+    mikasa_ncr_reg_l (MIKASA_NCR_REG_DNAD),
+    mikasa_ncr_reg_l (MIKASA_NCR_REG_DBC),
+    mikasa_ncr_reg_l (MIKASA_NCR_REG_DSPS),
+    mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT],
+    mikasa_ncr_reg[MIKASA_NCR_REG_DSTAT],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SIST0],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SIST1],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SIEN0],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SIEN1],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SBCL],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SSTAT0],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SSTAT1],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SSTAT2],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL0],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL1],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL2],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL3],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SFBR],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SSID],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SDID],
+    mikasa_ncr_reg[MIKASA_NCR_REG_SXFER]);
+for (i = 0; i < sizeof (offs) / sizeof (offs[0]); i++) {
+    uint32 count;
+    uint32 addr;
+
+    if (mikasa_ncr_table_entry (dsa, offs[i], &count, &addr))
+        mikasa_ncr_disc_log ("NCRDISC %s dsa+%02X count=%08X addr=%08X\n",
+            tag, offs[i], count, addr);
+    else
+        mikasa_ncr_disc_log ("NCRDISC %s dsa+%02X unreadable\n", tag,
+            offs[i]);
+    }
+return;
+}
+
 static void mikasa_ncr_disc_track_cmd (uint32 target, uint32 lun,
     const uint8 *cdb)
 {
@@ -3022,6 +3121,8 @@ if ((cdb0 == 0x12) && (target == 0) && (lun == 0)) {
         (unsigned long long) R[26],
         (unsigned long long) mikasa_ncr_frame_ra (),
         (unsigned long long) mikasa_ncr_parent_frame_ra ());
+    if (mikasa_ncr_disc_pass <= 8)
+        mikasa_ncr_disc_dump_dsa ("restart");
     }
 if ((mikasa_ncr_disc_last_target != target) ||
     (mikasa_ncr_disc_last_lun != lun) ||
@@ -3051,13 +3152,19 @@ return;
 }
 
 static void mikasa_ncr_disc_track_completion (uint32 target, uint32 lun,
-    uint8 status, uint32 dsps, uint32 resid)
+    const uint8 *cdb, const MIKASA_NCR_DMA_LIST *data, uint8 status,
+    uint32 dsps, uint32 resid)
 {
 mikasa_ncr_disc_log ("NCRDISC pass=%u done tgt=%u lun=%u st=%02X dsps=%u "
     "resid=%u sbcl=%02X sstat2=%02X con=%c\n", mikasa_ncr_disc_pass, target,
     lun, status, dsps, resid, mikasa_ncr_reg[MIKASA_NCR_REG_SBCL],
     mikasa_ncr_reg[MIKASA_NCR_REG_SSTAT2],
     (mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] & MIKASA_NCR_ISTAT_CON) ? 'y' : 'n');
+if ((target == 0) && (lun == 0) && (cdb != NULL) && (cdb[0] == 0x12) &&
+    (mikasa_ncr_disc_pass <= 8)) {
+    mikasa_ncr_disc_dump_dsa ("inq-complete");
+    mikasa_ncr_disc_dump_list ("inq-data", data);
+    }
 return;
 }
 
@@ -3403,8 +3510,7 @@ return;
 
 static void mikasa_ncr_set_dip (uint8 dstat, uint32 dsps)
 {
-if (mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &
-    (MIKASA_NCR_ISTAT_DIP | MIKASA_NCR_ISTAT_SIP)) {
+if (mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] & MIKASA_NCR_ISTAT_DIP) {
     mikasa_ncr_dstat_stack |= dstat;
     mikasa_ncr_dsps_stack = dsps;
     mikasa_ncr_dsps_stack_valid = TRUE;
@@ -3432,8 +3538,7 @@ return;
 
 static void mikasa_ncr_set_sip (uint8 sist0, uint8 sist1)
 {
-if (mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] &
-    (MIKASA_NCR_ISTAT_DIP | MIKASA_NCR_ISTAT_SIP)) {
+if (mikasa_ncr_reg[MIKASA_NCR_REG_ISTAT] & MIKASA_NCR_ISTAT_SIP) {
     mikasa_ncr_sist0_stack |= sist0;
     mikasa_ncr_sist1_stack |= sist1;
     mikasa_ncr_update_irq ();
@@ -5845,7 +5950,7 @@ if (data.bytes != 0) {
         }
     data_dsps = mikasa_ncr_data_int_dsps (dsp, data_phase);
     mikasa_ncr_disc_track_completion (target, mikasa_ncr_transaction.lun,
-        status, data_dsps, data_resid);
+        cdb, &data, status, data_dsps, data_resid);
     mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SIR, data_dsps);
     }
 else {
@@ -5854,7 +5959,7 @@ else {
     mikasa_ncr_write_status_msg (dsp, dsa, status);
     mikasa_ncr_set_connected (FALSE);
     mikasa_ncr_disc_track_completion (target, mikasa_ncr_transaction.lun,
-        status, status_dsps, 0);
+        cdb, &data, status, status_dsps, 0);
     mikasa_ncr_clear_transaction ();
     mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SIR, status_dsps);
     }
