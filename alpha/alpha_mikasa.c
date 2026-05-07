@@ -3648,6 +3648,24 @@ for (i = 0; (i < list->count) && (done < len); i++) {
 
     if (chunk > (len - done))
         chunk = len - done;
+    if (sim_deb && (mikasa_dev.dctrl & MIKASA_DBG_PCI)) {
+        t_uint64 pa;
+        uint32 j;
+
+        sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+            "NCR DMA write seg=%u addr=%08X", i, list->seg[i].addr);
+        if (mikasa_pci_dma_addr_to_pa (list->seg[i].addr, &pa))
+            sim_debug (MIKASA_DBG_PCI, &mikasa_dev, " pa=%llX",
+                (unsigned long long) pa);
+        else
+            sim_debug (MIKASA_DBG_PCI, &mikasa_dev, " pa=unmapped");
+        sim_debug (MIKASA_DBG_PCI, &mikasa_dev, " len=%u data", chunk);
+        for (j = 0; (j < chunk) && (j < 16); j++)
+            sim_debug (MIKASA_DBG_PCI, &mikasa_dev, " %02X",
+                buf[done + j]);
+        sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "%s\n",
+            (chunk > 16) ? " ..." : "");
+        }
     if (!mikasa_ncr_write_dma_buf (list->seg[i].addr, buf + done, chunk))
         return FALSE;
     done = done + chunk;
@@ -3688,6 +3706,24 @@ for (i = 0; (i < list->count) && (done < len); i++) {
     chunk = count;
     if (chunk > (len - done))
         chunk = len - done;
+    if (sim_deb && (mikasa_dev.dctrl & MIKASA_DBG_PCI)) {
+        t_uint64 pa;
+        uint32 j;
+
+        sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+            "NCR DMA write-offset seg=%u addr=%08X", i, addr);
+        if (mikasa_pci_dma_addr_to_pa (addr, &pa))
+            sim_debug (MIKASA_DBG_PCI, &mikasa_dev, " pa=%llX",
+                (unsigned long long) pa);
+        else
+            sim_debug (MIKASA_DBG_PCI, &mikasa_dev, " pa=unmapped");
+        sim_debug (MIKASA_DBG_PCI, &mikasa_dev, " len=%u data", chunk);
+        for (j = 0; (j < chunk) && (j < 16); j++)
+            sim_debug (MIKASA_DBG_PCI, &mikasa_dev, " %02X",
+                buf[done + j]);
+        sim_debug (MIKASA_DBG_PCI, &mikasa_dev, "%s\n",
+            (chunk > 16) ? " ..." : "");
+        }
     if (!mikasa_ncr_write_dma_buf (addr, buf + done, chunk))
         return FALSE;
     done = done + chunk;
@@ -3716,6 +3752,18 @@ for (i = 0; (i < list->count) && (done < len); i++) {
     chunk = count;
     if (chunk > (len - done))
         chunk = len - done;
+    if (sim_deb && (mikasa_dev.dctrl & MIKASA_DBG_PCI)) {
+        t_uint64 pa;
+
+        sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
+            "NCR DMA read-offset seg=%u addr=%08X", i, addr);
+        if (mikasa_pci_dma_addr_to_pa (addr, &pa))
+            sim_debug (MIKASA_DBG_PCI, &mikasa_dev, " pa=%llX",
+                (unsigned long long) pa);
+        else
+            sim_debug (MIKASA_DBG_PCI, &mikasa_dev, " pa=unmapped");
+        sim_debug (MIKASA_DBG_PCI, &mikasa_dev, " len=%u\n", chunk);
+        }
     if (!mikasa_ncr_read_dma_buf (addr, buf + done, chunk))
         return FALSE;
     done = done + chunk;
