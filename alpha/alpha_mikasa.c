@@ -150,7 +150,7 @@
 #define MIKASA_APECS_PCI_SIO        0x1C0000000ULL
 #define MIKASA_APECS_PCI_SIO_SIZE   0x02000000
 #define MIKASA_APECS_PCI_CONF       0x1E0000000ULL
-#define MIKASA_APECS_PCI_CONF_SIZE  0x02000000
+#define MIKASA_APECS_PCI_CONF_SIZE  0x20000000
 #define MIKASA_APECS_PCI_SPARSE     0x200000000ULL
 #define MIKASA_APECS_PCI_SPARSE_SIZE 0x100000000ULL
 #define MIKASA_APECS_PCI_DENSE      0x300000000ULL
@@ -2115,8 +2115,8 @@ else
     val = mikasa_ocp_reg[reg];
 sim_debug (MIKASA_DBG_IO, &mikasa_dev,
     "OCP read pc=%llX ra=%llX %u=%02X addr=%02X halt=%c\n",
-    (unsigned long long) PC, (unsigned long long) R[26], reg, val,
-    mikasa_ocp_addr, mikasa_halt_pending ? 'y' : 'n');
+    (unsigned long long) PC, (unsigned long long) R[26],
+    reg, val, mikasa_ocp_addr, mikasa_halt_pending ? 'y' : 'n');
 return val;
 }
 
@@ -2144,8 +2144,8 @@ else if (reg == 1) {
     }
 sim_debug (MIKASA_DBG_IO, &mikasa_dev,
     "OCP write pc=%llX ra=%llX %u=%02X addr=%02X\n",
-    (unsigned long long) PC, (unsigned long long) R[26], reg, val,
-    mikasa_ocp_addr);
+    (unsigned long long) PC, (unsigned long long) R[26],
+    reg, val, mikasa_ocp_addr);
 return;
 }
 

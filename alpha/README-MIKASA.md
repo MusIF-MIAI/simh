@@ -21,6 +21,9 @@ Implemented:
   - APECS/DECchip 21071 now exposes the Comanche `0x180000000` register
     block and the EPIC `0x1A0000000` register block through the same system
     DIB.
+  - APECS PCI config cycles decode across the full 512 MB sparse aperture at
+    `0x1E0000000`, so type-1 probes outside bus 0 return normal absent-device
+    config data instead of falling through as unhandled host-bridge I/O.
   - EPIC sparse PCI memory accesses now use `HAXR1` for high-address
     extension, and EPIC DMA window registers preserve the documented writable
     fields used by the PCI DMA mapper.

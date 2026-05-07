@@ -143,6 +143,9 @@
   effects with the local FIFO-empty state.
 - [x] Report NCR `DFIFO.BO[6:0]` consistently with the local FIFO-empty model
   by mirroring the low seven bits of `DBC`.
+- [x] Expand the APECS PCI configuration sparse aperture to the full 512 MB
+  range used by the 21071 host bridge, so type-1 probes such as bus `0x40`
+  decode as absent PCI config reads instead of unhandled APECS I/O.
 - [x] Update NCR `SFBR` with the transferred byte for handled status/message
   phases and the last byte of handled data-in transfers.
 - [x] Reflect SCSI bus data in low-level NCR latches: input phases update
