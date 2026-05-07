@@ -42,6 +42,9 @@
   edges, level IRQs track asserted inputs, and level IRQs can reassert after
   EOI while the line remains active.
 - [x] Route COM1 receive interrupts through the SRM-programmed PIC path.
+- [x] Fill the direct-APB terminal CTB vector fields for the COM1 IRQ4 ISA
+  vector. Keep the CTB CSR zero in the APB bypass for now: using the APECS
+  sparse physical address makes APB halt before disk I/O.
 - [x] Route 8042 keyboard and auxiliary mouse output-buffer interrupts through
   PIC IRQ1/IRQ12 according to the controller command byte.
 - [x] Add DECchip 21040/Tulip interrupt masking/status delivery through

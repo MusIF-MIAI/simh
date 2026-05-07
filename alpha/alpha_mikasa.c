@@ -37,6 +37,10 @@
 #define MIKASA_CTB_OFF              0x1800
 #define MIKASA_CTB_SIZE             0x90
 #define MIKASA_CTB_TERM_SIZE        0x70
+#define MIKASA_CTB_TERM_CSR         0x20
+#define MIKASA_CTB_TERM_XMIT_VEC    0x28
+#define MIKASA_CTB_TERM_RCV_VEC     0x30
+#define MIKASA_CTB_TERM_BAUD        0x38
 #define MIKASA_CRB_OFF              0x1900
 #define MIKASA_CONSOLE_VA_PD_OFF    0x1A00
 #define MIKASA_CONSOLE_PA_PD_OFF    0x1A20
@@ -73,6 +77,7 @@
 #define MIKASA_BOOT_RESERVED_SIZE   0x00100000
 #define MIKASA_PT_SPACE_VA          0x40000000
 #define MIKASA_PT_SPACE_PA          0x00400000
+#define MIKASA_ISA_SCB_BASE         0x800
 #define MIKASA_PT_SPACE_VA_SIZE     (((t_uint64) 1) << (VA_N_VPN + 3))
 #define MIKASA_L1_PT_PA             MIKASA_PT_SPACE_PA
 #define MIKASA_L2_PT_OFF            0x00002000
@@ -9635,7 +9640,12 @@ WritePQ (mddt_pa + 0x000, mikasa_sum_qwords (mddt_pa + 8,
 WritePQ (ctb_pa + 0x000, HWRPB_CTB_TYPE_TERMINAL);
 WritePQ (ctb_pa + 0x008, 0);                           /* OPA0 unit */
 WritePQ (ctb_pa + 0x018, MIKASA_CTB_TERM_SIZE);
-WritePQ (ctb_pa + 0x038, 9600);                        /* baud rate */
+WritePQ (ctb_pa + MIKASA_CTB_TERM_CSR, 0);
+WritePQ (ctb_pa + MIKASA_CTB_TERM_XMIT_VEC,
+    MIKASA_ISA_SCB_BASE + (MIKASA_UART_IRQ << 4));
+WritePQ (ctb_pa + MIKASA_CTB_TERM_RCV_VEC,
+    MIKASA_ISA_SCB_BASE + (MIKASA_UART_IRQ << 4));
+WritePQ (ctb_pa + MIKASA_CTB_TERM_BAUD, 9600);
 
 mikasa_write_console_crb (hwrpb_pa);
 
