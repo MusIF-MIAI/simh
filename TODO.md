@@ -155,11 +155,17 @@
   legacy `0xA0000..0xBFFFF` memory, the PCI option-ROM BAR, and the low
   `0xC0000` option-ROM probe range so normal firmware-visible VGA probes do
   not falsely latch `EPIC.NDEV`.
+- [x] Add `SET MIKASA VGA=ENABLED|DISABLED` so AS1000 configurations without
+  the optional embedded/PCI VGA path can be tested without code edits.
 - [x] Apply APECS sparse-memory HAXR1 extension only above the low 16 MB
   sparse-memory region. FreeBSD's APECS code treats addresses below `REG1`
   as low legacy space even when HAXR1 still contains high PCI address bits;
   this makes SRM's physical `0x201800008` probe decode as VGA legacy
   `0x000C0000` instead of a false high-address `EPIC.NDEV`.
+- [x] Add `SET MIKASA HALT=IN|OUT` for repeatable front-panel Halt tests.
+  `HALT=IN` is visible to the current OCP status shell as bit `0x40`, but
+  bounded SRM tests still stay in the same OCP polling helper, proving that
+  this bit alone is not the complete Mikasa Halt-to-console behavior.
 - [x] Update NCR `SFBR` with the transferred byte for handled status/message
   phases and the last byte of handled data-in transfers.
 - [x] Reflect SCSI bus data in low-level NCR latches: input phases update

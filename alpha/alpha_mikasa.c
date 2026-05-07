@@ -839,6 +839,8 @@ t_stat mikasa_set_rom_payload (UNIT *uptr, int32 val, CONST char *cptr,
 t_stat mikasa_save_rom (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat mikasa_set_nvram (UNIT *uptr, int32 val, CONST char *cptr,
     void *desc);
+t_stat mikasa_set_vga (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
+t_stat mikasa_set_halt (UNIT *uptr, int32 val, CONST char *cptr, void *desc);
 t_stat mikasa_boot_rom (int32 unitno);
 t_stat mikasa_svc (UNIT *uptr);
 void mikasa_mem_write (t_uint64 pa, t_uint64 dat, uint32 lnt);
@@ -1095,6 +1097,7 @@ static uint8 mikasa_vga_seq_index = 0;
 static uint8 mikasa_vga_gfx_index = 0;
 static uint8 mikasa_vga_attr_index = 0;
 static t_bool mikasa_vga_attr_addr = TRUE;
+static t_bool mikasa_vga_enabled = TRUE;
 static uint32 mikasa_ncr_script_trace_count = 0;
 static uint32 mikasa_ncr_disc_pass = 0;
 static t_bool mikasa_ncr_disc_pass_armed = FALSE;
@@ -1117,6 +1120,7 @@ static uint8 mikasa_ocp_reg[4] = { 0 };
 static uint8 mikasa_ocp_ddram[MIKASA_OCP_DDRAM_SIZE] = { 0 };
 static uint8 mikasa_ocp_addr = 0;
 static uint8 mikasa_ocp_busy_count = 0;
+static t_bool mikasa_halt_switch = FALSE;
 static t_bool mikasa_halt_pending = FALSE;
 uint32 mikasa_scc_scale = 1;
 
@@ -1176,6 +1180,12 @@ MTAB mikasa_mod[] = {
     { MTAB_XTD|MTAB_VDV|MTAB_VALR|MTAB_NC, 0, "NVRAM", "NVRAM",
       &mikasa_set_nvram, NULL, NULL,
       "Load or create a 128-byte Mikasa RTC/NVRAM image" },
+    { MTAB_XTD|MTAB_VDV|MTAB_VALR|MTAB_NC, 0, "VGA", "VGA",
+      &mikasa_set_vga, NULL, NULL,
+      "Enable or disable the Mikasa PCI VGA probe device" },
+    { MTAB_XTD|MTAB_VDV|MTAB_VALR|MTAB_NC, 0, "HALT", "HALT",
+      &mikasa_set_halt, NULL, NULL,
+      "Set the Mikasa front-panel Halt switch IN or OUT" },
     { 0 }
     };
 
@@ -1675,6 +1685,38 @@ mikasa_nvram_loaded = TRUE;
 mikasa_rtc_reg[MIKASA_RTC_STATUSD] = MIKASA_RTC_POWER_OK;
 sim_printf ("Loaded Mikasa RTC/NVRAM image from %s\n", cptr);
 return SCPE_OK;
+}
+
+t_stat mikasa_set_vga (UNIT *uptr, int32 val, CONST char *cptr, void *desc)
+{
+if ((cptr == NULL) || (*cptr == 0))
+    return SCPE_ARG;
+if (sim_strcasecmp (cptr, "ENABLED") == 0) {
+    mikasa_vga_enabled = TRUE;
+    return SCPE_OK;
+    }
+if (sim_strcasecmp (cptr, "DISABLED") == 0) {
+    mikasa_vga_enabled = FALSE;
+    return SCPE_OK;
+    }
+return sim_messagef (SCPE_ARG,
+    "MIKASA: VGA must be ENABLED or DISABLED\n");
+}
+
+t_stat mikasa_set_halt (UNIT *uptr, int32 val, CONST char *cptr, void *desc)
+{
+if ((cptr == NULL) || (*cptr == 0))
+    return SCPE_ARG;
+if (sim_strcasecmp (cptr, "IN") == 0) {
+    mikasa_halt_switch = TRUE;
+    return SCPE_OK;
+    }
+if (sim_strcasecmp (cptr, "OUT") == 0) {
+    mikasa_halt_switch = FALSE;
+    return SCPE_OK;
+    }
+return sim_messagef (SCPE_ARG,
+    "MIKASA: HALT must be IN or OUT\n");
 }
 
 static uint8 mikasa_rtc_read_data (void)
@@ -6529,6 +6571,8 @@ uint32 reg = cfg & 0xFC;
 uint32 val = 0xFFFFFFFFu;
 
 if ((bus == 0) && (slot == MIKASA_PCI_SLOT_VGA)) {
+    if (!mikasa_vga_enabled)
+        return val;
     val = mikasa_vga_conf_read_l (func, reg);
     sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
         "PCI config read bus %u slot %u func %u reg %02X=%08X\n",
@@ -6570,6 +6614,8 @@ uint32 func = (cfg >> 8) & 7;
 uint32 reg = cfg & 0xFC;
 
 if ((bus == 0) && (slot == MIKASA_PCI_SLOT_VGA)) {
+    if (!mikasa_vga_enabled)
+        return;
     mikasa_vga_conf_write_l (func, reg, val);
     sim_debug (MIKASA_DBG_PCI, &mikasa_dev,
         "PCI config write bus %u slot %u func %u reg %02X=%08X\n",
@@ -6989,7 +7035,7 @@ if (mikasa_ncr_io_read (port, &val))
     return val;
 if (mikasa_tulip_io_read (port, &val))
     return val;
-if (mikasa_vga_io_port (port))
+if (mikasa_vga_enabled && mikasa_vga_io_port (port))
     return mikasa_vga_io_read (port);
 if ((port >= MIKASA_ISA_DMA1) && (port < (MIKASA_ISA_DMA1 + 0x10)))
     return mikasa_dma1_reg[port - MIKASA_ISA_DMA1];
@@ -7057,7 +7103,7 @@ if (mikasa_ncr_io_write (port, val))
     return;
 if (mikasa_tulip_io_write (port, val))
     return;
-if (mikasa_vga_io_port (port)) {
+if (mikasa_vga_enabled && mikasa_vga_io_port (port)) {
     mikasa_vga_io_write (port, val);
     return;
     }
@@ -7226,6 +7272,8 @@ uint32 mode = (uint32) ((off >> 3) & 3);
 uint32 reg;
 uint32 val;
 
+if (!mikasa_vga_enabled)
+    goto no_vga;
 if ((addr >= MIKASA_VGA_LEGACY_BASE) &&
     (addr < (MIKASA_VGA_LEGACY_BASE + MIKASA_VGA_LEGACY_SIZE))) {
     sim_debug (MIKASA_DBG_IO, &mikasa_dev,
@@ -7248,6 +7296,7 @@ if (mikasa_vga_bar_reg (addr, 0x10, MIKASA_VGA_FB_MASK, &reg)) {
         "VGA framebuffer read %08X\n", addr);
     return M32;
     }
+no_vga:
 if (mikasa_ncr_bar_reg (addr, 0x14, 0xFFFFFFFFu, &reg)) {
     if (mode == 3)
         return mikasa_ncr_read_l (reg & ~3u);
@@ -7288,6 +7337,8 @@ uint32 mode = (uint32) ((off >> 3) & 3);
 uint32 reg;
 uint32 data;
 
+if (!mikasa_vga_enabled)
+    goto no_vga;
 if ((addr >= MIKASA_VGA_LEGACY_BASE) &&
     (addr < (MIKASA_VGA_LEGACY_BASE + MIKASA_VGA_LEGACY_SIZE))) {
     sim_debug (MIKASA_DBG_IO, &mikasa_dev,
@@ -7314,6 +7365,7 @@ if (mikasa_vga_bar_reg (addr, 0x10, MIKASA_VGA_FB_MASK, &reg)) {
         addr, (unsigned long long) val);
     return;
     }
+no_vga:
 if (mikasa_ncr_bar_reg (addr, 0x14, 0xFFFFFFFFu, &reg)) {
     if (mode == 3)
         mikasa_ncr_write_l (reg & ~3u, (uint32) val);
@@ -10180,7 +10232,7 @@ memset (mikasa_ocp_reg, 0, sizeof (mikasa_ocp_reg));
 memset (mikasa_ocp_ddram, ' ', sizeof (mikasa_ocp_ddram));
 mikasa_ocp_addr = 0;
 mikasa_ocp_busy_count = 0;
-mikasa_halt_pending = FALSE;
+mikasa_halt_pending = mikasa_halt_switch;
 mikasa_unit.wait = MIKASA_CLOCK_DELAY;
 sim_activate (&mikasa_unit, sim_rtcn_init_unit (&mikasa_unit,
     mikasa_unit.wait, MIKASA_CLOCK_TMR));

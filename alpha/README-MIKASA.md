@@ -107,6 +107,15 @@ Implemented:
     counter behavior.
   - `SET MIKASA NVRAM=<path>` loads or creates a 128-byte MC146818-compatible
     RTC/NVRAM image. RTC writes are persisted immediately when this is set.
+  - `SET MIKASA VGA=ENABLED|DISABLED` controls the optional PCI VGA probe
+    shell. With VGA disabled, bounded SRM tests still reach the firmware
+    banner over serial without probing PCI slot 2, so the post-banner prompt
+    blocker is not just the Cirrus device.
+  - `SET MIKASA HALT=IN|OUT` controls the current emulated front-panel Halt
+    input for repeatable SRM tests. `HALT=IN` is visible to the current OCP
+    status path as bit `0x40`, but SRM still remains in the same post-banner
+    polling helper; this proves that bit alone is not the complete
+    Halt-to-console behavior.
 - OpenVMS Alpha APB direct loader:
   - Reads LBN/count from the primary boot block offsets used by the dump.
   - Loads the primary bootstrap at physical `0x00200000`.
@@ -462,6 +471,12 @@ SRM but kept the firmware in the same OCP polling helper. AXPbox does not
 settle this for Mikasa: its telnet BREAK path opens the emulator menu, and its
 `HaltA`/`HaltB` state belongs to ES40 TIG registers rather than this OCP/DPR
 interface.
+
+The FreeBSD Alpha hardware notes also call out the AlphaServer 1000/800
+console selection as firmware-sensitive: those systems require SRM
+`SET CONSOLE SERIAL` for serial operation. That makes the real SRM
+environment/NVRAM store, not a patched APB path, the next high-value target
+for the post-banner prompt blocker.
 
 Use a PTY or the remote-console proxy for this class of debug. Injecting WRU
 through a plain stdin pipe is not reliable enough to recover `sim>` state after
