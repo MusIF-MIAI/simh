@@ -201,6 +201,9 @@
 - [x] Correct NCR SCRIPTS transfer-control condition polarity: in fetched
   opcodes bit 19 represents the encoded `IFTRUE` sense, while the cleared bit
   is the XOR-produced `IFFALSE` form used by real scripts.
+- [x] Raise NCR `SIST0.UDC` together with `SIST1.STO` on selection timeout
+  paths, matching documented initiator behavior where timeout is also treated
+  as an unexpected disconnect condition.
 - [x] Execute deferred NCR status/message completion by running the firmware
   control script with STATUS as the current phase, then transition the script
   state to MESSAGE IN after the status byte instead of synthesizing an

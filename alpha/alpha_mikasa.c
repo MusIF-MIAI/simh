@@ -3611,7 +3611,7 @@ if ((newval & MIKASA_NCR_SCNTL0_START) &&
     else {
         mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL2] &= ~MIKASA_NCR_SCNTL2_SDU;
         mikasa_ncr_set_connected (FALSE);
-        mikasa_ncr_set_sip (0, MIKASA_NCR_SIST1_STO);
+        mikasa_ncr_set_sip (MIKASA_NCR_SIST0_UDC, MIKASA_NCR_SIST1_STO);
         }
     }
 return;
@@ -5747,7 +5747,7 @@ if ((target >= MIKASA_DKA_UNITS) || ((dka_unit[target].flags & UNIT_ATT) == 0)) 
     mikasa_ncr_clear_transaction ();
     mikasa_ncr_reg[MIKASA_NCR_REG_SCNTL2] &= ~MIKASA_NCR_SCNTL2_SDU;
     mikasa_ncr_set_connected (FALSE);
-    mikasa_ncr_set_sip (0, MIKASA_NCR_SIST1_STO);
+    mikasa_ncr_set_sip (MIKASA_NCR_SIST0_UDC, MIKASA_NCR_SIST1_STO);
     return TRUE;
     }
 mikasa_ncr_begin_transaction (dsp, dsa, target);
@@ -5922,11 +5922,19 @@ return TRUE;
 static void mikasa_ncr_start_script (uint32 dsp)
 {
 if (mikasa_ncr_transaction.status_pending) {
+    uint32 status_dsp = dsp;
+    uint32 status_dsa = mikasa_ncr_transaction.dsa;
     uint8 status = mikasa_ncr_transaction.status;
 
     mikasa_ncr_transaction.status_pending = FALSE;
     mikasa_ncr_latch_phase (MIKASA_NCR_PHASE_STS,
         MIKASA_NCR_PHASE_STS);
+    /*
+     * Data-phase commands defer STATUS/MESSAGE completion here; write both
+     * bytes through the script table/direct MOVE targets so firmware-side
+     * completion structures see the same data path as no-data commands.
+     */
+    mikasa_ncr_write_status_msg (status_dsp, status_dsa, status);
     mikasa_ncr_trace_script (dsp);
     if (!mikasa_ncr_run_control_script_phase (dsp,
         MIKASA_NCR_PHASE_STS, status)) {
@@ -5934,6 +5942,8 @@ if (mikasa_ncr_transaction.status_pending) {
         if (!mikasa_ncr_wait_reselect)
             mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_BF, dsp);
         }
+    else
+        mikasa_ncr_set_connected (FALSE);
     mikasa_ncr_clear_transaction ();
     }
 else {
