@@ -443,7 +443,7 @@ For the current stop, the useful history extraction is:
 
 ```text
 timeout 120 bash -lc "printf 'set cpu history=20000\ndo alpha/mikasa-fermi.ini\nshow cpu history\nexit\n' | BIN/alpha > /tmp/mikasa_boot_history.txt"
-perl -ane 'if ($F[0] eq "0000000020049E5C") { $c = chr(hex($F[1]) & 255); next if defined($last) && $last eq $c; print $c; $last = $c } END { print "\n" }' /tmp/mikasa_boot_history.txt
+python3 alpha/tools/extract-apb-console.py /tmp/mikasa_boot_history.txt
 ```
 
 The old de-duplicated failure message was:
