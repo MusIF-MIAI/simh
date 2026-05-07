@@ -295,8 +295,8 @@ That stop was self-inflicted: `mikasa_apb_patch_sysroot()` rewrote APB's
 `SYS%%%%%%%%%%%%%%%%%%%%%%%%%%%%` template to `SYS0` padded with spaces. APB
 uses that template as part of its own boot/system-root resolution, so the
 rewrite corrupted the directory traversal. With the rewrite removed, APB reads
-past `SYS0.DIR` and continues into later `SYSCOMMON/SYSEXE` directory blocks
-instead of halting with `%APB-I-FILENOTLOC`.
+past `SYS0.DIR`, fetches `SYSEXE.DIR`, then reads blocks belonging to
+`VMS$LPBEGIN-050_STARTUP.COM` instead of halting with `%APB-I-FILENOTLOC`.
 
 Earlier stops were `R0=0x124` (`SS$_INSFMEM`) while mapping bootstrap memory
 around the `0x40000000` boot page-table window, unsupported PAL calls such as
@@ -455,8 +455,8 @@ The old de-duplicated failure message was:
 
 After removing the APB sysroot rewrite, this message should no longer appear in
 the direct-APB smoke test. A timeout is expected until the next blocker is
-identified, but the trace should show reads beyond `SYS0.DIR`, including later
-`SYSCOMMON/SYSEXE` directory blocks.
+identified, but the trace should show reads beyond `SYS0.DIR`, including
+`SYSEXE.DIR` and blocks from `VMS$LPBEGIN-050_STARTUP.COM`.
 
 ## SRM Firmware Images
 

@@ -415,9 +415,10 @@
   descriptor processing beyond the current SRM setup-frame transmit shell.
 - [ ] Re-run SRM/APB smoke tests after the next hardware batch.
 - [ ] Continue the direct-APB investigation after the old `SYSBOOT.EXE;2`
-  lookup failure. APB now reads past `SYS0.DIR` and fetches later
-  `SYSCOMMON/SYSEXE` directory blocks; the next blocker is whatever happens
-  after those reads, not the previous `%APB-I-FILENOTLOC` stop.
+  lookup failure. APB now reads past `SYS0.DIR`, fetches `SYSEXE.DIR`, then
+  reads blocks belonging to `VMS$LPBEGIN-050_STARTUP.COM`; the next blocker is
+  whatever happens after those reads, not the previous `%APB-I-FILENOTLOC`
+  stop.
 
 ## Not Started / Deferred
 
