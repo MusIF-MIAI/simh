@@ -181,6 +181,9 @@ extern t_uint64 pcq[PCQ_SIZE];                          /* PC queue */
 extern int32 pcq_p;                                     /* PC queue ptr */
 
 extern int32 parse_reg (const char *cptr);
+extern t_bool mikasa_pal_uses_simh_ipl (void);
+extern t_stat mikasa_pal_proc_intr (uint32 lvl);
+extern t_stat mikasa_pal_proc_trap (uint32 summ);
 extern t_stat mikasa_pal_proc_excp (uint32 abval);
 extern t_stat mikasa_pal_proc_inst (uint32 fnc);
 
@@ -246,8 +249,13 @@ DEVICE ev5pal_dev = {
 
 t_stat pal_proc_intr (uint32 lvl)
 {
-if (cpu_model == ALPHA_MODEL_MIKASA_4_266)
+if (cpu_model == ALPHA_MODEL_MIKASA_4_266) {
+    t_stat r = mikasa_pal_proc_intr (lvl);
+
+    if (r != SCPE_NOFNC)
+        return r;
     return ev5_palent (PC, EV4_PALO_INTR);
+    }
 return ev5_palent (PC, PALO_INTR);
 }
 
@@ -256,6 +264,12 @@ return ev5_palent (PC, PALO_INTR);
 
 t_stat pal_proc_trap (uint32 summ)
 {
+if (cpu_model == ALPHA_MODEL_MIKASA_4_266) {
+    t_stat r = mikasa_pal_proc_trap (summ);
+
+    if (r != SCPE_NOFNC)
+        return r;
+    }
 return ev5_palent (PC, PALO_TRAP);
 }
 
@@ -264,11 +278,7 @@ return ev5_palent (PC, PALO_TRAP);
 
 t_stat pal_proc_excp (uint32 abval)
 {
-if ((cpu_model == ALPHA_MODEL_MIKASA_4_266) &&
-    ((abval == EXC_ALIGN) ||
-     (abval == (EXC_TBM + EXC_E)) ||
-     (abval == (EXC_TBM + EXC_R)) ||
-     (abval == (EXC_TBM + EXC_W)))) {
+if (cpu_model == ALPHA_MODEL_MIKASA_4_266) {
     t_stat r = mikasa_pal_proc_excp (abval);
 
     if (r != SCPE_NOFNC)
@@ -370,7 +380,8 @@ return ev5_palent (PC, PALO_CALLPR + off);
 uint32 pal_eval_intr (uint32 flag)
 {
 uint32 i, req = 0;
-uint32 lvl = (flag && !ev4_ipr_is_mikasa ())? ev5_ipl: 0;
+uint32 lvl = (flag && (!ev4_ipr_is_mikasa () ||
+    mikasa_pal_uses_simh_ipl ()))? ev5_ipl: 0;
 
 if (flag && pal_mode) return 0;
 if (ev5_mchk) req = IPL_1F;

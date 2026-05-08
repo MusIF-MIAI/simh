@@ -451,6 +451,15 @@
   records the SRM/APB PAL handoff context, `SWPCTX` saves/restores HWPCB
   state, FEN/DATFX update PCB flags, TB invalidation PAL calls touch the TLB,
   and ESP/SSP/USP/REI/RD_PS use VMS-style state instead of fixed zeros.
+- [x] Expand Mikasa VMS PAL exception handling beyond CALL_PAL stubs:
+  software traps (`BPT`, `BUGCHK`, `GENTRAP`, `CHM*`) now vector through the
+  VMS SCB, `REI` and exception entry validate kernel stack frames, `SWPCTX`
+  rejects invalid PCBB physical memory instead of partially mutating state,
+  `MF_ASN` reports the active TLB ASN, `SWASTEN` uses the current mode bit,
+  and TLB/PTE probing handles missing lookup entries without NULL dereferences.
+- [x] Route Mikasa trap/abort/interrupt dispatch to the emulated VMS PAL once
+  the SRM/APB handoff has installed it, while preserving real SRM PAL entry
+  dispatch before `CSERVE START`.
 - [ ] Debug the next SRM/APB blocker: after the CSERVE fix, APB returns to
   SRM with `halt code = 0` and `PC = 20000000` instead of the earlier
   `halt code = 5`/`PRBR=0x1e8` path. Do this only after the PAL state work is
@@ -711,6 +720,9 @@ the real path works.
   physical PAL accesses, and impure-area semantics.
 - `~/Alpha/docs/alpha_arch_ref.pdf` for Alpha architectural PAL calls,
   `SWPCTX`, `REI`, `HALT`, VMS bootstrap state, and HWRPB/PCB expectations.
+- `~/Alpha/docs/palcode.zip`, `~/Alpha/docs/palcode/`, and
+  `~/Alpha/docs/palcode_src/` for DEC sample PAL sources, console save-area
+  offsets, PALtemp layout, and old firmware-side PAL/CSERVE examples.
 - `references/freebsd/src-6.4.0/sys/alpha` for AS1000, APECS, interrupt, and
   platform behavior.
 - `../firmware/as1000/EK-AXPFW-RM-B01.pdf.txt` for SRM-visible AS1000 device
