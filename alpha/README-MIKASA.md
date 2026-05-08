@@ -478,6 +478,15 @@ Use a PTY or the remote-console proxy for this class of debug. Injecting WRU
 through a plain stdin pipe is not reliable enough to recover `sim>` state after
 `BOOT CPU`.
 
+Do not use SRM `ls` or `cat` with OpenVMS filespecs as an ODS-2 filesystem
+test. On the Mikasa V5.4-101 firmware, commands such as
+`ls -l dka0:[SYS0.SYSCOMMON.SYSEXE]` resolve only to the raw device object
+`dka0.0.0.6.0`. A traced `cat dka0:[000000]SYS0.DIR;1` issued READ(10) CDBs
+for sequential raw LBNs `0, 4, 8, ...`, and the output matched the disk boot
+block, not `SYS0.DIR`. The OpenVMS FAQ documents SRM `ls` for FAT floppy
+access (`fat:.../dva0`), so this behavior is not evidence that 53C810 DMA
+rewrites file reads to LBN 0. It only proves raw disk reads through SRM.
+
 APB console output is not yet routed through the SIMH console callback path.
 For the current stop, the useful history extraction is:
 

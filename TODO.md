@@ -52,6 +52,10 @@
 - [x] Run the first real SRM boot command from the prompt:
   `boot dka0 -fl 0,10000` now opens DKA0, validates the boot block, reads the
   1049-block bootstrap image, and reaches `bootstrap code read in`.
+- [x] Trace SRM `ls`/`cat` against DKA0. `ls dka0:[...]` only reports the raw
+  `dka0.0.0.6.0` device object, and `cat dka0:[000000]SYS0.DIR;1` issues
+  sequential READ(10) CDBs for raw LBNs `0, 4, 8, ...`; this is not an ODS-2
+  file-open path and is not direct evidence of a 53C810 DMA address bug.
 - [x] Route 8042 keyboard and auxiliary mouse output-buffer interrupts through
   PIC IRQ1/IRQ12 according to the controller command byte.
 - [x] Add DECchip 21040/Tulip interrupt masking/status delivery through
