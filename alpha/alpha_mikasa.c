@@ -704,7 +704,9 @@ extern jmp_buf save_env;
 extern t_uint64 *M;
 extern t_uint64 R[32];
 extern t_uint64 PC;
+extern t_uint64 pcq[PCQ_SIZE];
 extern t_uint64 p1;
+extern int32 pcq_p;
 extern uint32 ir;
 extern uint32 lock_flag;
 extern uint32 pal_mode;
@@ -921,6 +923,7 @@ static t_uint64 mikasa_pal_read_una (t_uint64 va, uint32 size);
 static void mikasa_pal_write_una (t_uint64 va, t_uint64 val, uint32 size);
 static t_uint64 mikasa_pal_read_una_l (t_uint64 va);
 static void mikasa_pal_write_una_l (t_uint64 va, t_uint64 val);
+static t_stat mikasa_pal_cserve (void);
 static void mikasa_write_console_crb (t_uint64 hwrpb_pa);
 static void mikasa_set_boot_env (CONST char *bootdev, uint32 osflags);
 static t_uint64 mikasa_callback_status (t_uint64 status, t_uint64 count);
@@ -9754,11 +9757,55 @@ return;
 #define MPAL_SISR_MASK  0xFFFE
 #define MPAL_PS_SW_MASK 0x03
 
+#define MIKASA_CSERVE_RDIO     0x10
+#define MIKASA_CSERVE_WRIO     0x11
+#define MIKASA_CSERVE_HALT     0x3E
+#define MIKASA_CSERVE_RDWHAMI  0x41
+#define MIKASA_CSERVE_START    0x42
+#define MIKASA_CSERVE_WRIPIR   0x43
+#define MIKASA_CSERVE_JUMP     0x44
+#define MIKASA_CSERVE_WRMCES   0x45
+#define MIKASA_CSERVE_SWPPAL   0x65
+#define MIKASA_CSERVE_IMB      0x66
+
+static t_stat mikasa_pal_cserve (void)
+{
+switch ((uint32) R[16]) {
+
+    case MIKASA_CSERVE_RDIO:
+        R[0] = ReadPL (R[17]);
+        break;
+
+    case MIKASA_CSERVE_WRIO:
+        WritePL (R[17], R[18]);
+        break;
+
+    case MIKASA_CSERVE_RDWHAMI:
+        R[0] = 0;
+        break;
+
+    case MIKASA_CSERVE_START:
+        R[0] = 0;
+        break;
+
+    case MIKASA_CSERVE_JUMP:
+        PCQ_ENTRY;
+        PC = R[17] & M64;
+        break;
+
+    default:
+        R[0] = 0;
+        break;
+        }
+
+return SCPE_OK;
+}
+
 t_stat mikasa_pal_proc_inst (uint32 fnc)
 {
 uint32 arg32 = (uint32) R[16];
 
-if (!mikasa_direct_apb)
+if (!mikasa_direct_apb && (fnc != MPAL_CSERVE))
     return SCPE_NOFNC;
 
 switch (fnc) {
@@ -9809,8 +9856,7 @@ switch (fnc) {
         break;
 
     case MPAL_CSERVE:
-        R[0] = 0;
-        break;
+        return mikasa_pal_cserve ();
 
     case MPAL_SWPPAL:
         pal_type = PAL_VMS;

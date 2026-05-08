@@ -442,7 +442,13 @@
 - [x] Advance SRM `boot dka0 -fl 0,10000` past disk open. The firmware now
   validates block 0, reads 1049 bootstrap blocks from DKA0, and reaches
   `bootstrap code read in`.
-- [ ] Debug the next SRM boot blocker after `bootstrap code read in`.
+- [x] Advance real SRM `boot dka0 -fl 0,20000` past the previous
+  `PRBR=0x1e8` restore failure. Mikasa now intercepts `CALL_PAL CSERVE`
+  enough for the real SRM/APB handoff path to avoid installing the invalid
+  low-memory callback context.
+- [ ] Debug the next SRM/APB blocker: after the CSERVE fix, APB returns to
+  SRM with `halt code = 0` and `PC = 20000000` instead of the earlier
+  `halt code = 5`/`PRBR=0x1e8` path.
 - [x] Debug the current SRM post-banner wait. The immediate blocker was not
   SCSI discovery or OCP busy polling; SRM had entered its console driver, but
   the UART model did not raise THRE interrupts, so the prompt stayed queued.
