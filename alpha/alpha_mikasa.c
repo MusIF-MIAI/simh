@@ -915,6 +915,7 @@ static const uint32 mikasa_ast_pri[16] = {
     MODE_U, MODE_K, MODE_E, MODE_K, MODE_S, MODE_K, MODE_E, MODE_K
     };
 static t_bool mikasa_srm_bootstrap_pal = FALSE;
+static t_bool mikasa_srm_os_handoff = FALSE;
 
 t_stat mikasa_reset (DEVICE *dptr);
 t_stat mikasa_boot_prepare (CONST char *bootdev, uint32 osflags,
@@ -1014,6 +1015,8 @@ static void mikasa_pal_write_una_l (t_uint64 va, t_uint64 val);
 static t_stat mikasa_pal_cserve (void);
 static t_stat mikasa_pal_cserve_platform (void);
 static t_bool mikasa_pal_valid_phys (t_uint64 pa, uint32 size);
+static t_bool mikasa_pal_route_os_events (void);
+static t_bool mikasa_pal_bootstrap_map (void);
 static void mikasa_pal_set_pc (t_uint64 pc);
 static uint32 mikasa_pal_current_mode (void);
 static t_uint64 mikasa_pal_read_ps (void);
@@ -7786,6 +7789,8 @@ pal_mode = 1;
 dmapen = 0;
 fpen = 1;
 pal_type = PAL_VMS;
+mikasa_srm_bootstrap_pal = FALSE;
+mikasa_srm_os_handoff = FALSE;
 lock_flag = 0;
 return;
 }
@@ -9243,9 +9248,19 @@ switch (fnc) {
 return SCPE_OK;
 }
 
+static t_bool mikasa_pal_route_os_events (void)
+{
+return mikasa_direct_apb || mikasa_srm_os_handoff;
+}
+
+static t_bool mikasa_pal_bootstrap_map (void)
+{
+return mikasa_direct_apb || !mikasa_srm_os_handoff;
+}
+
 t_bool mikasa_pal_uses_simh_ipl (void)
 {
-return mikasa_direct_apb || mikasa_srm_bootstrap_pal;
+return mikasa_pal_route_os_events ();
 }
 
 t_stat mikasa_pal_proc_intr (uint32 lvl)
@@ -9255,7 +9270,7 @@ uint32 i;
 uint32 mode = mikasa_pal_current_mode ();
 t_stat r;
 
-if (!mikasa_direct_apb && !mikasa_srm_bootstrap_pal)
+if (!mikasa_pal_route_os_events ())
     return SCPE_NOFNC;
 if (lvl & IPL_HALT)
     return STOP_HALT;
@@ -9304,7 +9319,7 @@ t_stat mikasa_pal_proc_trap (uint32 summ)
 {
 t_stat r;
 
-if (!mikasa_direct_apb && !mikasa_srm_bootstrap_pal)
+if (!mikasa_pal_route_os_events ())
     return SCPE_NOFNC;
 r = mikasa_pal_intexc (MIKASA_SCB_ARITH, MODE_K, mikasa_pal_ipl);
 if (r == SCPE_OK) {
@@ -9322,7 +9337,40 @@ t_uint64 pte;
 uint32 exc;
 t_stat r;
 
-if (!mikasa_direct_apb && !mikasa_srm_bootstrap_pal)
+switch (abval) {
+
+    case EXC_ALIGN:
+        if (mikasa_pal_bootstrap_map ()) {
+            if (mikasa_pal_proc_align ())
+                return SCPE_OK;
+            return SCPE_NOFNC;
+            }
+        break;
+
+    case EXC_TBM + EXC_E:
+        if (mikasa_pal_bootstrap_map ()) {
+            if (!mikasa_boot_va_to_pa (va, &pa))
+                return SCPE_NOFNC;
+            mikasa_load_itlb_page (va & ~((t_uint64) VA_M_OFF),
+                pa & ~((t_uint64) VA_M_OFF), PTE_KRE | PTE_KWE);
+            return SCPE_OK;
+            }
+        break;
+
+    case EXC_TBM + EXC_R:
+    case EXC_TBM + EXC_W:
+        if (mikasa_pal_bootstrap_map ()) {
+            if (!mikasa_boot_va_to_pa (va, &pa))
+                return SCPE_NOFNC;
+            mikasa_load_dtlb_page (va & ~((t_uint64) VA_M_OFF),
+                pa & ~((t_uint64) VA_M_OFF), PTE_KRE | PTE_KWE);
+            PC = (PC - 4) & M64;
+            return SCPE_OK;
+            }
+        break;
+        }
+
+if (!mikasa_pal_route_os_events ())
     return SCPE_NOFNC;
 
 switch (abval) {
@@ -9351,13 +9399,6 @@ switch (abval) {
         return mikasa_pal_intexc (MIKASA_SCB_FDIS, MODE_K, mikasa_pal_ipl);
 
     case EXC_TBM + EXC_E:
-        if (mikasa_direct_apb) {
-            if (!mikasa_boot_va_to_pa (va, &pa))
-                return SCPE_NOFNC;
-            mikasa_load_itlb_page (va & ~((t_uint64) VA_M_OFF),
-                pa & ~((t_uint64) VA_M_OFF), PTE_KRE | PTE_KWE);
-            return SCPE_OK;
-            }
         exc = mikasa_pal_find_pte_vms (va, &pte);
         if (exc != 0)
             return mikasa_pal_mm_intexc ((exc == EXC_TNV) ?
@@ -9367,14 +9408,6 @@ switch (abval) {
 
     case EXC_TBM + EXC_R:
     case EXC_TBM + EXC_W:
-        if (mikasa_direct_apb) {
-            if (!mikasa_boot_va_to_pa (va, &pa))
-                return SCPE_NOFNC;
-            mikasa_load_dtlb_page (va & ~((t_uint64) VA_M_OFF),
-                pa & ~((t_uint64) VA_M_OFF), PTE_KRE | PTE_KWE);
-            PC = (PC - 4) & M64;
-            return SCPE_OK;
-            }
         exc = mikasa_pal_find_pte_vms (va, &pte);
         if (exc != 0) {
             PC = (PC - 4) & M64;
@@ -10321,6 +10354,7 @@ dmapen = 1;
 tlb_set_cm (MODE_K);
 pal_type = PAL_VMS;
 pal_mode = 0;
+mikasa_srm_os_handoff = TRUE;
 lock_flag = 0;
 R[0] = 0;
 return SCPE_OK;
@@ -10544,7 +10578,8 @@ uint32 arg32 = (uint32) R[16];
 
 if (!mikasa_direct_apb && !mikasa_srm_bootstrap_pal && (fnc != MPAL_CSERVE))
     return SCPE_NOFNC;
-if ((fnc < 0x40) && (mikasa_pal_current_mode () != MODE_K))
+if (mikasa_pal_route_os_events () && (fnc < 0x40) &&
+    (mikasa_pal_current_mode () != MODE_K))
     ABORT (EXC_RSVI);
 
 switch (fnc) {
@@ -10946,6 +10981,7 @@ uint32 cluster = 0;
 
 mikasa_direct_apb = TRUE;
 mikasa_srm_bootstrap_pal = FALSE;
+mikasa_srm_os_handoff = FALSE;
 if (!ADDR_IS_MEM (hwrpb_pa + MIKASA_HWRPB_SIZE - 1))
     return SCPE_NXM;
 
@@ -11082,6 +11118,7 @@ mikasa_irq_summary = 0;
 sim_cancel (&mikasa_unit);
 mikasa_direct_apb = FALSE;
 mikasa_srm_bootstrap_pal = FALSE;
+mikasa_srm_os_handoff = FALSE;
 mikasa_pal_pcbb = 0;
 mikasa_pal_prbr = 0;
 mikasa_pal_ptbr = 0;
