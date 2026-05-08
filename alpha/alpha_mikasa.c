@@ -111,6 +111,16 @@
 #define MIKASA_AXPBOX_ROM_SIZE      (16 + MIKASA_AXPBOX_ROM_MEMSIZE)
 #define MIKASA_PCBV_FLAGS           56
 #define MIKASA_VMS_STACK_FRAME      (8 * 8)
+#define MIKASA_PCB_KSP              0
+#define MIKASA_PCB_ESP              8
+#define MIKASA_PCB_SSP              16
+#define MIKASA_PCB_USP              24
+#define MIKASA_PCB_PTBR             32
+#define MIKASA_PCB_ASN              40
+#define MIKASA_PCB_AST              48
+#define MIKASA_PCB_PCC              64
+#define MIKASA_PCB_THREAD           72
+#define MIKASA_PCB_MIN_SIZE         80
 #define MIKASA_SCB_FDIS             0x010
 #define MIKASA_SCB_ACV              0x080
 #define MIKASA_SCB_TNV              0x090
@@ -137,6 +147,9 @@
 #define MIKASA_VMS_MME_W            0x8000000000000000
 #define MIKASA_PAL_AST_MASK         0x0F
 #define MIKASA_PAL_SISR_MASK        0xFFFE
+#define MIKASA_PAL_PTBR_PHYS        0x1
+#define MIKASA_PAL_PHYS_PTE         (PTE_KWE | PTE_EWE | PTE_KRE | \
+                                      PTE_ERE | PTE_GH | PTE_ASM | PTE_V)
 #define MIKASA_PSV_V_SPA            56
 #define MIKASA_PSV_M_SPA            0x3F
 #define MIKASA_PSV_V_IPL            8
@@ -985,6 +998,11 @@ static t_int64 mikasa_pal_remqtiq (void);
 static t_int64 mikasa_pal_remquel (uint32 defer);
 static t_int64 mikasa_pal_remqueq (uint32 defer);
 static uint32 mikasa_pal_find_pte_vms (t_uint64 va, t_uint64 *pte);
+static t_bool mikasa_pal_physical_mode (void);
+static t_uint64 mikasa_pal_ptbr_pa (void);
+static t_uint64 mikasa_pal_ptbr_pfn (void);
+static t_uint64 mikasa_pal_vtbr_va (void);
+static t_uint64 mikasa_pal_ptbr_from_pfn (t_uint64 pfn);
 static uint32 mikasa_pal_test_va (t_uint64 va, uint32 acc, t_uint64 *pa);
 static uint32 mikasa_pal_tlb_check (t_uint64 va);
 static t_bool mikasa_pal_proc_align (void);
@@ -1000,7 +1018,9 @@ static void mikasa_pal_set_pc (t_uint64 pc);
 static uint32 mikasa_pal_current_mode (void);
 static t_uint64 mikasa_pal_read_ps (void);
 static void mikasa_pal_write_pcbb_flags (t_uint64 mask, t_uint64 bits);
+static t_stat mikasa_pal_load_pcbb (t_uint64 pcbb);
 static t_stat mikasa_pal_swpctx (void);
+static t_stat mikasa_pal_swppal (void);
 static t_stat mikasa_pal_intexc (uint32 vec, uint32 newmode, uint32 newipl);
 static t_stat mikasa_pal_mm_intexc (uint32 vec, t_uint64 par2);
 static t_stat mikasa_pal_rei (void);
@@ -9516,13 +9536,18 @@ TLBENT *tlbp;
 
 if ((va_sext != 0) && (va_sext != VA_M_SEXT))
     return EXC_BVA;
-vptea = mikasa_pal_vtbr | (((t_uint64) (vpn & VA_M_VPN)) << 3);
+if (mikasa_pal_physical_mode ()) {
+    *pte = (((va >> VA_N_OFF) & PFN_MASK) << PTE_V_PFN) |
+        MIKASA_PAL_PHYS_PTE;
+    return 0;
+    }
+vptea = mikasa_pal_vtbr_va () | (((t_uint64) (vpn & VA_M_VPN)) << 3);
 tlbp = dtlb_lookup (VA_GETVPN (vptea));
 if ((tlbp != NULL) && (tlbp->tag == VA_GETVPN (vptea)) &&
     ((tlbp->pte & (PTE_KRE | PTE_V)) == (PTE_KRE | PTE_V)))
     l3ptea = PHYS_ADDR (tlbp->pfn, vptea);
 else {
-    l1ptea = mikasa_pal_ptbr + VPN_GETLVL1 (vpn);
+    l1ptea = mikasa_pal_ptbr_pa () + VPN_GETLVL1 (vpn);
     if (!mikasa_pal_valid_phys (l1ptea, sizeof (t_uint64)))
         return EXC_ACV;
     l1pte = ReadPQ (l1ptea);
@@ -10170,6 +10195,33 @@ return (((t_uint64) (mikasa_pal_ipl & MIKASA_PSV_M_IPL)) <<
     (mikasa_pal_ps & MIKASA_PSV_MASK);
 }
 
+static t_bool mikasa_pal_physical_mode (void)
+{
+return ((mikasa_pal_ptbr | mikasa_pal_vtbr) & MIKASA_PAL_PTBR_PHYS) != 0;
+}
+
+static t_uint64 mikasa_pal_ptbr_pa (void)
+{
+return mikasa_pal_ptbr & ~((t_uint64) MIKASA_PAL_PTBR_PHYS);
+}
+
+static t_uint64 mikasa_pal_ptbr_pfn (void)
+{
+return (mikasa_pal_ptbr_pa () >> VA_N_OFF) |
+    ((mikasa_pal_ptbr & MIKASA_PAL_PTBR_PHYS) ? Q_SIGN : 0);
+}
+
+static t_uint64 mikasa_pal_vtbr_va (void)
+{
+return mikasa_pal_vtbr & ~((t_uint64) MIKASA_PAL_PTBR_PHYS);
+}
+
+static t_uint64 mikasa_pal_ptbr_from_pfn (t_uint64 pfn)
+{
+return ((pfn & ~Q_SIGN) << VA_N_OFF) |
+    ((pfn & Q_SIGN) ? MIKASA_PAL_PTBR_PHYS : 0);
+}
+
 static void mikasa_pal_write_pcbb_flags (t_uint64 mask, t_uint64 bits)
 {
 t_uint64 flags;
@@ -10183,41 +10235,36 @@ WritePQ (mikasa_pal_pcbb + MIKASA_PCBV_FLAGS, flags);
 return;
 }
 
-static t_stat mikasa_pal_swpctx (void)
+static t_stat mikasa_pal_load_pcbb (t_uint64 pcbb)
 {
 t_uint64 val;
 uint32 ast;
 uint32 asn;
 
-if (R[16] & 0x7F)
+if (pcbb & 0x7F)
     ABORT (EXC_RSVO);
-if (!mikasa_pal_valid_phys (R[16], 80))
-    return STOP_MME;
-if (!mikasa_pal_valid_phys (mikasa_pal_pcbb, 80))
+if (!mikasa_pal_valid_phys (pcbb, MIKASA_PCB_MIN_SIZE))
     return STOP_MME;
 
-WritePQ (mikasa_pal_pcbb + 0, SP);
-WritePQ (mikasa_pal_pcbb + 8, mikasa_pal_esp);
-WritePQ (mikasa_pal_pcbb + 16, mikasa_pal_ssp);
-WritePQ (mikasa_pal_pcbb + 24, mikasa_pal_usp);
-WritePQ (mikasa_pal_pcbb + 48,
-    ((t_uint64) mikasa_pal_astsr << 4) | mikasa_pal_asten);
-WritePQ (mikasa_pal_pcbb + 64, (pcc_h + pcc_l) & M32);
-WritePQ (mikasa_pal_pcbb + 72, mikasa_pal_thread);
-
-mikasa_pal_pcbb = R[16];
-SP = mikasa_pal_stkp[MODE_K] = ReadPQ (mikasa_pal_pcbb + 0);
-mikasa_pal_esp = mikasa_pal_stkp[MODE_E] = ReadPQ (mikasa_pal_pcbb + 8);
-mikasa_pal_ssp = mikasa_pal_stkp[MODE_S] = ReadPQ (mikasa_pal_pcbb + 16);
-mikasa_pal_usp = mikasa_pal_stkp[MODE_U] = ReadPQ (mikasa_pal_pcbb + 24);
-val = ReadPQ (mikasa_pal_pcbb + 32) << VA_N_OFF;
+mikasa_pal_pcbb = pcbb;
+SP = mikasa_pal_stkp[MODE_K] = ReadPQ (mikasa_pal_pcbb + MIKASA_PCB_KSP);
+mikasa_pal_esp = mikasa_pal_stkp[MODE_E] =
+    ReadPQ (mikasa_pal_pcbb + MIKASA_PCB_ESP);
+mikasa_pal_ssp = mikasa_pal_stkp[MODE_S] =
+    ReadPQ (mikasa_pal_pcbb + MIKASA_PCB_SSP);
+mikasa_pal_usp = mikasa_pal_stkp[MODE_U] =
+    ReadPQ (mikasa_pal_pcbb + MIKASA_PCB_USP);
+val = mikasa_pal_ptbr_from_pfn (ReadPQ (mikasa_pal_pcbb +
+    MIKASA_PCB_PTBR));
 if (val != mikasa_pal_ptbr)
     tlb_ia (TLB_CI | TLB_CD);
 mikasa_pal_ptbr = val;
-asn = ReadPL (mikasa_pal_pcbb + 40) & M16;
+mikasa_pal_vtbr = (mikasa_pal_vtbr_va () |
+    (mikasa_pal_ptbr & MIKASA_PAL_PTBR_PHYS)) & M64;
+asn = ReadPL (mikasa_pal_pcbb + MIKASA_PCB_ASN) & M16;
 itlb_set_asn (asn);
 dtlb_set_asn (asn);
-ast = ReadPL (mikasa_pal_pcbb + 48);
+ast = ReadPL (mikasa_pal_pcbb + MIKASA_PCB_AST);
 mikasa_pal_astsr = (ast >> 4) & MPAL_AST_MASK;
 mikasa_pal_asten = ast & MPAL_AST_MASK;
 ev5_asten = mikasa_pal_asten;
@@ -10225,8 +10272,57 @@ ev5_astrr = mikasa_pal_astsr;
 val = ReadPQ (mikasa_pal_pcbb + MIKASA_PCBV_FLAGS);
 fpen = (uint32) val & 1;
 mikasa_pal_datfx = (uint32) ((val >> 63) & 1);
-pcc_h = (ReadPL (mikasa_pal_pcbb + 64) - pcc_l) & M32;
-mikasa_pal_thread = ReadPQ (mikasa_pal_pcbb + 72);
+pcc_h = (ReadPL (mikasa_pal_pcbb + MIKASA_PCB_PCC) - pcc_l) & M32;
+mikasa_pal_thread = ReadPQ (mikasa_pal_pcbb + MIKASA_PCB_THREAD);
+return SCPE_OK;
+}
+
+static t_stat mikasa_pal_swpctx (void)
+{
+t_uint64 old_pcbb = mikasa_pal_pcbb;
+
+if (R[16] & 0x7F)
+    ABORT (EXC_RSVO);
+if (!mikasa_pal_valid_phys (R[16], MIKASA_PCB_MIN_SIZE))
+    return STOP_MME;
+if (!mikasa_pal_valid_phys (mikasa_pal_pcbb, MIKASA_PCB_MIN_SIZE))
+    return STOP_MME;
+WritePQ (mikasa_pal_pcbb + MIKASA_PCB_KSP, SP);
+WritePQ (mikasa_pal_pcbb + MIKASA_PCB_ESP, mikasa_pal_esp);
+WritePQ (mikasa_pal_pcbb + MIKASA_PCB_SSP, mikasa_pal_ssp);
+WritePQ (mikasa_pal_pcbb + MIKASA_PCB_USP, mikasa_pal_usp);
+WritePQ (mikasa_pal_pcbb + MIKASA_PCB_AST,
+    ((t_uint64) mikasa_pal_astsr << 4) | mikasa_pal_asten);
+WritePQ (mikasa_pal_pcbb + MIKASA_PCB_PCC, (pcc_h + pcc_l) & M32);
+WritePQ (mikasa_pal_pcbb + MIKASA_PCB_THREAD, mikasa_pal_thread);
+R[0] = old_pcbb;
+return mikasa_pal_load_pcbb (R[16]);
+}
+
+static t_stat mikasa_pal_swppal (void)
+{
+t_stat r;
+
+if ((R[16] != 0) && (R[16] <= 255) && (R[16] != PAL_VMS)) {
+    R[0] = (R[16] == PAL_UNIX) ? 2 : 1;
+    return SCPE_OK;
+    }
+r = mikasa_pal_load_pcbb (R[18]);
+if (r != SCPE_OK)
+    return r;
+mikasa_pal_vtbr = R[19] | (mikasa_pal_ptbr & MIKASA_PAL_PTBR_PHYS);
+tlb_ia (TLB_CI | TLB_CD | TLB_CA);
+mikasa_pal_set_pc (R[17] & ~((t_uint64) 3));
+mikasa_pal_ipl = MPAL_IPL_MASK;
+ev5_ipl = mikasa_pal_ipl;
+mikasa_pal_mces = 8;
+mikasa_pal_ps = 0;
+dmapen = 1;
+tlb_set_cm (MODE_K);
+pal_type = PAL_VMS;
+pal_mode = 0;
+lock_flag = 0;
+R[0] = 0;
 return SCPE_OK;
 }
 
@@ -10502,9 +10598,7 @@ switch (fnc) {
         return mikasa_pal_cserve ();
 
     case MPAL_SWPPAL:
-        pal_type = PAL_VMS;
-        R[0] = 0;
-        break;
+        return mikasa_pal_swppal ();
 
     case MPAL_MF_FEN:
         R[0] = fpen & 1;
@@ -10547,7 +10641,7 @@ switch (fnc) {
         break;
 
     case MPAL_MF_PTBR:
-        R[0] = mikasa_pal_ptbr >> 13;
+        R[0] = mikasa_pal_ptbr_pfn ();
         break;
 
     case MPAL_MF_SCBB:
@@ -10633,6 +10727,8 @@ switch (fnc) {
         break;
 
     case MPAL_MT_VTBR:
+        if (mikasa_pal_vtbr != R[16])
+            tlb_ia (TLB_CI | TLB_CD);
         mikasa_pal_vtbr = R[16];
         break;
 

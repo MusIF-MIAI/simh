@@ -460,6 +460,10 @@
 - [x] Route Mikasa trap/abort/interrupt dispatch to the emulated VMS PAL once
   the SRM/APB handoff has installed it, while preserving real SRM PAL entry
   dispatch before `CSERVE START`.
+- [x] Use the Mikasa-specific MILO PAL sources from the DEC PALcode archive
+  to replace the `SWPPAL` no-op with a real PCBB/PTBR/VPTPTR/PC handoff,
+  preserve PTBR<63>/VPTPTR<0> physical-mode translation, and make `SWPCTX`
+  return the previous PCBB in `R0`.
 - [ ] Debug the next SRM/APB blocker: after the CSERVE fix, APB returns to
   SRM with `halt code = 0` and `PC = 20000000` instead of the earlier
   `halt code = 5`/`PRBR=0x1e8` path. Do this only after the PAL state work is
@@ -723,6 +727,9 @@ the real path works.
 - `~/Alpha/docs/palcode.zip`, `~/Alpha/docs/palcode/`, and
   `~/Alpha/docs/palcode_src/` for DEC sample PAL sources, console save-area
   offsets, PALtemp layout, and old firmware-side PAL/CSERVE examples.
+- `~/Alpha/docs/milo-sources-2.0.35-0.2/milo-2.0.35-0.2/palcode/mikasa/`
+  for Mikasa-specific OSF/1 PALcode (`SWPPAL`, `sys_enter_console`,
+  `CSERVE/JTOPAL`, PTBR physical mode, and impure save-area layout).
 - `references/freebsd/src-6.4.0/sys/alpha` for AS1000, APECS, interrupt, and
   platform behavior.
 - `../firmware/as1000/EK-AXPFW-RM-B01.pdf.txt` for SRM-visible AS1000 device
