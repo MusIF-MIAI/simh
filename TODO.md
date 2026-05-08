@@ -446,9 +446,15 @@
   `PRBR=0x1e8` restore failure. Mikasa now intercepts `CALL_PAL CSERVE`
   enough for the real SRM/APB handoff path to avoid installing the invalid
   low-memory callback context.
+- [x] Start replacing the Mikasa mini VMS PAL stubs with stateful behavior
+  based on the PALcode design guide and SIMH `old_pal`: `CSERVE START`
+  records the SRM/APB PAL handoff context, `SWPCTX` saves/restores HWPCB
+  state, FEN/DATFX update PCB flags, TB invalidation PAL calls touch the TLB,
+  and ESP/SSP/USP/REI/RD_PS use VMS-style state instead of fixed zeros.
 - [ ] Debug the next SRM/APB blocker: after the CSERVE fix, APB returns to
   SRM with `halt code = 0` and `PC = 20000000` instead of the earlier
-  `halt code = 5`/`PRBR=0x1e8` path.
+  `halt code = 5`/`PRBR=0x1e8` path. Do this only after the PAL state work is
+  built as a batch, not as one-off boot-chasing patches.
 - [x] Debug the current SRM post-banner wait. The immediate blocker was not
   SCSI discovery or OCP busy polling; SRM had entered its console driver, but
   the UART model did not raise THRE interrupts, so the prompt stayed queued.
@@ -701,6 +707,10 @@ the real path works.
 
 - `references/ncr53c810/` for NCR/LSI 53C810 SCRIPTS, DMA, and interrupt
   semantics.
+- `~/Alpha/docs/palcode_dsgn_gde.pdf` for PALmode, `CSERVE`, `jtopal`,
+  physical PAL accesses, and impure-area semantics.
+- `~/Alpha/docs/alpha_arch_ref.pdf` for Alpha architectural PAL calls,
+  `SWPCTX`, `REI`, `HALT`, VMS bootstrap state, and HWRPB/PCB expectations.
 - `references/freebsd/src-6.4.0/sys/alpha` for AS1000, APECS, interrupt, and
   platform behavior.
 - `../firmware/as1000/EK-AXPFW-RM-B01.pdf.txt` for SRM-visible AS1000 device
