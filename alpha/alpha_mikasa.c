@@ -756,6 +756,8 @@ typedef struct {
     uint32 phase_int_dsps;
     t_bool any_int_valid;
     uint32 any_int_dsps;
+    t_bool phase_next_valid;
+    uint32 phase_next_dsp;
     } MIKASA_NCR_SCRIPT_SCAN;
 
 typedef struct {
@@ -4898,6 +4900,8 @@ for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
             }
         if (!mikasa_ncr_dma_list_append (&scan->moves, count, addr, op))
             return FALSE;
+        scan->phase_next_valid = TRUE;
+        scan->phase_next_dsp = mikasa_ncr_next_script_addr (dsp, op);
         }
     group = op & MIKASA_NCR_TC_GROUP_MASK;
     if ((group == MIKASA_NCR_TC_INT) &&
@@ -4955,6 +4959,32 @@ if (!mikasa_ncr_scan_script (dsp, mikasa_ncr_reg_l (MIKASA_NCR_REG_DSA),
     return FALSE;
 *table_off = scan.table_off;
 return TRUE;
+}
+
+static t_bool mikasa_ncr_find_linear_move (uint32 dsp, uint32 phase,
+    uint32 *table_off, uint32 *next_dsp)
+{
+uint32 i;
+
+for (i = 0; i < MIKASA_NCR_SCRIPT_SCAN_INSNS; i++) {
+    uint32 op;
+    uint32 arg;
+    uint32 next;
+
+    if (!mikasa_ncr_fetch_script (dsp, &op, &arg, FALSE))
+        return FALSE;
+    next = mikasa_ncr_next_script_addr (dsp, op);
+    if (((op & MIKASA_NCR_BM_TYPE_MASK) == MIKASA_NCR_BM_TYPE) &&
+        (mikasa_ncr_op_phase (op) == phase)) {
+        if ((op & MIKASA_NCR_BM_TABLE) == 0)
+            return FALSE;
+        *table_off = mikasa_ncr_sext24 (arg);
+        *next_dsp = next;
+        return TRUE;
+        }
+    dsp = next;
+    }
+return FALSE;
 }
 
 static t_bool mikasa_ncr_collect_moves (uint32 dsp, uint32 dsa, uint32 phase,
@@ -6001,12 +6031,14 @@ uint32 cmd_count;
 uint32 cmd_move_count;
 uint32 cmd_addr;
 uint32 cmd_off;
+uint32 cmd_next_dsp = dsp;
 uint32 data_off;
 uint32 data_phase = MIKASA_NCR_PHASE_DAT_IN;
 uint32 target;
 uint32 i;
 uint32 data_dsps;
 MIKASA_NCR_DMA_LIST data;
+MIKASA_NCR_SCRIPT_SCAN cmd_scan;
 t_bool has_data;
 uint8 cdb[16];
 uint8 status;
@@ -6034,8 +6066,19 @@ if (!mikasa_ncr_do_msg_out (dsp, dsa)) {
     mikasa_ncr_set_connected (FALSE);
     return FALSE;
     }
-if (!mikasa_ncr_find_table_move (dsp, MIKASA_NCR_PHASE_CMD, &cmd_off))
+if (!mikasa_ncr_scan_script (dsp, dsa, MIKASA_NCR_PHASE_CMD, FALSE, FALSE,
+    &cmd_scan)) {
+    mikasa_ncr_clear_transaction ();
+    mikasa_ncr_set_connected (FALSE);
+    return FALSE;
+    }
+if (cmd_scan.table_valid)
+    cmd_off = cmd_scan.table_off;
+else if (!mikasa_ncr_find_linear_move (dsp, MIKASA_NCR_PHASE_CMD, &cmd_off,
+    &cmd_next_dsp))
     cmd_off = 0x0C;
+if (cmd_scan.phase_next_valid)
+    cmd_next_dsp = cmd_scan.phase_next_dsp;
 if (!mikasa_ncr_table_entry (dsa, cmd_off, &cmd_count, &cmd_addr) ||
     (cmd_count == 0)) {
     mikasa_ncr_clear_transaction ();
@@ -6121,14 +6164,20 @@ if (data.bytes != 0) {
     mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SIR, data_dsps);
     }
 else {
-    uint32 status_dsps = mikasa_ncr_status_int_dsps (dsp);
+    uint32 status_dsps = mikasa_ncr_status_int_dsps (cmd_next_dsp);
 
-    mikasa_ncr_write_status_msg (dsp, dsa, status);
-    mikasa_ncr_set_connected (FALSE);
+    mikasa_ncr_latch_phase (MIKASA_NCR_PHASE_STS, MIKASA_NCR_PHASE_STS);
     mikasa_ncr_disc_track_completion (target, mikasa_ncr_transaction.lun,
         cdb, &data, status, status_dsps, 0);
+    if (!mikasa_ncr_run_control_script_phase (cmd_next_dsp,
+        MIKASA_NCR_PHASE_STS, status)) {
+        mikasa_ncr_set_connected (FALSE);
+        if (!mikasa_ncr_wait_reselect)
+            mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_BF, cmd_next_dsp);
+        }
+    else
+        mikasa_ncr_set_connected (FALSE);
     mikasa_ncr_clear_transaction ();
-    mikasa_ncr_set_dip (MIKASA_NCR_DSTAT_SIR, status_dsps);
     }
 return TRUE;
 }
