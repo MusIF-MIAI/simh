@@ -433,6 +433,9 @@ enum opcodes {
 /* Function prototypes */
 
 uint32 ReadI (t_uint64 va);
+t_bool mikasa_read_pal_rom_word (t_uint64 pa, uint32 *insn);
+void mikasa_palbase_changed (t_uint64 palbase);
+void mikasa_sync_pal_rom_shadow (void);
 t_uint64 ReadB (t_uint64 va);
 t_uint64 ReadW (t_uint64 va);
 t_uint64 ReadL (t_uint64 va);

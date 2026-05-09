@@ -426,6 +426,9 @@
   longer the prompt blocker.
 - [x] Keep `make alpha -j$(nproc)` and `git diff --check` passing after each
   committed code block.
+- [x] Keep Mikasa SRM/PAL instruction fetches out of writable guest RAM by
+  capturing ROM payload bytes in a private fetch shadow and deferring the low
+  PAL shadow capture until SRM has installed the `PAL_BASE` image.
 
 ## Partial / In Progress
 
@@ -472,6 +475,10 @@
   SRM with `halt code = 0` and `PC = 20000000` instead of the earlier
   `halt code = 5`/`PRBR=0x1e8` path. Do this only after the PAL state work is
   built as a batch, not as one-off boot-chasing patches.
+- [ ] Debug the current ROM-PAL bootstrap blocker after private PAL fetch:
+  SRM reaches `ed.ec.` then falls into repeated firmware execute-TBM handling
+  (`abval=8`, `bootmap=1`) around `PC=0x52860`/`0x4A0B0`, consumes the SRM
+  stack, and finally halts at `PC=4`.
 - [x] Debug the current SRM post-banner wait. The immediate blocker was not
   SCSI discovery or OCP busy polling; SRM had entered its console driver, but
   the UART model did not raise THRE interrupts, so the prompt stayed queued.

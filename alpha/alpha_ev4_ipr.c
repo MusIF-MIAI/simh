@@ -26,6 +26,7 @@ extern uint32 ev5_dc_test_tag, ev5_dc_test_tag_temp;
 extern uint32 pcc_h, pcc_l, pcc_enb;
 extern uint32 int_req[IPL_HLVL];
 extern uint32 mikasa_irq_mask;
+extern uint32 cpu_model;
 extern t_uint64 ev4_ps_read (void);
 extern uint32 ev4_ps_write_mode (t_uint64 val);
 extern t_uint64 ev4_read_icsr (void);
@@ -354,6 +355,8 @@ if (is_ibox) switch (idx) {
     case 11:                                            /* PAL_BASE */
         ev4_state.pal_base = val & 0x00000003FFFFC000;
         ev5_palbase = ev4_state.pal_base;
+        if (cpu_model == ALPHA_MODEL_MIKASA_4_266)
+            mikasa_palbase_changed (ev5_palbase);
         break;
     case 0:                                             /* TB_TAG */
         ev5_itb_tag = VA_GETVPN (val);

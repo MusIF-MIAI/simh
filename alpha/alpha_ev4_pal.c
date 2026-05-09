@@ -119,8 +119,11 @@ uint32 new_pal = ((uint32) ev4_state.exc_addr) & 1;
 
 PCQ_ENTRY;
 PC = ev4_state.exc_addr;
-if (pal_mode && !new_pal)
+if (pal_mode && !new_pal) {
+    if (cpu_model == ALPHA_MODEL_MIKASA_4_266)
+        mikasa_sync_pal_rom_shadow ();
     ev4_use_main ();
+    }
 pal_mode = new_pal;
 ev4_state.pal_mode = new_pal;
 return SCPE_OK;
@@ -162,7 +165,6 @@ if (cpu_model == ALPHA_MODEL_MIKASA_4_266) {
         "EV4PAL dispatch intr lvl=%u pc=%016llX\n",
         lvl, (unsigned long long) PC);
     ev4_pal_state.hirr = lvl;
-    ev4_state.hier = (uint32) ev4_pal_state.hier;
     t_stat r = mikasa_pal_proc_intr (lvl);
 
     if (r != SCPE_NOFNC)

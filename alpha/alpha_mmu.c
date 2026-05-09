@@ -138,7 +138,14 @@ uint32 ReadI (t_uint64 va)
 t_uint64 pa;
 
 if (!pal_mode) pa = trans_i (va);                       /* mapping on? */
-else pa = va;
+else {
+    uint32 insn;
+
+    if ((cpu_model == ALPHA_MODEL_MIKASA_4_266) &&
+        mikasa_read_pal_rom_word (va, &insn))
+        return insn;
+    pa = va;
+    }
 return (uint32) ReadPL (pa);
 }
 

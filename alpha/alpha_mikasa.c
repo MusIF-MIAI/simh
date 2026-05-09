@@ -255,6 +255,7 @@
 #define MIKASA_LFU_TRAILER_OFF      0x23C
 #define MIKASA_ROM_LOAD_PA          0x00900000
 #define MIKASA_ROM_WORKSPACE_SIZE   0x01000000
+#define MIKASA_PAL_ROM_SHADOW_SIZE  0x00004000
 #define MIKASA_AXPBOX_ROM_MEMSIZE   0x00200000
 #define MIKASA_AXPBOX_ROM_SIZE      (16 + MIKASA_AXPBOX_ROM_MEMSIZE)
 #define MIKASA_PAL_STACK_FRAME      EV4_OSF_FRM_K_SIZE
@@ -1179,6 +1180,11 @@ static uint32 mikasa_get_le32 (const uint8 *buf);
 static t_uint64 mikasa_get_le64 (const uint8 *buf);
 static t_bool mikasa_lfu_header_valid (const uint8 *header);
 static t_stat mikasa_load_bytes (FILE *fileref, t_uint64 pa, t_uint64 bytes);
+static t_bool mikasa_read_fetch_segment (const uint8 *buf, t_uint64 base,
+    t_uint64 size, t_uint64 pa, uint32 *insn);
+static t_stat mikasa_capture_fetch_segment (uint8 **buf, t_uint64 *base,
+    t_uint64 *size, t_uint64 pa, t_uint64 bytes);
+static void mikasa_clear_pal_fetch_shadow (void);
 static void mikasa_prepare_rom_cpu (t_uint64 pc, t_uint64 palbase);
 static void mikasa_note_rom (const char *path, t_uint64 pc,
     t_uint64 palbase);
@@ -1419,6 +1425,13 @@ static t_bool mikasa_rom_loaded = FALSE;
 static t_uint64 mikasa_rom_pc = 0;
 static t_uint64 mikasa_rom_palbase = 0;
 static char mikasa_rom_path[CBUFSIZE] = "";
+static uint8 *mikasa_rom_fetch_buf = NULL;
+static t_uint64 mikasa_rom_fetch_pa = 0;
+static t_uint64 mikasa_rom_fetch_size = 0;
+static uint8 *mikasa_pal_fetch_buf = NULL;
+static t_uint64 mikasa_pal_fetch_pa = 0;
+static t_uint64 mikasa_pal_fetch_size = 0;
+static t_bool mikasa_pal_fetch_pending = FALSE;
 static uint8 mikasa_uart_lcr = 0;
 static uint8 mikasa_uart_mcr = 0;
 static uint8 mikasa_uart_ier = 0;
@@ -8066,6 +8079,105 @@ while (done < bytes) {
 return SCPE_OK;
 }
 
+static t_bool mikasa_read_fetch_segment (const uint8 *buf, t_uint64 base,
+    t_uint64 size, t_uint64 pa, uint32 *insn)
+{
+t_uint64 off;
+size_t idx;
+
+if ((buf == NULL) || (insn == NULL) || (size < sizeof (*insn)) || (pa < base))
+    return FALSE;
+off = pa - base;
+if (off > (size - sizeof (*insn)))
+    return FALSE;
+idx = (size_t) off;
+*insn = ((uint32) buf[idx]) |
+    (((uint32) buf[idx + 1]) << 8) |
+    (((uint32) buf[idx + 2]) << 16) |
+    (((uint32) buf[idx + 3]) << 24);
+return TRUE;
+}
+
+t_bool mikasa_read_pal_rom_word (t_uint64 pa, uint32 *insn)
+{
+pa = pa & ~((t_uint64) 3);
+if (mikasa_pal_fetch_pending &&
+    (pa >= mikasa_pal_fetch_pa) &&
+    ((pa - mikasa_pal_fetch_pa) < MIKASA_PAL_ROM_SHADOW_SIZE))
+    mikasa_sync_pal_rom_shadow ();
+if (mikasa_read_fetch_segment (mikasa_pal_fetch_buf, mikasa_pal_fetch_pa,
+    mikasa_pal_fetch_size, pa, insn))
+    return TRUE;
+return mikasa_read_fetch_segment (mikasa_rom_fetch_buf, mikasa_rom_fetch_pa,
+    mikasa_rom_fetch_size, pa, insn);
+}
+
+static t_stat mikasa_capture_fetch_segment (uint8 **buf, t_uint64 *base,
+    t_uint64 *size, t_uint64 pa, t_uint64 bytes)
+{
+uint8 *new_buf;
+t_uint64 i;
+
+if ((bytes == 0) || (pa >= MEMSIZE) ||
+    ((bytes - 1) > (((t_uint64) MEMSIZE - 1) - pa)))
+    return SCPE_NXM;
+new_buf = (uint8 *) calloc ((size_t) bytes, sizeof (*new_buf));
+if (new_buf == NULL)
+    return SCPE_MEM;
+for (i = 0; i < bytes; i++)
+    new_buf[i] = (uint8) ReadPB (pa + i);
+free (*buf);
+*buf = new_buf;
+*base = pa;
+*size = bytes;
+return SCPE_OK;
+}
+
+static void mikasa_clear_pal_fetch_shadow (void)
+{
+free (mikasa_pal_fetch_buf);
+mikasa_pal_fetch_buf = NULL;
+mikasa_pal_fetch_pa = 0;
+mikasa_pal_fetch_size = 0;
+mikasa_pal_fetch_pending = FALSE;
+return;
+}
+
+void mikasa_palbase_changed (t_uint64 palbase)
+{
+mikasa_clear_pal_fetch_shadow ();
+mikasa_pal_fetch_pa = palbase;
+mikasa_pal_fetch_pending = TRUE;
+sim_debug (MIKASA_DBG_PAL, &mikasa_dev,
+    "PAL shadow pending palbase=%llX\n", (unsigned long long) palbase);
+return;
+}
+
+void mikasa_sync_pal_rom_shadow (void)
+{
+t_stat r;
+t_uint64 palbase;
+
+if (!mikasa_pal_fetch_pending)
+    return;
+palbase = mikasa_pal_fetch_pa;
+mikasa_pal_fetch_pending = FALSE;
+r = mikasa_capture_fetch_segment (&mikasa_pal_fetch_buf,
+    &mikasa_pal_fetch_pa, &mikasa_pal_fetch_size, palbase,
+    MIKASA_PAL_ROM_SHADOW_SIZE);
+if (r != SCPE_OK) {
+    mikasa_clear_pal_fetch_shadow ();
+    sim_debug (MIKASA_DBG_PAL, &mikasa_dev,
+        "PAL shadow capture failed palbase=%llX status=%d\n",
+        (unsigned long long) palbase, r);
+    }
+else sim_debug (MIKASA_DBG_PAL, &mikasa_dev,
+    "PAL shadow captured palbase=%llX size=%llX\n",
+    (unsigned long long) mikasa_pal_fetch_pa,
+    (unsigned long long) mikasa_pal_fetch_size);
+return;
+}
+
 static void mikasa_set_cpu_info (void)
 {
 if (mikasa_pal_valid_phys (MIKASA_CPU_INFO_QW_PA, sizeof (t_uint64))) {
@@ -8096,6 +8208,7 @@ pal_type = PAL_UNIX;
 mikasa_srm_bootstrap_pal = FALSE;
 mikasa_srm_os_handoff = FALSE;
 lock_flag = 0;
+mikasa_clear_pal_fetch_shadow ();
 mikasa_set_cpu_info ();
 return;
 }
@@ -8145,6 +8258,10 @@ if (sim_fseeko (fileref, MIKASA_LFU_HEADER_SIZE, SEEK_SET))
 r = mikasa_load_bytes (fileref, MIKASA_ROM_LOAD_PA, bytes);
 if (r != SCPE_OK)
     return r;
+r = mikasa_capture_fetch_segment (&mikasa_rom_fetch_buf, &mikasa_rom_fetch_pa,
+    &mikasa_rom_fetch_size, MIKASA_ROM_LOAD_PA, bytes);
+if (r != SCPE_OK)
+    return r;
 
 mikasa_copy_cstr (version, sizeof (version),
     header + MIKASA_LFU_VERSION_OFF, MIKASA_LFU_VERSION_SIZE);
@@ -8183,6 +8300,10 @@ if (sim_fseeko (fileref, 16, SEEK_SET))
 r = mikasa_load_bytes (fileref, 0, MIKASA_AXPBOX_ROM_MEMSIZE);
     if (r != SCPE_OK)
         return r;
+r = mikasa_capture_fetch_segment (&mikasa_rom_fetch_buf, &mikasa_rom_fetch_pa,
+    &mikasa_rom_fetch_size, 0, MIKASA_AXPBOX_ROM_MEMSIZE);
+if (r != SCPE_OK)
+    return r;
 
 mikasa_note_rom (path, pc, palbase);
 sim_printf ("Loaded AXPbox decompressed SRM ROM from %s: "
@@ -8212,6 +8333,10 @@ mikasa_zero_phys (0, (uint32) zero_size);
 if (sim_fseeko (fileref, 0, SEEK_SET))
     return SCPE_IOERR;
 r = mikasa_load_bytes (fileref, MIKASA_ROM_LOAD_PA, (t_uint64) fsize);
+if (r != SCPE_OK)
+    return r;
+r = mikasa_capture_fetch_segment (&mikasa_rom_fetch_buf, &mikasa_rom_fetch_pa,
+    &mikasa_rom_fetch_size, MIKASA_ROM_LOAD_PA, (t_uint64) fsize);
 if (r != SCPE_OK)
     return r;
 
@@ -12946,6 +13071,7 @@ uint32 cluster = 0;
 mikasa_direct_apb = TRUE;
 mikasa_srm_bootstrap_pal = FALSE;
 mikasa_srm_os_handoff = FALSE;
+mikasa_clear_pal_fetch_shadow ();
 mikasa_hwrpb_pa = hwrpb_pa;
 mikasa_boot_l1_pt_pa = MIKASA_L1_PT_PA;
 mikasa_boot_vptb_va = MIKASA_PT_SPACE_VA;
@@ -13105,6 +13231,7 @@ sim_cancel (&mikasa_unit);
 mikasa_direct_apb = FALSE;
 mikasa_srm_bootstrap_pal = FALSE;
 mikasa_srm_os_handoff = FALSE;
+mikasa_clear_pal_fetch_shadow ();
 mikasa_hwrpb_pa = MIKASA_HWRPB_PA;
 mikasa_boot_l1_pt_pa = MIKASA_L1_PT_PA;
 mikasa_boot_vptb_va = MIKASA_PT_SPACE_VA;

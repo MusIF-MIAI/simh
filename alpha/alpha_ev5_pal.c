@@ -762,6 +762,8 @@ switch (fnc) {
 
     case PAL_BASE:
         ev5_palbase = val & PAL_BASE_RW;
+        if (ev4_ipr_is_mikasa ())
+            mikasa_palbase_changed (ev5_palbase);
         break;
 
     case ICM:
