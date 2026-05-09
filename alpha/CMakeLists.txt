@@ -20,6 +20,8 @@ add_simulator(alpha
         alpha_cpu.c
         alpha_dka.c
         alpha_ev5_cons.c
+        alpha_ev4_ipr.c
+        alpha_ev4_pal.c
         alpha_ev5_pal.c
         alpha_ev5_tlb.c
         alpha_fpi.c

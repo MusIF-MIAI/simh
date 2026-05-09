@@ -8069,9 +8069,14 @@ return SCPE_OK;
 static void mikasa_set_cpu_info (void)
 {
 if (mikasa_pal_valid_phys (MIKASA_CPU_INFO_QW_PA, sizeof (t_uint64))) {
-    WritePQ (MIKASA_CPU_INFO_QW_PA,
-        (((t_uint64) MIKASA_CPU_TYPE) << 32) | MIKASA_CPU_VERSION);
+    M[MIKASA_CPU_INFO_QW_PA >> 3] =
+        (((t_uint64) MIKASA_CPU_TYPE) << 32) | MIKASA_CPU_VERSION;
     }
+}
+
+void mikasa_refresh_cpu_info (void)
+{
+mikasa_set_cpu_info ();
 }
 
 static void mikasa_prepare_rom_cpu (t_uint64 pc, t_uint64 palbase)
@@ -13062,19 +13067,22 @@ ev4_state.ipl = mikasa_pal_ipl & 0x7;
 ev4_state.itlb_cm = MODE_K & 0x1;
 ev4_state.dtlb_cm = MODE_K & 0x1;
 ev4_state.ps_sw = (ev4_state.ipl & 0x7) | ((MODE_K & 0x1) << 3);
-mikasa_pal_sisr = 0;
-ev5_sirr = 0;
-mikasa_pal_asten = 0;
-mikasa_pal_astsr = 0;
-ev5_asten = 0;
-ev5_astrr = 0;
-mikasa_pal_mces = MIKASA_MCES_DPC;
-mikasa_pal_ps = 0;
-mikasa_pal_datfx = 0;
-mikasa_pal_last_pcc = pcc_l;
-mikasa_pal_init_paltemp_regs ();
-mikasa_pal_init_ipr_shadows ();
-mikasa_pal_reset_impure (mikasa_pal_impure);
+    mikasa_pal_sisr = 0;
+    ev5_sirr = 0;
+    mikasa_pal_asten = 0;
+    mikasa_pal_astsr = 0;
+    ev5_asten = 0;
+    ev5_astrr = 0;
+    mikasa_pal_mces = MIKASA_MCES_DPC;
+    mikasa_pal_ps = 0;
+    mikasa_pal_datfx = 0;
+    pcc_h = 0;
+    pcc_l = 0;
+    pcc_enb = 1;
+    mikasa_pal_last_pcc = pcc_l;
+    mikasa_pal_init_paltemp_regs ();
+    mikasa_pal_init_ipr_shadows ();
+    mikasa_pal_reset_impure (mikasa_pal_impure);
 WritePQ (mikasa_pal_pcbb + MIKASA_PCB_KSP, mikasa_pal_stkp[MODE_K]);
 WritePQ (mikasa_pal_pcbb + MIKASA_PCB_USP, mikasa_pal_usp);
 WritePQ (mikasa_pal_pcbb + MIKASA_PCB_PTBR, mikasa_pal_ptbr_pfn ());
@@ -13122,6 +13130,9 @@ mikasa_pal_astsr = 0;
 mikasa_pal_mces = MIKASA_MCES_DPC;
 mikasa_pal_ps = 0;
 mikasa_pal_datfx = 0;
+pcc_h = 0;
+pcc_l = 0;
+pcc_enb = 1;
 mikasa_pal_last_pcc = pcc_l;
 ev4_state.ipl = mikasa_pal_ipl & 0x7;
 ev4_state.itlb_cm = MODE_K & 0x1;

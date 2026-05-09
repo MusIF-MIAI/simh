@@ -49,6 +49,8 @@
 
 #include "alpha_defs.h"
 #include "alpha_ev5_defs.h"
+#include "alpha_ev4_ipr.h"
+#include "alpha_ev4_state.h"
 
 #define EV4_PALO_INTR   0x00E0
 
@@ -89,8 +91,8 @@ uint32 ev5_ipl = 0;                                     /* ipl */
 uint32 ev5_sirr = 0;                                    /* software int req */
 uint32 ev5_astrr = 0;                                   /* AST requests */
 uint32 ev5_asten = 0;                                   /* AST enables */
-static uint32 ev4_hier = 0;                             /* hardware int enables */
-static uint32 ev4_ps_sw = 0;                            /* EV4 PS software bits */
+uint32 ev4_hier = 0;                                    /* hardware int enables */
+uint32 ev4_ps_sw = 0;                                   /* EV4 PS software bits */
 const uint32 ast_map[4] = { 0x1, 0x3, 0x7, 0xF };
 
 t_stat ev5_palent (t_uint64 fpc, uint32 off);
@@ -98,18 +100,18 @@ t_stat ev5_palent_d (t_uint64 fpc, uint32 off, uint32 sta);
 t_stat pal_proc_reset_hwre (DEVICE *dptr);
 t_stat pal_proc_intr_ev5 (uint32 lvl);
 uint32 pal_eval_intr_ev5 (uint32 flag);
-static t_stat ev4_pal_19 (uint32 ir);
-static t_stat ev4_pal_1d (uint32 ir);
+t_stat ev4_pal_19 (uint32 ir);
+t_stat ev4_pal_1d (uint32 ir);
 static t_bool pal_hwre_enabled (void);
 static t_bool ev4_ipr_is_mikasa (void);
-static t_bool ev4_icsr_hwe (void);
-static t_uint64 ev4_hirr_bits (uint32 pins);
-static t_uint64 ev4_read_icsr (void);
-static t_uint64 ev4_read_ibox_ipr (uint32 idx);
-static t_uint64 ev4_read_abox_ipr (uint32 idx);
-static void ev4_write_icsr (t_uint64 val);
-static void ev4_write_ibox_ipr (uint32 idx, t_uint64 val);
-static void ev4_write_abox_ipr (uint32 idx, t_uint64 val);
+t_bool ev4_icsr_hwe (void);
+t_uint64 ev4_hirr_bits (uint32 pins);
+t_uint64 ev4_read_icsr (void);
+t_uint64 ev4_read_ibox_ipr (uint32 idx);
+t_uint64 ev4_read_abox_ipr (uint32 idx);
+void ev4_write_icsr (t_uint64 val);
+void ev4_write_ibox_ipr (uint32 idx, t_uint64 val);
+void ev4_write_abox_ipr (uint32 idx, t_uint64 val);
 
 #define EV4_ICCSR_W_V_ASN       47
 #define EV4_ICCSR_W_M_ASN       0x3F
@@ -182,11 +184,6 @@ extern int32 pcq_p;                                     /* PC queue ptr */
 
 extern int32 parse_reg (const char *cptr);
 extern t_bool mikasa_pal_uses_simh_ipl (void);
-extern t_stat mikasa_pal_proc_intr (uint32 lvl);
-extern t_stat mikasa_pal_proc_trap (uint32 summ);
-extern t_stat mikasa_pal_proc_excp (uint32 abval);
-extern t_stat mikasa_pal_proc_inst (uint32 fnc);
-
 /* EV5PAL data structures
 
    ev5pal_dev   device descriptor
@@ -247,44 +244,24 @@ DEVICE ev5pal_dev = {
 /* EV5 interrupt dispatch - reached from top of instruction loop -
    dispatch to PALcode */
 
-t_stat pal_proc_intr (uint32 lvl)
+t_stat ev5_pal_proc_intr (uint32 lvl)
 {
-if (cpu_model == ALPHA_MODEL_MIKASA_4_266) {
-    t_stat r = mikasa_pal_proc_intr (lvl);
-
-    if (r != SCPE_NOFNC)
-        return r;
-    return ev5_palent (PC, EV4_PALO_INTR);
-    }
 return ev5_palent (PC, PALO_INTR);
 }
 
 /* EV5 trap dispatch - reached from bottom of instruction loop -
    trap_mask and trap_summ are set up correctly - dispatch to PALcode */
 
-t_stat pal_proc_trap (uint32 summ)
+t_stat ev5_pal_proc_trap (uint32 summ)
 {
-if (cpu_model == ALPHA_MODEL_MIKASA_4_266) {
-    t_stat r = mikasa_pal_proc_trap (summ);
-
-    if (r != SCPE_NOFNC)
-        return r;
-    }
 return ev5_palent (PC, PALO_TRAP);
 }
 
 /* EV5 exception dispatch - reached from ABORT handler -
    set up any exception-specific registers - dispatch to PALcode */
 
-t_stat pal_proc_excp (uint32 abval)
+t_stat ev5_pal_proc_excp (uint32 abval)
 {
-if (cpu_model == ALPHA_MODEL_MIKASA_4_266) {
-    t_stat r = mikasa_pal_proc_excp (abval);
-
-    if (r != SCPE_NOFNC)
-        return r;
-    }
-
 switch (abval) {
 
     case EXC_RSVI:                                      /* reserved instruction */
@@ -356,16 +333,10 @@ return SCPE_OK;
 /* EV5 call PAL - reached from instruction decoder -
    compute offset from function code - dispatch to PALcode */
 
-t_stat pal_proc_inst (uint32 fnc)
+t_stat ev5_pal_proc_inst (uint32 fnc)
 {
 uint32 off = (fnc & 0x3F) << 6;
 
-if (cpu_model == ALPHA_MODEL_MIKASA_4_266) {
-    t_stat r = mikasa_pal_proc_inst (fnc);
-
-    if (r != SCPE_NOFNC)
-        return r;
-    }
 if (fnc & 0x80) return ev5_palent (PC, PALO_CALLUNPR + off);
 if (itlb_cm != MODE_K) ABORT (EXC_RSVI);
 return ev5_palent (PC, PALO_CALLPR + off);
@@ -382,28 +353,41 @@ uint32 pal_eval_intr (uint32 flag)
 uint32 i, req = 0;
 uint32 lvl = (flag && (!ev4_ipr_is_mikasa () ||
     mikasa_pal_uses_simh_ipl ()))? ev5_ipl: 0;
+uint32 mikasa_sirr = ev5_sirr;
+uint32 mikasa_asten = ev5_asten;
+uint32 mikasa_astrr = ev5_astrr;
 
 if (flag && pal_mode) return 0;
 if (ev5_mchk) req = IPL_1F;
-else if (ev5_crd && (ev5_icsr & ICSR_CRDE)) req = IPL_CRD;
+else if (!ev4_ipr_is_mikasa () && ev5_crd && (ev5_icsr & ICSR_CRDE))
+    req = IPL_CRD;
 else if (ev5_pwrfl) req = IPL_PWRFL;
 else if (ev4_ipr_is_mikasa ()) {
+    mikasa_sirr = ev4_state.sirr;
+    mikasa_asten = ev4_state.aster;
     uint32 hwre = 0;
 
-    for (i = 0; i < IPL_HLVL; i++) {
-        if (int_req[i])
-            hwre |= 1u << i;
-        }
-    hwre &= ev4_hier;
-    for (i = IPL_HLVL; i > 0; i--) {
-        if ((hwre >> (i - 1)) & 1) {
-            req = IPL_HMIN + i - 1;
-            break;
+    if (ev5_crd && ev4_state.hier_cre)
+        req = IPL_CRD;
+    else if ((ev4_state.hirr_pc0 && ev4_state.hier_pc0) ||
+        (ev4_state.hirr_pc1 && ev4_state.hier_pc1))
+        req = IPL_HMIN;
+    else {
+        for (i = 0; i < IPL_HLVL; i++) {
+            if (int_req[i])
+                hwre |= 1u << i;
+            }
+        hwre &= ev4_state.hier;
+        for (i = IPL_HLVL; i > 0; i--) {
+            if ((hwre >> (i - 1)) & 1) {
+                req = IPL_HMIN + i - 1;
+                break;
+                }
             }
         }
-    if ((req == 0) && ev5_sirr) {
+    if ((req == 0) && mikasa_sirr) {
         for (i = IPL_SMAX; i > 0; i--) {
-            if ((ev5_sirr >> (i - 1)) & 1) {
+            if ((mikasa_sirr >> (i - 1)) & 1) {
                 req = i;
                 break;
                 }
@@ -422,7 +406,7 @@ else if (ev5_sirr) {
             }
         }
     }
-if ((req < IPL_AST) && (ev5_astrr & ev5_asten & ast_map[itlb_cm]))
+if ((req < IPL_AST) && (mikasa_astrr & mikasa_asten & ast_map[itlb_cm]))
     req = IPL_AST;
 if (req <= lvl) req = 0;
 if (ev5_sli && (ev5_icsr & ICSR_SLE)) req = req | IPL_SLI;
@@ -531,6 +515,8 @@ uint32 new_pal = ((uint32) ev5_excaddr) & 1;
 
 if (!pal_mode && (!(itlb_cm == MODE_K) ||               /* pal mode, or kernel */
     !pal_hwre_enabled ())) ABORT (EXC_RSVI);            /* and enabled? */
+if (ev4_ipr_is_mikasa ())
+    return ev4_rei ();
 PCQ_ENTRY;
 PC = ev5_excaddr;
 if (pal_mode && !new_pal && (ev5_icsr & ICSR_SDE)) {    /* leaving PAL mode? */
@@ -552,7 +538,7 @@ static const uint32 itbr_map_gh[4] = {
 fnc = I_GETMDSP (ir);
 ra = I_GETRA (ir);
 if (ev4_ipr_is_mikasa ())
-    return ev4_pal_19 (ir);
+    return ev4_pal_mfpr (ir);
 if (!pal_mode && (!(itlb_cm == MODE_K) ||               /* pal mode, or kernel */
     !pal_hwre_enabled ())) ABORT (EXC_RSVI);            /* and enabled? */
 switch (fnc) {
@@ -722,7 +708,7 @@ uint32 ra = I_GETRA (ir);
 t_uint64 val = R[ra];
 
 if (ev4_ipr_is_mikasa ())
-    return ev4_pal_1d (ir);
+    return ev4_pal_mtpr (ir);
 if (!pal_mode && (!(itlb_cm == MODE_K) ||               /* pal mode, or kernel */
     !pal_hwre_enabled ())) ABORT (EXC_RSVI);            /* and enabled? */
 switch (fnc) {
@@ -910,12 +896,12 @@ if (ev4_ipr_is_mikasa ())
 return (ev5_icsr & ICSR_HWE) != 0;
 }
 
-static t_bool ev4_icsr_hwe (void)
+t_bool ev4_icsr_hwe (void)
 {
 return (ev5_icsr & EV4_ICCSR_W_HWE) != 0;
 }
 
-static t_uint64 ev4_read_icsr (void)
+t_uint64 ev4_read_icsr (void)
 {
 t_uint64 res = 0;
 
@@ -950,32 +936,32 @@ if (ev5_icsr & EV4_ICCSR_W_PC0)
 return res;
 }
 
-static void ev4_write_icsr (t_uint64 val)
+void ev4_write_icsr (t_uint64 val)
 {
 ev5_icsr = val & EV4_ICCSR_W_RW;
 itlb_set_spage ((val & EV4_ICCSR_W_MAP)? SPEN_43: 0);
 fpen = (val & EV4_ICCSR_W_FPE)? 1: 0;
 }
 
-static t_uint64 ev4_ps_read (void)
+t_uint64 ev4_ps_read (void)
 {
 return (ev4_ps_sw & 0x7) |
     (((t_uint64) (itlb_cm & 3)) << 3) |
     (((t_uint64) (ev5_ipl & 0x1F)) << 8);
 }
 
-static t_uint64 ev4_hirr_bits (uint32 pins)
+t_uint64 ev4_hirr_bits (uint32 pins)
 {
 return (((t_uint64) (pins & 0x38)) << 2) |
     (((t_uint64) (pins & 0x07)) << 10);
 }
 
-static uint32 ev4_ps_write_mode (t_uint64 val)
+uint32 ev4_ps_write_mode (t_uint64 val)
 {
 return ((uint32) (val >> 3)) & 3;
 }
 
-static t_uint64 ev4_read_ibox_ipr (uint32 idx)
+t_uint64 ev4_read_ibox_ipr (uint32 idx)
 {
 t_uint64 res;
 static const uint32 itbr_map_gh[4] = {
@@ -1049,7 +1035,7 @@ switch (idx) {
         }
 }
 
-static t_uint64 ev4_read_abox_ipr (uint32 idx)
+t_uint64 ev4_read_abox_ipr (uint32 idx)
 {
 switch (idx) {
 
@@ -1078,7 +1064,7 @@ switch (idx) {
         }
 }
 
-static void ev4_write_ibox_ipr (uint32 idx, t_uint64 val)
+void ev4_write_ibox_ipr (uint32 idx, t_uint64 val)
 {
 switch (idx) {
 
@@ -1145,7 +1131,7 @@ switch (idx) {
         }
 }
 
-static void ev4_write_abox_ipr (uint32 idx, t_uint64 val)
+void ev4_write_abox_ipr (uint32 idx, t_uint64 val)
 {
 switch (idx) {
 
@@ -1181,7 +1167,7 @@ switch (idx) {
         }
 }
 
-static t_stat ev4_pal_19 (uint32 ir)
+t_stat ev4_pal_19 (uint32 ir)
 {
 uint32 fnc = I_GETMDSP (ir);
 uint32 ra = I_GETRA (ir);
@@ -1206,7 +1192,7 @@ if (ra != 31)
 return SCPE_OK;
 }
 
-static t_stat ev4_pal_1d (uint32 ir)
+t_stat ev4_pal_1d (uint32 ir)
 {
 uint32 fnc = I_GETMDSP (ir);
 uint32 ra = I_GETRA (ir);
