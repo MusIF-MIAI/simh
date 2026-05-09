@@ -98,16 +98,33 @@ tlb_ia (TLB_CI | TLB_CD);
 
 static t_uint64 ev4_ps_pack (void)
 {
-    return ((t_uint64) (ev4_state.ipl & 0x7)) |
-        (((t_uint64) (itlb_cm & 0x1)) << 3);
+    return ((t_uint64) (ev4_state.ps_sw & 0x7)) |
+        (((t_uint64) (itlb_cm & 0x3)) << 3) |
+        (((t_uint64) (ev5_ipl & 0x1F)) << 8);
 }
 
 static void ev4_ps_unpack (t_uint64 val)
 {
-    uint32 cm = (((uint32) val) >> 3) & 0x1;
-    ev4_state.ps_sw = ((uint32) val) & 0xF;
-    ev4_state.ipl = ((uint32) val) & 0x7;
+    uint32 ipl = (uint32) ((val >> 8) & 0x1F);
+    uint32 cm = (((uint32) val) >> 3) & 0x3;
+
+    ev4_state.ps_sw = ((uint32) val) & 0x7;
+    ev4_state.ipl = ipl;
     ev5_ipl = ev4_state.ipl;
+    itlb_set_cm (cm);
+    dtlb_set_cm (cm);
+    ev4_state.itlb_cm = cm;
+    ev4_state.dtlb_cm = cm;
+}
+
+static void ev4_pt9_unpack_raw (t_uint64 val)
+{
+    uint32 ipl = (uint32) ((val >> 8) & 0x1F);
+    uint32 cm = (((uint32) val) >> 3) & 0x3;
+
+    ev4_state.ps_sw = (uint32) (val & 0x7);
+    ev4_state.ipl = ipl;
+    ev5_ipl = ipl;
     itlb_set_cm (cm);
     dtlb_set_cm (cm);
     ev4_state.itlb_cm = cm;
@@ -151,7 +168,7 @@ if (is_paltemp)
             *handled = TRUE;
             return SCPE_OK;
         case 9:                                         /* pt9_ps alias */
-            res = ev4_ps_pack ();
+            res = ev4_state.paltemp_raw[9];
             if (ra != 31)
                 R[ra] = res & M64;
             *handled = TRUE;
@@ -305,10 +322,10 @@ if (is_paltemp)
             return SCPE_OK;
         case 9:                                         /* pt9_ps alias */
             {
-            ev4_ps_unpack (val);
+            ev4_pt9_unpack_raw (val);
             ev4_apply_ptintmask ();
-            ev4_state.paltemp_raw[9] = ev4_ps_pack ();
-            ev5_paltemp[idx] = ev4_state.paltemp_raw[9];
+            ev4_state.paltemp_raw[9] = val;
+            ev5_paltemp[idx] = val;
             *handled = TRUE;
             return SCPE_OK;
             }
